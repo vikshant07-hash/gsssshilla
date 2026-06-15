@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 
 const db = require("../config/db");
-const nodemailer = require("nodemailer");
 const axios = require("axios");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -10,29 +9,42 @@ const jwt = require("jsonwebtoken");
 /* ================= BREVO SMTP (FINAL SAFE CONFIG) ================= */
 
 
-
-await axios.post(
-  "https://api.brevo.com/v3/smtp/email",
-  {
-    sender: {
-      name: "Govt. Sr. Sec. School Shilla",
-      email: "magicalmathsquiz@gmail.com"
-    },
-    to: [
+async function sendEmail(to, otp, title) {
+  try {
+    await axios.post(
+      "https://api.brevo.com/v3/smtp/email",
       {
-        email: user.email
+        sender: {
+          name: "Govt. Sr. Sec. School Shilla",
+          email: "magicalmathsquiz@gmail.com"
+        },
+        to: [
+          {
+            email: to
+          }
+        ],
+        subject: title,
+        htmlContent: getOTPTemplate(otp, title)
+      },
+      {
+        headers: {
+          "api-key": process.env.BREVO_API_KEY,
+          "Content-Type": "application/json"
+        }
       }
-    ],
-    subject: "Admin Login OTP",
-    htmlContent: getOTPTemplate(otp, "ADMIN LOGIN OTP")
-  },
-  {
-    headers: {
-      "api-key": process.env.BREVO_API_KEY,
-      "Content-Type": "application/json"
-    }
+    );
+
+    return true;
+  } catch (err) {
+    console.log(
+      "BREVO ERROR:",
+      err.response?.data || err.message
+    );
+    return false;
   }
-);
+}
+
+
 /* ================= OTP ================= */
 
 function generateOTP() {
@@ -76,6 +88,38 @@ function getOTPTemplate(otp, title) {
   `;
 }
 
+
+async function sendEmail(to, otp, title) {
+  return axios.post(
+    "https://api.brevo.com/v3/smtp/email",
+    {
+      sender: {
+        name: "Govt. Sr. Sec. School Shilla",
+        email: "magicalmathsquiz@gmail.com"
+      },
+      to: [
+        {
+          email: to
+        }
+      ],
+      subject: title,
+      htmlContent: getOTPTemplate(otp, title)
+    },
+    {
+      headers: {
+        "api-key": process.env.BREVO_API_KEY,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+}
+
+
+
+
+
+
+
 /* ================= SEND OTP ================= */
 
 router.post("/send-otp", (req, res) => {
@@ -103,13 +147,23 @@ router.post("/send-otp", (req, res) => {
       ]);
 
       try {
-        await transporter.sendMail({
-          from: `"School Shilla" <${process.env.BREVO_EMAIL}>`,
-          to: user.email,
-          subject: "Admin OTP Login",
-          html: getOTPTemplate(otp, "ADMIN LOGIN OTP"),
-        });
+        const sent = await sendEmail(
+  user.email,
+  otp,
+  "ADMIN LOGIN OTP"
+);
 
+if (!sent) {
+  return res.json({
+    success: false,
+    message: "Email failed"
+  });
+}
+
+return res.json({
+  success: true,
+  message: "OTP sent"
+});
         return res.json({ success: true, message: "OTP sent" });
       } catch (error) {
         console.log("EMAIL ERROR:", error);
