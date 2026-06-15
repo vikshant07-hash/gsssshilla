@@ -1,5 +1,5 @@
 const db = require("../config/db");
-const sendMail = require("../utils/mailer");
+
 
 // ==========================
 // GET STUDENTS (FULL DETAILS)
