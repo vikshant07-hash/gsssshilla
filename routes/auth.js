@@ -3,25 +3,36 @@ const router = express.Router();
 
 const db = require("../config/db");
 const nodemailer = require("nodemailer");
+const axios = require("axios");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 /* ================= BREVO SMTP (FINAL SAFE CONFIG) ================= */
 
-const transporter = nodemailer.createTransport({
-  host: "smtp-relay.brevo.com",
-  port: 2525,
-  secure: false,
-  auth: {
-    user: process.env.BREVO_EMAIL,
-    pass: process.env.BREVO_SMTP_KEY,
-  },
-  pool: true,
-  maxConnections: 1,
-  rateDelta: 20000,
-  rateLimit: 5,
-});
 
+
+await axios.post(
+  "https://api.brevo.com/v3/smtp/email",
+  {
+    sender: {
+      name: "Govt. Sr. Sec. School Shilla",
+      email: "magicalmathsquiz@gmail.com"
+    },
+    to: [
+      {
+        email: user.email
+      }
+    ],
+    subject: "Admin Login OTP",
+    htmlContent: getOTPTemplate(otp, "ADMIN LOGIN OTP")
+  },
+  {
+    headers: {
+      "api-key": process.env.BREVO_API_KEY,
+      "Content-Type": "application/json"
+    }
+  }
+);
 /* ================= OTP ================= */
 
 function generateOTP() {
