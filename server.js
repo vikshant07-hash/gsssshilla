@@ -10,7 +10,7 @@ const verifyToken =
 /* ================= MIDDLEWARE ================= */
 
 app.use(cors({
-  origin: "*",
+  origin: "https://gssschoolshilla.netlify.app",
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
