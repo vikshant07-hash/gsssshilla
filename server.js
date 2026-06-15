@@ -11,11 +11,8 @@ const verifyToken =
 
 
 
-const nodemailer = require("nodemailer");
-
 app.get("/smtp-test", async (req, res) => {
   try {
-
     const transporter = nodemailer.createTransport({
       host: "smtp-relay.brevo.com",
       port: 587,
@@ -23,26 +20,25 @@ app.get("/smtp-test", async (req, res) => {
       auth: {
         user: process.env.BREVO_EMAIL,
         pass: process.env.BREVO_SMTP_KEY
-      }
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000
     });
 
-    await transporter.sendMail({
-      from: process.env.BREVO_EMAIL,
-      to: "magicalmathsquiz@gmail.com",
-      subject: "SMTP Test",
-      text: "Brevo SMTP Working"
-    });
+    console.log("Checking SMTP...");
 
-    res.send("EMAIL SENT");
+    await transporter.verify();
+
+    console.log("SMTP VERIFIED");
+
+    res.send("SMTP OK");
 
   } catch (err) {
-
-    console.log(err);
-    res.send("ERROR: " + err.message);
-
+    console.log("SMTP ERROR:", err);
+    res.send("SMTP ERROR: " + err.message);
   }
 });
-
 
 
 app.use(cors({
