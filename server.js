@@ -9,6 +9,42 @@ const verifyToken =
 
 /* ================= MIDDLEWARE ================= */
 
+
+
+const nodemailer = require("nodemailer");
+
+app.get("/smtp-test", async (req, res) => {
+  try {
+
+    const transporter = nodemailer.createTransport({
+      host: "smtp-relay.brevo.com",
+      port: 587,
+      secure: false,
+      auth: {
+        user: process.env.BREVO_EMAIL,
+        pass: process.env.BREVO_SMTP_KEY
+      }
+    });
+
+    await transporter.sendMail({
+      from: process.env.BREVO_EMAIL,
+      to: "magicalmathsquiz@gmail.com",
+      subject: "SMTP Test",
+      text: "Brevo SMTP Working"
+    });
+
+    res.send("EMAIL SENT");
+
+  } catch (err) {
+
+    console.log(err);
+    res.send("ERROR: " + err.message);
+
+  }
+});
+
+
+
 app.use(cors({
   origin: "https://gssschoolshilla.netlify.app",
   methods: ["GET", "POST", "PUT", "DELETE"],
