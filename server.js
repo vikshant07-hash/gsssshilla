@@ -2,6 +2,8 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 
+const nodemailer = require("nodemailer");
+
 const app = express();
 const verifyToken =
   require("./middleware/authMiddleware");
