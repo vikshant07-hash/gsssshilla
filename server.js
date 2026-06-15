@@ -68,6 +68,10 @@ app.get(
   }
 );
 
+app.get("/test", (req, res) => {
+  res.send("TEST OK");
+});
+
 /* ================= PORT ================= */
 const PORT = process.env.PORT || 3000;
 
