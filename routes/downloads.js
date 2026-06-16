@@ -1,16 +1,18 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const cloudinary = require("../config/cloudinary");
 const db = require("../config/db");
 
-/* ================= MULTER ================= */
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
+/* ================= CLOUDINARY STORAGE ================= */
+
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: "downloads",
+    resource_type: "auto", // pdf + image + any file type
   },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  }
 });
 
 const upload = multer({ storage });
@@ -27,7 +29,8 @@ router.post("/add", upload.single("pdf"), (req, res) => {
       return res.status(400).json({ message: "File is required" });
     }
 
-    const file = req.file.filename;
+    // ✅ Cloudinary full URL store hoga
+    const file = req.file.path;
 
     const sql = `
       INSERT INTO downloads (\`class\`, year, category, title, file)
@@ -40,7 +43,7 @@ router.post("/add", upload.single("pdf"), (req, res) => {
         return res.status(500).json(err);
       }
 
-      res.json({ message: "Added Successfully", id: result.insertId });
+      res.json({ message: "Added Successfully", id: result.insertId, file });
     });
 
   } catch (err) {
@@ -49,7 +52,7 @@ router.post("/add", upload.single("pdf"), (req, res) => {
   }
 });
 
-/* ================= GET WITH FILTER (FIXED) ================= */
+/* ================= GET WITH OPTIONAL FILTER ================= */
 router.get("/", (req, res) => {
 
   const cls = req.query.class;
@@ -85,39 +88,42 @@ router.get("/", (req, res) => {
 
 /* ================= DELETE ================= */
 router.delete("/:id", (req, res) => {
-  db.query("DELETE FROM downloads WHERE id = ?", [req.params.id], (err) => {
+
+  db.query("SELECT file FROM downloads WHERE id = ?", [req.params.id], async (err, rows) => {
+
     if (err) {
       console.log(err);
       return res.status(500).json({ message: "Delete Failed" });
     }
 
-    res.json({ message: "Deleted Successfully" });
-  });
-});
+    if (rows.length && rows[0].file) {
+      try {
+        const fileUrl = rows[0].file;
+        const publicId = fileUrl
+          .split("/")
+          .slice(-2)
+          .join("/")
+          .split(".")[0];
 
-
-
-router.get("/", (req, res) => {
-
-  const { class: cls, year, category } = req.query;
-
-  // 🔴 ALL REQUIRED CHECK
-  if (!cls || !year || !category) {
-    return res.status(400).json({
-      message: "Class, Year and Category are required"
-    });
-  }
-
-  let sql = "SELECT * FROM downloads WHERE `class` = ? AND year = ? AND category = ?";
-  let values = [cls, year, category];
-
-  db.query(sql, values, (err, result) => {
-    if (err) {
-      return res.status(500).json(err);
+        await cloudinary.uploader.destroy(publicId, { resource_type: "auto" });
+      } catch (e) {
+        console.log("Cloudinary delete error:", e);
+      }
     }
-    res.json(result);
+
+    db.query("DELETE FROM downloads WHERE id = ?", [req.params.id], (err) => {
+      if (err) {
+        console.log(err);
+        return res.status(500).json({ message: "Delete Failed" });
+      }
+
+      res.json({ message: "Deleted Successfully" });
+    });
+
   });
+
 });
+
 /* ================= TEACHER ACCESS ================= */
 router.post("/teacher-access", (req, res) => {
   const { teacher_id, can_upload } = req.body;
