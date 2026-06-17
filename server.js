@@ -7,6 +7,8 @@ const nodemailer = require("nodemailer");
 const app = express();
 const verifyToken =
   require("./middleware/authMiddleware");
+  const recentRoutes =
+require("./routes/recentRoutes");
 
 
 /* ================= MIDDLEWARE ================= */
@@ -63,6 +65,8 @@ app.use("/images", require("./routes/images"));
 app.use("/notifications", require("./routes/notifications"));
 app.use("/downloads", require("./routes/downloads"));
 
+app.use("/recent", recentRoutes);
+
 
 app.use(
   "/api/gallery",
@@ -101,6 +105,8 @@ app.get(
 
   }
 );
+
+
 
 app.get("/test", (req, res) => {
   res.send("TEST OK");
