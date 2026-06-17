@@ -2,15 +2,20 @@ const router = require("express").Router();
 const c = require("../controllers/adminFacultyController");
 const verifyToken = require("../middleware/authMiddleware");
 const multer = require("multer");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const cloudinary = require("../config/cloudinary");
 
-const storage = multer.diskStorage({
-  destination:"uploads/",
-  filename:(req,file,cb)=>{
-    cb(null,Date.now()+"-"+file.originalname);
-  }
+/* ================= CLOUDINARY STORAGE ================= */
+
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: "faculty",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+  },
 });
 
-const upload = multer({storage});
+const upload = multer({ storage });
 
 router.post(
   "/add",
@@ -22,6 +27,7 @@ router.post(
 router.put(
   "/update/:id",
   verifyToken,
+  upload.single("photo"),   // photo update bhi optional support karega
   c.update
 );
 
