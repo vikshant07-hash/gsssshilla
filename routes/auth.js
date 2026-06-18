@@ -5,6 +5,9 @@ const db = require("../config/db");
 const axios = require("axios");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const verifyToken =
+  require("../middleware/authMiddleware");
+
  
 /* ================= BREVO SMTP ================= */
  
@@ -114,8 +117,15 @@ router.post("/login", (req, res) => {
       const match = await bcrypt.compare(password, user.password);
       if (!match) return res.json({ success: false, message: "Wrong password" });
  
-      if (!user.otp || user.otp !== otp)
-        return res.json({ success: false, message: "Invalid OTP" });
+      if (
+  !user.otp ||
+  user.otp.toUpperCase() !== otp.toUpperCase()
+) {
+  return res.json({
+    success: false,
+    message: "Invalid OTP"
+  });
+}
  
       if (Date.now() > user.otp_expiry)
         return res.json({ success: false, message: "OTP expired" });
@@ -123,14 +133,32 @@ router.post("/login", (req, res) => {
       db.query("UPDATE admins SET otp=NULL, otp_expiry=NULL WHERE id=?", [user.id]);
  
       const token = jwt.sign(
-        { id: user.id, role: "admin" },
-        process.env.JWT_SECRET,
-        { expiresIn: "1d" }
-      );
- 
+{
+  id: user.id,
+  username: user.username
+},
+process.env.JWT_SECRET,
+{
+  expiresIn: "3h"
+}
+);
       return res.json({ success: true, token });
     }
   );
 });
+
+
+router.get(
+  "/verify-admin",
+  verifyToken,
+  (req, res) => {
+
+    res.json({
+      success: true,
+      admin: req.admin
+    });
+
+  }
+);
  
 module.exports = router;

@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
 
 const nodemailer = require("nodemailer");
 
@@ -88,24 +89,6 @@ app.use("/analytics", require("./routes/analytics"));
 app.use("/api/admin", require("./routes/adminRoutes"));
 
 /* ================= HEALTH CHECK ================= */
-
-app.get("/", (req, res) => {
-  res.send("Backend is running successfully 🚀");
-});
-
-app.get(
-  "/verify-admin",
-  verifyToken,
-  (req, res) => {
-
-    res.json({
-      success: true,
-      user: req.user
-    });
-
-  }
-);
-
 
 
 app.get("/test", (req, res) => {
