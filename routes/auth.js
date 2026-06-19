@@ -160,5 +160,119 @@ router.get(
 
   }
 );
+
+
+
+
+
+
+
+/* ================= SEND RESET OTP ================= */
+
+router.post("/send-reset-otp", (req, res) => {
+
+  const { email } = req.body;
+
+  db.query(
+    "SELECT * FROM admins WHERE email=?",
+    [email],
+    async (err, results) => {
+
+      if (err)
+        return res.json({ success:false, message:"DB Error" });
+
+      if (!results.length)
+        return res.json({ success:false, message:"Email not found" });
+
+      const admin = results[0];
+
+      const otp = generateOTP();
+      const expiry = Date.now() + 5 * 60 * 1000;
+
+      db.query(
+        "UPDATE admins SET otp=?, otp_expiry=? WHERE id=?",
+        [otp, expiry, admin.id]
+      );
+
+      const sent = await sendEmail(
+        admin.email,
+        otp,
+        "PASSWORD RESET OTP"
+      );
+
+      if (!sent)
+        return res.json({ success:false, message:"Email failed" });
+
+      res.json({ success:true });
+    }
+  );
+});
+
+
+
+
+
+
+
+
+
+
+router.post("/reset-password", (req, res) => {
+
+  const { email, otp, newPassword } = req.body;
+
+  db.query(
+    "SELECT * FROM admins WHERE email=?",
+    [email],
+    async (err, results) => {
+
+      if (err)
+        return res.json({ success:false, message:"DB Error" });
+
+      if (!results.length)
+        return res.json({ success:false, message:"Email not found" });
+
+      const admin = results[0];
+
+      if (
+        !admin.otp ||
+        admin.otp.toUpperCase() !== otp.toUpperCase()
+      ) {
+        return res.json({
+          success:false,
+          message:"Invalid OTP"
+        });
+      }
+
+      if (Date.now() > admin.otp_expiry) {
+        return res.json({
+          success:false,
+          message:"OTP Expired"
+        });
+      }
+
+      const hashedPassword =
+        await bcrypt.hash(newPassword, 10);
+
+      db.query(
+        "UPDATE admins SET password=?, otp=NULL, otp_expiry=NULL WHERE id=?",
+        [hashedPassword, admin.id],
+        (err) => {
+
+          if (err)
+            return res.json({
+              success:false,
+              message:"Update Failed"
+            });
+
+          res.json({
+            success:true,
+            message:"Password Updated"
+          });
+        }
+      );
+    }
+  );
+});
  
 module.exports = router;
