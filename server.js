@@ -47,7 +47,7 @@ app.get("/smtp-test", async (req, res) => {
 
 
 app.use(cors({
-  origin: "https://gssschoolshilla.netlify.app",
+  origin: "https://gsssshilla3-a26h.vercel.app/",
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
