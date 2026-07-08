@@ -49,7 +49,7 @@ app.get("/smtp-test", async (req, res) => {
 app.use(cors({
   origin: [
     "https://gsssshilla.magicalmathsquiz.workers.dev",
-    "https://gssschoolshilla.netlify.app"
+    "https://gssschoolshilla.netlify.app",
     "https://school-frontend-6n6.pages.dev"
   ],
   credentials: true
