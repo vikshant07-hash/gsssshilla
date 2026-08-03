@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
 const app = express();
+app.set("trust proxy", 1);
 const verifyToken =
   require("./middleware/authMiddleware");
   const recentRoutes =
@@ -56,6 +57,8 @@ app.get("/smtp-test", async (req, res) => {
 
 app.use(cors({
   origin: [
+    "http://localhost:3000",
+    "http://localhost:5500",
     "https://gsssshilla.magicalmathsquiz.workers.dev",
     "https://gsssshilla07.pages.dev",
     "https://school-frontend-6n6.pages.dev"
@@ -106,6 +109,23 @@ app.get("/test", (req, res) => {
   res.send("TEST OK");
 });
 
+
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found"
+  });
+});
+
+
+app.use((err, req, res, next) => {
+  console.error("SERVER ERROR:", err);
+
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || "Internal Server Error"
+  });
+});
 /* ================= PORT ================= */
 const PORT = process.env.PORT || 3000;
 

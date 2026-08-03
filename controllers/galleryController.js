@@ -1,6 +1,14 @@
 const db = require("../config/db");
 const cloudinary = require("../config/cloudinary");
 
+
+console.log("===== FILE OBJECT =====");
+console.log(req.file);
+console.log("=======================");
+
+console.log("PATH =", req.file.path);
+console.log("FILENAME =", req.file.filename);
+
 // =====================
 // CREATE GALLERY IMAGE
 // =====================
