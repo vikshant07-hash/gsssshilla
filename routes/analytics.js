@@ -9,24 +9,29 @@ const db = require("../config/db");
 router.get("/track", (req, res) => {
 
   let ip =
-    req.headers['x-forwarded-for'] ||
+    req.headers["x-forwarded-for"] ||
     req.socket.remoteAddress ||
     req.ip;
 
   const today = new Date().toISOString().slice(0, 10);
 
+  // Unique numeric ID
+  const id = Date.now() + Math.floor(Math.random() * 1000);
+
   const sql = `
-    INSERT INTO visitor_logs (ip_address, visit_date)
-    VALUES (?, ?)
+    INSERT INTO visitor_logs (id, ip_address, visit_date)
+    VALUES (?, ?, ?)
   `;
 
-  db.query(sql, [ip, today], (err) => {
+  db.query(sql, [id, ip, today], (err) => {
 
     if (err) {
-      console.log("TRACK ERROR:", err);
+      console.error("TRACK ERROR:", err);
+
+      // Visitor tracking fail hone se website crash nahi honi chahiye
       return res.json({
-        success: false,
-        message: "Track failed"
+        success: true,
+        message: "Tracking skipped"
       });
     }
 
@@ -38,7 +43,6 @@ router.get("/track", (req, res) => {
   });
 
 });
-
 
 /* =========================
    GET STATS (TOTAL + TODAY)
