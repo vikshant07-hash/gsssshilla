@@ -8,22 +8,21 @@ const db = mysql.createConnection({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 4000,
+  port: process.env.DB_PORT,
 
   ssl: {
-    ca: fs.readFileSync(path.join(__dirname, "../certs/isrgrootx1.pem"))
-  },
-
-  connectTimeout: 10000,
-  charset: "utf8mb4"
+    ca: fs.readFileSync(
+      path.join(__dirname, "../certs/isrgrootx1.pem")
+    ),
+    rejectUnauthorized: true
+  }
 });
 
 db.connect((err) => {
   if (err) {
-    console.error("❌ Database Connection Failed");
-    console.error(err);
+    console.error("DB Error:", err);
   } else {
-    console.log("✅ TiDB Connected Successfully");
+    console.log("✅ TiDB Connected");
   }
 });
 
