@@ -36,7 +36,6 @@ function getFileTypeDisplay(mimeType) {
   if (mimeType === 'application/pdf') return '📄 PDF';
   if (mimeType.startsWith('audio/')) return '🎵 Audio';
   if (mimeType.startsWith('video/')) return '🎬 Video';
-  if (mimeType.includes('word') || mimeType.includes('document')) return '📝 Document';
   return '📎 File';
 }
 
@@ -175,7 +174,6 @@ router.get("/admin/all", (req, res) => {
     params.push(parseInt(status));
   }
 
-  // Get total count
   db.query(
     `SELECT COUNT(*) as total FROM recent_updates WHERE ${whereClause}`,
     params,
@@ -191,7 +189,6 @@ router.get("/admin/all", (req, res) => {
 
       const total = countResult[0].total;
 
-      // Get data with pagination
       db.query(
         `SELECT * FROM recent_updates 
         WHERE ${whereClause} 
@@ -269,7 +266,10 @@ router.get("/admin/stats", (req, res) => {
   });
 });
 
-// POST - Add Update
+// ============================================================
+// ==================== ADD UPDATE - WITHOUT file_size ====================
+// ============================================================
+
 router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   const { title, description, category, link, isNew } = req.body;
 
@@ -283,22 +283,18 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   const file_url = req.file ? req.file.path : null;
   const file_public_id = req.file ? req.file.filename : null;
   const file_type = req.file ? req.file.mimetype : null;
-  const file_size = req.file ? req.file.size : null;
-  const file_original_name = req.file ? req.file.originalname : null;
 
+  // ✅ SQL - WITHOUT file_size and file_original_name
   db.query(
     `INSERT INTO recent_updates 
-    (title, description, file_url, file_public_id, file_type, file_size, 
-     file_original_name, category, link, is_new, created_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    (title, description, file_url, file_public_id, file_type, category, link, is_new, created_at) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
     [
       title,
       description || "",
       file_url,
       file_public_id,
       file_type,
-      file_size,
-      file_original_name,
       category || "general",
       link || null,
       isNew !== undefined ? parseInt(isNew) : 1
@@ -317,6 +313,9 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
         "SELECT * FROM recent_updates WHERE id = ?",
         [result.insertId],
         (fetchErr, fetchResult) => {
+          if (fetchErr) {
+            console.error("❌ Fetch Error:", fetchErr);
+          }
           res.status(201).json({
             success: true,
             message: "Update added successfully ✅",
@@ -328,7 +327,10 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// PUT - Update Update
+// ============================================================
+// ==================== UPDATE UPDATE - WITHOUT file_size ====================
+// ============================================================
+
 router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   const { id } = req.params;
   const { title, description, category, link, isNew } = req.body;
@@ -340,7 +342,6 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
     });
   }
 
-  // First get existing update
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
@@ -356,10 +357,7 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
       let file_url = existing.file_url;
       let file_public_id = existing.file_public_id;
       let file_type = existing.file_type;
-      let file_size = existing.file_size;
-      let file_original_name = existing.file_original_name;
 
-      // If new file uploaded, delete old from Cloudinary
       if (req.file) {
         if (existing.file_public_id) {
           cloudinary.uploader.destroy(existing.file_public_id)
@@ -368,15 +366,13 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
         file_url = req.file.path;
         file_public_id = req.file.filename;
         file_type = req.file.mimetype;
-        file_size = req.file.size;
-        file_original_name = req.file.originalname;
       }
 
+      // ✅ SQL - WITHOUT file_size and file_original_name
       db.query(
         `UPDATE recent_updates 
         SET title = ?, description = ?, file_url = ?, file_public_id = ?, 
-            file_type = ?, file_size = ?, file_original_name = ?,
-            category = ?, link = ?, is_new = ?, updated_at = NOW()
+            file_type = ?, category = ?, link = ?, is_new = ?, updated_at = NOW()
         WHERE id = ?`,
         [
           title,
@@ -384,8 +380,6 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
           file_url,
           file_public_id,
           file_type,
-          file_size,
-          file_original_name,
           category || existing.category,
           link || existing.link || null,
           isNew !== undefined ? parseInt(isNew) : existing.is_new,
@@ -418,7 +412,10 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// DELETE - Delete Update
+// ============================================================
+// ==================== DELETE UPDATE ====================
+// ============================================================
+
 router.delete("/admin/delete/:id", (req, res) => {
   const { id } = req.params;
 
@@ -435,7 +432,6 @@ router.delete("/admin/delete/:id", (req, res) => {
 
       const update = fetchResult[0];
 
-      // Delete file from Cloudinary if exists
       if (update.file_public_id) {
         cloudinary.uploader.destroy(update.file_public_id)
           .catch(err => console.error("Cloudinary delete error:", err));
@@ -464,7 +460,10 @@ router.delete("/admin/delete/:id", (req, res) => {
   );
 });
 
-// PATCH - Toggle New Status
+// ============================================================
+// ==================== TOGGLE NEW STATUS ====================
+// ============================================================
+
 router.patch("/admin/toggle-new/:id", (req, res) => {
   const { id } = req.params;
 
@@ -489,7 +488,10 @@ router.patch("/admin/toggle-new/:id", (req, res) => {
   );
 });
 
-// DELETE - Bulk Delete
+// ============================================================
+// ==================== BULK DELETE ====================
+// ============================================================
+
 router.delete("/admin/bulk-delete", (req, res) => {
   const { ids } = req.body;
 
@@ -515,7 +517,6 @@ router.delete("/admin/bulk-delete", (req, res) => {
         });
       }
 
-      // Delete files from Cloudinary
       fetchResults.forEach(update => {
         if (update.file_public_id) {
           cloudinary.uploader.destroy(update.file_public_id)
