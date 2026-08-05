@@ -3,7 +3,6 @@ const router = express.Router();
 const db = require("../config/db");
 const cloudinary = require("../config/cloudinary");
 const { uploadRecent } = require("../config/cloudinary");
-const verifyToken = require("../middleware/authMiddleware");
 
 // ============================================================
 // ==================== HELPER FUNCTIONS ====================
@@ -22,6 +21,15 @@ function formatDateTime(dateString) {
   });
 }
 
+function getFileIcon(mimeType) {
+  if (!mimeType) return '📄';
+  if (mimeType.startsWith('image/')) return '🖼️';
+  if (mimeType === 'application/pdf') return '📄';
+  if (mimeType.startsWith('audio/')) return '🎵';
+  if (mimeType.startsWith('video/')) return '🎬';
+  return '📎';
+}
+
 function getFileTypeDisplay(mimeType) {
   if (!mimeType) return '📄 No File';
   if (mimeType.startsWith('image/')) return '🖼️ Image';
@@ -30,15 +38,6 @@ function getFileTypeDisplay(mimeType) {
   if (mimeType.startsWith('video/')) return '🎬 Video';
   if (mimeType.includes('word') || mimeType.includes('document')) return '📝 Document';
   return '📎 File';
-}
-
-function getFileIcon(mimeType) {
-  if (!mimeType) return '📄';
-  if (mimeType.startsWith('image/')) return '🖼️';
-  if (mimeType === 'application/pdf') return '📄';
-  if (mimeType.startsWith('audio/')) return '🎵';
-  if (mimeType.startsWith('video/')) return '🎬';
-  return '📎';
 }
 
 // ============================================================
@@ -85,19 +84,12 @@ router.get("/public", (req, res) => {
   );
 });
 
-// GET - Recent Updates for Scrolling Box
+// GET - Recent Updates (for scrolling box)
 router.get("/recent", (req, res) => {
   const { limit = 10 } = req.query;
 
   db.query(
-    `SELECT *, 
-     CASE 
-       WHEN created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR) THEN 1 
-       ELSE 0 
-     END as is_new_dynamic
-     FROM recent_updates 
-     ORDER BY created_at DESC 
-     LIMIT ?`,
+    `SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT ?`,
     [parseInt(limit)],
     (err, results) => {
       if (err) {
@@ -117,7 +109,7 @@ router.get("/recent", (req, res) => {
   );
 });
 
-// GET - Single Update (Public)
+// GET - Single Update
 router.get("/:id", (req, res) => {
   const { id } = req.params;
 
@@ -150,11 +142,11 @@ router.get("/:id", (req, res) => {
 });
 
 // ============================================================
-// ==================== ADMIN ROUTES ====================
+// ==================== ADMIN ROUTES (NO AUTH) ====================
 // ============================================================
 
 // GET - All Updates with Pagination
-router.get("/admin/all", verifyToken, (req, res) => {
+router.get("/admin/all", (req, res) => {
   const { 
     page = 1, 
     limit = 10, 
@@ -183,6 +175,7 @@ router.get("/admin/all", verifyToken, (req, res) => {
     params.push(parseInt(status));
   }
 
+  // Get total count
   db.query(
     `SELECT COUNT(*) as total FROM recent_updates WHERE ${whereClause}`,
     params,
@@ -198,6 +191,7 @@ router.get("/admin/all", verifyToken, (req, res) => {
 
       const total = countResult[0].total;
 
+      // Get data with pagination
       db.query(
         `SELECT * FROM recent_updates 
         WHERE ${whereClause} 
@@ -243,7 +237,7 @@ router.get("/admin/all", verifyToken, (req, res) => {
 });
 
 // GET - Admin Stats
-router.get("/admin/stats", verifyToken, (req, res) => {
+router.get("/admin/stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as total FROM recent_updates",
     new: "SELECT COUNT(*) as new FROM recent_updates WHERE is_new = 1",
@@ -276,7 +270,7 @@ router.get("/admin/stats", verifyToken, (req, res) => {
 });
 
 // POST - Add Update
-router.post("/admin/add", verifyToken, uploadRecent.single("file"), (req, res) => {
+router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   const { title, description, category, link, isNew } = req.body;
 
   if (!title) {
@@ -335,7 +329,7 @@ router.post("/admin/add", verifyToken, uploadRecent.single("file"), (req, res) =
 });
 
 // PUT - Update Update
-router.put("/admin/update/:id", verifyToken, uploadRecent.single("file"), (req, res) => {
+router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   const { id } = req.params;
   const { title, description, category, link, isNew } = req.body;
 
@@ -346,6 +340,7 @@ router.put("/admin/update/:id", verifyToken, uploadRecent.single("file"), (req, 
     });
   }
 
+  // First get existing update
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
@@ -364,6 +359,7 @@ router.put("/admin/update/:id", verifyToken, uploadRecent.single("file"), (req, 
       let file_size = existing.file_size;
       let file_original_name = existing.file_original_name;
 
+      // If new file uploaded, delete old from Cloudinary
       if (req.file) {
         if (existing.file_public_id) {
           cloudinary.uploader.destroy(existing.file_public_id)
@@ -423,7 +419,7 @@ router.put("/admin/update/:id", verifyToken, uploadRecent.single("file"), (req, 
 });
 
 // DELETE - Delete Update
-router.delete("/admin/delete/:id", verifyToken, (req, res) => {
+router.delete("/admin/delete/:id", (req, res) => {
   const { id } = req.params;
 
   db.query(
@@ -439,6 +435,7 @@ router.delete("/admin/delete/:id", verifyToken, (req, res) => {
 
       const update = fetchResult[0];
 
+      // Delete file from Cloudinary if exists
       if (update.file_public_id) {
         cloudinary.uploader.destroy(update.file_public_id)
           .catch(err => console.error("Cloudinary delete error:", err));
@@ -468,7 +465,7 @@ router.delete("/admin/delete/:id", verifyToken, (req, res) => {
 });
 
 // PATCH - Toggle New Status
-router.patch("/admin/toggle-new/:id", verifyToken, (req, res) => {
+router.patch("/admin/toggle-new/:id", (req, res) => {
   const { id } = req.params;
 
   db.query(
@@ -493,7 +490,7 @@ router.patch("/admin/toggle-new/:id", verifyToken, (req, res) => {
 });
 
 // DELETE - Bulk Delete
-router.delete("/admin/bulk-delete", verifyToken, (req, res) => {
+router.delete("/admin/bulk-delete", (req, res) => {
   const { ids } = req.body;
 
   if (!ids || !Array.isArray(ids) || ids.length === 0) {
@@ -518,6 +515,7 @@ router.delete("/admin/bulk-delete", verifyToken, (req, res) => {
         });
       }
 
+      // Delete files from Cloudinary
       fetchResults.forEach(update => {
         if (update.file_public_id) {
           cloudinary.uploader.destroy(update.file_public_id)
