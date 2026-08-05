@@ -2,8 +2,6 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const path = require("path");
-const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
 
 // ==================== IMPORT CONFIGS ====================
 const { cloudinary } = require("./config/cloudinary");
@@ -31,42 +29,17 @@ app.use(cors({
     "http://localhost:5500",
     "https://gsssshilla.magicalmathsquiz.workers.dev",
     "https://gsssshilla07.pages.dev",
-    "https://school-frontend-6n6.pages.dev"
+    "https://school-frontend-6n6.pages.dev",
+    "*"
   ],
   credentials: true
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ==================== STATIC FILES ====================
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-// ==================== SMTP TEST ====================
-app.get("/smtp-test", async (req, res) => {
-  try {
-    const transporter = nodemailer.createTransport({
-      host: "smtp-relay.brevo.com",
-      port: 587,
-      secure: false,
-      auth: {
-        user: process.env.BREVO_EMAIL,
-        pass: process.env.BREVO_SMTP_KEY
-      },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 10000
-    });
-
-    console.log("📧 Checking SMTP...");
-    await transporter.verify();
-    console.log("✅ SMTP VERIFIED");
-    res.send("✅ SMTP OK");
-  } catch (err) {
-    console.log("❌ SMTP ERROR:", err);
-    res.send("❌ SMTP ERROR: " + err.message);
-  }
-});
 
 // ==================== CLOUDINARY TEST ====================
 app.get("/cloudinary-test", async (req, res) => {
@@ -107,14 +80,12 @@ app.get("/db-test", (req, res) => {
 // ==================== HEALTH CHECK ====================
 app.get("/health", async (req, res) => {
   try {
-    // Check Database
     const dbStatus = await new Promise((resolve) => {
       db.query("SELECT 1 as health", (err) => {
         resolve(err ? "unhealthy" : "healthy");
       });
     });
 
-    // Check Cloudinary
     let cloudinaryStatus = "disconnected";
     try {
       await cloudinary.api.ping();
@@ -143,23 +114,13 @@ app.get("/health", async (req, res) => {
   }
 });
 
-// ==================== ROUTES ====================
-
-// ✅ RECENT UPDATES ROUTE - Main Module
-app.use("/recent", require("./routes/recentRoutes"));
-
-// ✅ OTHER ROUTES
-app.use("/images", require("./routes/images"));
-app.use("/notifications", require("./routes/notifications"));
-app.use("/downloads", require("./routes/downloads"));
-app.use("/api/gallery", require("./routes/galleryRoutes"));
-app.use("/faculty", require("./routes/facultyRoutes"));
-app.use("/admin/faculty", require("./routes/adminFacultyRoutes"));
-app.use("/contact", require("./routes/contactRoutes"));
-app.use("/admin/contact", require("./routes/contactAdmin"));
-app.use("/", require("./routes/auth"));
-app.use("/analytics", require("./routes/analytics"));
-app.use("/api/admin", require("./routes/adminRoutes"));
+// ==================== RECENT ROUTES ====================
+try {
+  app.use("/recent", require("./routes/recentRoutes"));
+  console.log("✅ Recent Routes loaded successfully");
+} catch (error) {
+  console.error("❌ Failed to load recent routes:", error.message);
+}
 
 // ==================== 404 HANDLER ====================
 app.use((req, res) => {
@@ -170,22 +131,14 @@ app.use((req, res) => {
   });
 });
 
-// ==================== ERROR HANDLER ====================
+// ==================== GLOBAL ERROR HANDLER ====================
 app.use((err, req, res, next) => {
   console.error("❌ SERVER ERROR:", err);
 
-  // Multer Error Handling
   if (err.code === 'FILE_TOO_LARGE') {
     return res.status(413).json({
       success: false,
       message: 'File too large. Maximum size is 50MB'
-    });
-  }
-
-  if (err.message && err.message.includes('Only images, PDFs, Word, Audio and Video files are allowed')) {
-    return res.status(400).json({
-      success: false,
-      message: err.message
     });
   }
 
@@ -198,7 +151,17 @@ app.use((err, req, res, next) => {
 // ==================== PORT ====================
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+// ✅ Graceful Shutdown
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// ✅ Server Start with Error Handling
+const server = app.listen(PORT, () => {
   console.log("=".repeat(50));
   console.log("🚀 SERVER STARTED SUCCESSFULLY");
   console.log("=".repeat(50));
@@ -209,4 +172,32 @@ app.listen(PORT, () => {
   console.log("=".repeat(50));
   console.log("✅ Server is ready to accept requests");
   console.log("=".repeat(50));
+});
+
+// ✅ Handle Server Errors
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use!`);
+    console.log(`🔄 Trying to use port ${PORT + 1}...`);
+    server.listen(PORT + 1);
+  } else {
+    console.error('❌ Server error:', error);
+  }
+});
+
+// ✅ Graceful Shutdown
+process.on('SIGTERM', () => {
+  console.log('🔄 SIGTERM received. Closing server...');
+  server.close(() => {
+    console.log('✅ Server closed.');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('🔄 SIGINT received. Closing server...');
+  server.close(() => {
+    console.log('✅ Server closed.');
+    process.exit(0);
+  });
 });
