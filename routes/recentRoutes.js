@@ -4,17 +4,10 @@ const db = require("../config/db");
 const { uploadRecent } = require("../config/cloudinary");
 
 // ============================================================
-// ==================== TEST ROUTE ====================
-// ============================================================
-
-router.get("/test", (req, res) => {
-  res.json({ success: true, message: "✅ Recent route is working!" });
-});
-
-// ============================================================
 // ==================== PUBLIC ROUTES ====================
 // ============================================================
 
+// GET - Public Updates with NEW tag
 router.get("/public", (req, res) => {
   const { limit = 20 } = req.query;
 
@@ -46,7 +39,7 @@ router.get("/public", (req, res) => {
   );
 });
 
-// GET - Recent Updates
+// GET - Recent Updates (scrolling)
 router.get("/recent", (req, res) => {
   const { limit = 10 } = req.query;
 
