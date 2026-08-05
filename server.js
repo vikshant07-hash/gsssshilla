@@ -5,6 +5,7 @@ const path = require("path");
 
 // ==================== IMPORT CONFIGS ====================
 const { cloudinary } = require("./config/cloudinary");
+const { uploadRecent } = require("./config/cloudinary"); // ✅ YEH IMPORT MISSING THA
 const db = require("./config/db");
 
 const app = express();
@@ -64,7 +65,7 @@ app.get("/db-test", (req, res) => {
 });
 
 // ============================================================
-// ==================== DIRECT API ROUTES (WORKING) ====================
+// ==================== DIRECT API ROUTES ====================
 // ============================================================
 
 // ✅ GET - All Updates (Public)
