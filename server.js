@@ -114,13 +114,11 @@ app.get("/health", async (req, res) => {
   }
 });
 
+// ============================================================
 // ==================== RECENT ROUTES ====================
-try {
-  app.use("/recent", require("./routes/recentRoutes"));
-  console.log("✅ Recent Routes loaded successfully");
-} catch (error) {
-  console.error("❌ Failed to load recent routes:", error.message);
-}
+// ============================================================
+
+app.use("/recent", require("./routes/recentRoutes"));
 
 // ==================== 404 HANDLER ====================
 app.use((req, res) => {
@@ -131,7 +129,7 @@ app.use((req, res) => {
   });
 });
 
-// ==================== GLOBAL ERROR HANDLER ====================
+// ==================== ERROR HANDLER ====================
 app.use((err, req, res, next) => {
   console.error("❌ SERVER ERROR:", err);
 
@@ -151,17 +149,7 @@ app.use((err, req, res, next) => {
 // ==================== PORT ====================
 const PORT = process.env.PORT || 3000;
 
-// ✅ Graceful Shutdown
-process.on('uncaughtException', (err) => {
-  console.error('❌ Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-// ✅ Server Start with Error Handling
-const server = app.listen(PORT, () => {
+app.listen(PORT, () => {
   console.log("=".repeat(50));
   console.log("🚀 SERVER STARTED SUCCESSFULLY");
   console.log("=".repeat(50));
@@ -172,32 +160,4 @@ const server = app.listen(PORT, () => {
   console.log("=".repeat(50));
   console.log("✅ Server is ready to accept requests");
   console.log("=".repeat(50));
-});
-
-// ✅ Handle Server Errors
-server.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use!`);
-    console.log(`🔄 Trying to use port ${PORT + 1}...`);
-    server.listen(PORT + 1);
-  } else {
-    console.error('❌ Server error:', error);
-  }
-});
-
-// ✅ Graceful Shutdown
-process.on('SIGTERM', () => {
-  console.log('🔄 SIGTERM received. Closing server...');
-  server.close(() => {
-    console.log('✅ Server closed.');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('🔄 SIGINT received. Closing server...');
-  server.close(() => {
-    console.log('✅ Server closed.');
-    process.exit(0);
-  });
 });
