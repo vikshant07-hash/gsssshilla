@@ -3,14 +3,13 @@ const cors = require("cors");
 require("dotenv").config();
 const path = require("path");
 
-// ==================== CONFIGS ====================
 const { cloudinary } = require("./config/cloudinary");
 const db = require("./config/db");
 
 const app = express();
 app.set("trust proxy", 1);
 
-// ==================== ✅ CORS - COMPLETE FIX ====================
+// ==================== ✅ COMPLETE CORS FIX ====================
 app.use(cors({
   origin: '*',
   credentials: true,
@@ -33,18 +32,47 @@ app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "🏫 School Management Backend 🚀",
-    version: "2.0.0",
     timestamp: new Date().toISOString()
   });
 });
 
-// ==================== TEST ROUTES ====================
+// ==================== ✅ TEST ROUTES ====================
 app.get("/test", (req, res) => {
-  res.json({ success: true, message: "✅ TEST ROUTE WORKING!" });
+  res.json({ success: true, message: "✅ TEST WORKING!" });
 });
 
-app.get("/recent-test", (req, res) => {
-  res.json({ success: true, message: "✅ RECENT-TEST WORKING!" });
+// ==================== ✅ DIRECT RECENT ROUTE (NO ROUTES FILE) ====================
+app.get("/recent-public", (req, res) => {
+  console.log("📡 /recent-public called");
+  
+  db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
+    if (err) {
+      console.error("❌ DB Error:", err);
+      return res.status(500).json({ 
+        success: false, 
+        error: err.message,
+        hint: "Table 'recent_updates' may not exist"
+      });
+    }
+    console.log("✅ Data fetched:", results.length, "records");
+    res.json({ success: true, data: results });
+  });
+});
+
+app.get("/recent-admin-all", (req, res) => {
+  console.log("📡 /recent-admin-all called");
+  
+  db.query("SELECT * FROM recent_updates ORDER BY created_at DESC", (err, results) => {
+    if (err) {
+      console.error("❌ DB Error:", err);
+      return res.status(500).json({ 
+        success: false, 
+        error: err.message 
+      });
+    }
+    console.log("✅ Data fetched:", results.length, "records");
+    res.json({ success: true, data: results });
+  });
 });
 
 // ==================== DATABASE TEST ====================
@@ -65,91 +93,13 @@ app.get("/db-test", (req, res) => {
   });
 });
 
-// ==================== CLOUDINARY TEST ====================
-app.get("/cloudinary-test", async (req, res) => {
-  try {
-    const result = await cloudinary.api.ping();
-    res.json({
-      success: true,
-      message: "✅ Cloudinary connected successfully",
-      data: result
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "❌ Cloudinary connection failed",
-      error: error.message
-    });
-  }
-});
-
-// ============================================================
-// ==================== RECENT ROUTES ====================
-// ============================================================
-
-try {
-  const recentRoutes = require("./routes/recentRoutes");
-  app.use("/recent", recentRoutes);
-  console.log("✅ Recent Routes loaded successfully");
-} catch (error) {
-  console.error("❌ Error loading recent routes:", error.message);
-  
-  // ✅ FALLBACK ROUTES - Direct in server.js
-  const router = express.Router();
-  
-  router.get("/public", (req, res) => {
-    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
-      if (err) {
-        return res.status(500).json({ 
-          success: false, 
-          error: err.message,
-          note: "Table may not exist. Please create recent_updates table."
-        });
-      }
-      res.json({ success: true, data: results, note: "Fallback route" });
-    });
-  });
-  
-  router.get("/admin/all", (req, res) => {
-    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC", (err, results) => {
-      if (err) {
-        return res.status(500).json({ 
-          success: false, 
-          error: err.message,
-          note: "Table may not exist. Please create recent_updates table."
-        });
-      }
-      res.json({ success: true, data: results, note: "Fallback route" });
-    });
-  });
-  
-  router.get("/admin/stats", (req, res) => {
-    db.query("SELECT COUNT(*) as total FROM recent_updates", (err, results) => {
-      if (err) {
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      res.json({ 
-        success: true, 
-        data: { 
-          total: results,
-          new: [{ new: 0 }],
-          old: [{ old: 0 }],
-          withFile: [{ withFile: 0 }]
-        }
-      });
-    });
-  });
-  
-  app.use("/recent", router);
-  console.log("✅ Fallback recent routes registered");
-}
-
 // ==================== 404 ====================
 app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: "❌ Route not found",
-    path: req.originalUrl
+    path: req.originalUrl,
+    availableRoutes: ["/", "/test", "/recent-public", "/recent-admin-all", "/db-test"]
   });
 });
 
@@ -167,16 +117,15 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("=".repeat(50));
-  console.log("🚀 SERVER v2.0.0 STARTED");
+  console.log("🚀 SERVER STARTED");
   console.log("=".repeat(50));
   console.log(`📡 Port: ${PORT}`);
-  console.log("=".repeat(50));
-  console.log("✅ CORS enabled for all origins");
+  console.log("✅ CORS enabled");
   console.log("✅ Available routes:");
   console.log("  - GET /");
   console.log("  - GET /test");
-  console.log("  - GET /recent-test");
-  console.log("  - GET /recent/public");
-  console.log("  - GET /recent/admin/all");
+  console.log("  - GET /recent-public");
+  console.log("  - GET /recent-admin-all");
+  console.log("  - GET /db-test");
   console.log("=".repeat(50));
 });
