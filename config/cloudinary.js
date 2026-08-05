@@ -13,7 +13,7 @@ const recentStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: "school/recent_updates",
-    resource_type: "auto", // Supports image, pdf, audio, video
+    resource_type: "auto",
     allowed_formats: ["jpg", "jpeg", "png", "gif", "webp", "pdf", "doc", "docx", "mp3", "wav", "mp4", "avi"],
     transformation: [
       { quality: "auto" },
@@ -31,7 +31,7 @@ const recentStorage = new CloudinaryStorage({
 const uploadRecent = multer({
   storage: recentStorage,
   limits: {
-    fileSize: 50 * 1024 * 1024 // 50MB (for audio/video)
+    fileSize: 50 * 1024 * 1024 // 50MB
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
@@ -50,19 +50,7 @@ const uploadRecent = multer({
   }
 });
 
-// ==================== DELETE FUNCTION ====================
-const deleteFromCloudinary = async (publicId) => {
-  try {
-    const result = await cloudinary.uploader.destroy(publicId);
-    return result;
-  } catch (error) {
-    console.error("Error deleting from Cloudinary:", error);
-    throw error;
-  }
-};
-
 module.exports = {
   cloudinary,
-  uploadRecent,
-  deleteFromCloudinary
+  uploadRecent
 };
