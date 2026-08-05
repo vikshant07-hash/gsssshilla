@@ -65,7 +65,7 @@ app.get("/db-test", (req, res) => {
 });
 
 // ============================================================
-// ==================== DIRECT API ROUTES ====================
+// ==================== ✅ ALL RECENT ROUTES ====================
 // ============================================================
 
 // ✅ GET - All Updates (Public)
@@ -75,8 +75,7 @@ app.get("/recent-public", (req, res) => {
       console.error("❌ DB Error:", err);
       return res.status(500).json({ 
         success: false, 
-        error: err.message,
-        hint: "Table 'recent_updates' may not exist"
+        error: err.message
       });
     }
     res.json({ success: true, data: results });
@@ -234,11 +233,15 @@ app.put("/recent-admin-update/:id", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// ✅ DELETE - Delete Update (FIXED)
+// ============================================================
+// ✅ DELETE - Delete Single Update (FIXED)
+// ============================================================
+
 app.delete("/recent-admin-delete/:id", (req, res) => {
   const { id } = req.params;
-  console.log("🗑️ Delete request for ID:", id);
+  console.log("🗑️ DELETE request received for ID:", id);
 
+  // Validate ID
   if (!id || isNaN(id)) {
     return res.status(400).json({
       success: false,
@@ -246,6 +249,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
     });
   }
 
+  // First check if update exists
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
@@ -267,9 +271,11 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
       }
 
       const update = fetchResult[0];
+      console.log("📦 Found update:", update.title);
 
       // Delete file from Cloudinary if exists
       if (update.file_public_id) {
+        console.log("☁️ Deleting from Cloudinary:", update.file_public_id);
         cloudinary.uploader.destroy(update.file_public_id)
           .then(result => {
             console.log("✅ Cloudinary delete result:", result);
@@ -279,6 +285,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
           });
       }
 
+      // Delete from database
       db.query(
         "DELETE FROM recent_updates WHERE id = ?",
         [id],
@@ -292,6 +299,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
             });
           }
 
+          console.log("✅ Update deleted successfully from database");
           res.json({
             success: true,
             message: "Update deleted successfully ✅"
@@ -302,43 +310,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
   );
 });
 
-// ✅ GET - Admin Stats
-app.get("/recent-admin-stats", (req, res) => {
-  const queries = {
-    total: "SELECT COUNT(*) as total FROM recent_updates",
-    new: "SELECT COUNT(*) as new FROM recent_updates WHERE is_new = 1",
-    old: "SELECT COUNT(*) as old FROM recent_updates WHERE is_new = 0",
-    withFile: "SELECT COUNT(*) as withFile FROM recent_updates WHERE file_url IS NOT NULL"
-  };
-
-  const results = {};
-  let completed = 0;
-  const totalQueries = Object.keys(queries).length;
-
-  Object.entries(queries).forEach(([key, query]) => {
-    db.query(query, (err, result) => {
-      if (err) {
-        console.error(`❌ Stats Error (${key}):`, err);
-        results[key] = { error: err.message };
-      } else {
-        results[key] = result;
-      }
-      completed++;
-      
-      if (completed === totalQueries) {
-        res.json({
-          success: true,
-          data: results
-        });
-      }
-    });
-  });
-});
-
-// ============================================================
-// ✅ BULK DELETE ROUTE
-// ============================================================
-
+// ✅ DELETE - Bulk Delete
 app.delete("/recent-admin-bulk-delete", (req, res) => {
   const { ids } = req.body;
 
@@ -395,6 +367,39 @@ app.delete("/recent-admin-bulk-delete", (req, res) => {
       );
     }
   );
+});
+
+// ✅ GET - Admin Stats
+app.get("/recent-admin-stats", (req, res) => {
+  const queries = {
+    total: "SELECT COUNT(*) as total FROM recent_updates",
+    new: "SELECT COUNT(*) as new FROM recent_updates WHERE is_new = 1",
+    old: "SELECT COUNT(*) as old FROM recent_updates WHERE is_new = 0",
+    withFile: "SELECT COUNT(*) as withFile FROM recent_updates WHERE file_url IS NOT NULL"
+  };
+
+  const results = {};
+  let completed = 0;
+  const totalQueries = Object.keys(queries).length;
+
+  Object.entries(queries).forEach(([key, query]) => {
+    db.query(query, (err, result) => {
+      if (err) {
+        console.error(`❌ Stats Error (${key}):`, err);
+        results[key] = { error: err.message };
+      } else {
+        results[key] = result;
+      }
+      completed++;
+      
+      if (completed === totalQueries) {
+        res.json({
+          success: true,
+          data: results
+        });
+      }
+    });
+  });
 });
 
 // ============================================================
