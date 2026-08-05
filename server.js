@@ -10,25 +10,23 @@ const db = require("./config/db");
 const app = express();
 app.set("trust proxy", 1);
 
+// ==================== ✅ CORS - COMPLETE FIX ====================
+app.use(cors({
+  origin: '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+}));
+
+// ✅ Handle preflight requests
+app.options('*', cors());
+
 // ==================== MIDDLEWARE ====================
-app.use(cors({ origin: "*", credentials: true }));
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ==================== STATIC FILES ====================
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-// ==================== ✅ VERSION CHECK ====================
-// Ye route server version batayega - agar ye chal gaya toh naya code deploy hua
-app.get("/version", (req, res) => {
-  res.json({
-    success: true,
-    version: "2.0.0",
-    message: "✅ NEW CODE DEPLOYED! Server.js updated.",
-    deployTime: new Date().toISOString(),
-    routes: ["/", "/test", "/recent-test", "/simple-public", "/db-test", "/cloudinary-test", "/health"]
-  });
-});
 
 // ==================== ROOT ====================
 app.get("/", (req, res) => {
@@ -40,41 +38,16 @@ app.get("/", (req, res) => {
   });
 });
 
-// ==================== ✅ TEST ROUTES (Guaranteed Working) ====================
+// ==================== TEST ROUTES ====================
 app.get("/test", (req, res) => {
-  res.json({
-    success: true,
-    message: "✅ TEST ROUTE WORKING!",
-    timestamp: new Date().toISOString()
-  });
+  res.json({ success: true, message: "✅ TEST ROUTE WORKING!" });
 });
 
 app.get("/recent-test", (req, res) => {
-  res.json({
-    success: true,
-    message: "✅ RECENT-TEST ROUTE WORKING!",
-    timestamp: new Date().toISOString()
-  });
+  res.json({ success: true, message: "✅ RECENT-TEST WORKING!" });
 });
 
-app.get("/simple-public", (req, res) => {
-  db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 10", (err, results) => {
-    if (err) {
-      return res.status(500).json({
-        success: false,
-        message: "❌ Database error",
-        error: err.message
-      });
-    }
-    res.json({
-      success: true,
-      data: results,
-      note: "Direct query from server.js"
-    });
-  });
-});
-
-// ==================== DB TEST ====================
+// ==================== DATABASE TEST ====================
 app.get("/db-test", (req, res) => {
   db.query("SELECT 1 as test, NOW() as time", (err, results) => {
     if (err) {
@@ -110,31 +83,65 @@ app.get("/cloudinary-test", async (req, res) => {
   }
 });
 
-// ==================== RECENT ROUTES (FILE) ====================
-try {
-  const fs = require("fs");
-  const routesPath = path.join(__dirname, "routes", "recentRoutes.js");
+// ============================================================
+// ==================== RECENT ROUTES ====================
+// ============================================================
 
-  if (fs.existsSync(routesPath)) {
-    const recentRoutes = require("./routes/recentRoutes");
-    app.use("/recent", recentRoutes);
-    console.log("✅ Recent Routes loaded from file");
-  } else {
-    console.warn("⚠️ routes/recentRoutes.js not found");
-    const router = express.Router();
-    router.get("/", (req, res) => {
-      res.json({ success: true, message: "Recent route fallback" });
-    });
-    router.get("/public", (req, res) => {
-      db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
-        if (err) return res.status(500).json({ success: false, error: err.message });
-        res.json({ success: true, data: results });
-      });
-    });
-    app.use("/recent", router);
-  }
+try {
+  const recentRoutes = require("./routes/recentRoutes");
+  app.use("/recent", recentRoutes);
+  console.log("✅ Recent Routes loaded successfully");
 } catch (error) {
   console.error("❌ Error loading recent routes:", error.message);
+  
+  // ✅ FALLBACK ROUTES - Direct in server.js
+  const router = express.Router();
+  
+  router.get("/public", (req, res) => {
+    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
+      if (err) {
+        return res.status(500).json({ 
+          success: false, 
+          error: err.message,
+          note: "Table may not exist. Please create recent_updates table."
+        });
+      }
+      res.json({ success: true, data: results, note: "Fallback route" });
+    });
+  });
+  
+  router.get("/admin/all", (req, res) => {
+    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC", (err, results) => {
+      if (err) {
+        return res.status(500).json({ 
+          success: false, 
+          error: err.message,
+          note: "Table may not exist. Please create recent_updates table."
+        });
+      }
+      res.json({ success: true, data: results, note: "Fallback route" });
+    });
+  });
+  
+  router.get("/admin/stats", (req, res) => {
+    db.query("SELECT COUNT(*) as total FROM recent_updates", (err, results) => {
+      if (err) {
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ 
+        success: true, 
+        data: { 
+          total: results,
+          new: [{ new: 0 }],
+          old: [{ old: 0 }],
+          withFile: [{ withFile: 0 }]
+        }
+      });
+    });
+  });
+  
+  app.use("/recent", router);
+  console.log("✅ Fallback recent routes registered");
 }
 
 // ==================== 404 ====================
@@ -142,8 +149,7 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: "❌ Route not found",
-    path: req.originalUrl,
-    hint: "Try /test, /recent-test, or /version to verify new code is deployed"
+    path: req.originalUrl
   });
 });
 
@@ -164,12 +170,13 @@ app.listen(PORT, () => {
   console.log("🚀 SERVER v2.0.0 STARTED");
   console.log("=".repeat(50));
   console.log(`📡 Port: ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log("=".repeat(50));
-  console.log("✅ VERIFIED WORKING ROUTES:");
+  console.log("✅ CORS enabled for all origins");
+  console.log("✅ Available routes:");
   console.log("  - GET /");
-  console.log("  - GET /version");
   console.log("  - GET /test");
   console.log("  - GET /recent-test");
+  console.log("  - GET /recent/public");
+  console.log("  - GET /recent/admin/all");
   console.log("=".repeat(50));
 });
