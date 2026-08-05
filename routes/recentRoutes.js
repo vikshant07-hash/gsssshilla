@@ -1,19 +1,19 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
-const upload = require("../middleware/uploadRecent");
-const recent = require("../controllers/recentController");
+const { uploadRecent } = require("../config/cloudinary");
+const recentController = require("../controllers/recentController");
 
 // ==================== PUBLIC ROUTES ====================
-router.get("/", recent.getUpdates);
-router.get("/recent", recent.getRecentUpdates);
-router.get("/:id", recent.getUpdateById);
-router.get("/category/:category", recent.getUpdatesByCategory);
-router.get("/search/:query", recent.searchUpdates);
+router.get("/", recentController.getUpdates);
+router.get("/public", recentController.getPublicUpdates);
+router.get("/recent", recentController.getRecentUpdates);
+router.get("/:id", recentController.getUpdateById);
 
 // ==================== ADMIN ROUTES ====================
-router.post("/", verifyToken, upload.single("file"), recent.addUpdate);
-router.put("/:id", verifyToken, upload.single("file"), recent.updateUpdate);
-router.delete("/:id", verifyToken, recent.deleteUpdate);
+router.post("/", verifyToken, uploadRecent.single("file"), recentController.addUpdate);
+router.put("/:id", verifyToken, uploadRecent.single("file"), recentController.updateUpdate);
+router.delete("/:id", verifyToken, recentController.deleteUpdate);
+router.patch("/:id/toggle-new", verifyToken, recentController.toggleNewStatus);
 
 module.exports = router;
