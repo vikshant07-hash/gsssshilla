@@ -1,49 +1,20 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../config/db");
-const cloudinary = require("../config/cloudinary");
 const { uploadRecent } = require("../config/cloudinary");
 
 // ============================================================
-// ==================== HELPER FUNCTIONS ====================
+// ==================== TEST ROUTE ====================
 // ============================================================
 
-function formatDateTime(dateString) {
-  if (!dateString) return '-';
-  const date = new Date(dateString);
-  return date.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  });
-}
-
-function getFileIcon(mimeType) {
-  if (!mimeType) return '📄';
-  if (mimeType.startsWith('image/')) return '🖼️';
-  if (mimeType === 'application/pdf') return '📄';
-  if (mimeType.startsWith('audio/')) return '🎵';
-  if (mimeType.startsWith('video/')) return '🎬';
-  return '📎';
-}
-
-function getFileTypeDisplay(mimeType) {
-  if (!mimeType) return '📄 No File';
-  if (mimeType.startsWith('image/')) return '🖼️ Image';
-  if (mimeType === 'application/pdf') return '📄 PDF';
-  if (mimeType.startsWith('audio/')) return '🎵 Audio';
-  if (mimeType.startsWith('video/')) return '🎬 Video';
-  return '📎 File';
-}
+router.get("/test", (req, res) => {
+  res.json({ success: true, message: "✅ Recent route is working!" });
+});
 
 // ============================================================
 // ==================== PUBLIC ROUTES ====================
 // ============================================================
 
-// GET - Public Updates with NEW tag (24 hours)
 router.get("/public", (req, res) => {
   const { limit = 20 } = req.query;
 
@@ -67,23 +38,15 @@ router.get("/public", (req, res) => {
         });
       }
 
-      const formattedData = results.map(item => ({
-        ...item,
-        is_new: item.created_at > new Date(Date.now() - 24 * 60 * 60 * 1000),
-        file_icon: getFileIcon(item.file_type),
-        file_type_display: getFileTypeDisplay(item.file_type),
-        created_at_formatted: formatDateTime(item.created_at)
-      }));
-
       res.json({
         success: true,
-        data: formattedData
+        data: results
       });
     }
   );
 });
 
-// GET - Recent Updates (for scrolling box)
+// GET - Recent Updates
 router.get("/recent", (req, res) => {
   const { limit = 10 } = req.query;
 
@@ -141,7 +104,7 @@ router.get("/:id", (req, res) => {
 });
 
 // ============================================================
-// ==================== ADMIN ROUTES (NO AUTH) ====================
+// ==================== ADMIN ROUTES ====================
 // ============================================================
 
 // GET - All Updates with Pagination
@@ -205,19 +168,9 @@ router.get("/admin/all", (req, res) => {
             });
           }
 
-          const formattedData = results.map(item => ({
-            ...item,
-            created_at_formatted: formatDateTime(item.created_at),
-            updated_at_formatted: formatDateTime(item.updated_at),
-            file_icon: getFileIcon(item.file_type),
-            file_type_display: getFileTypeDisplay(item.file_type),
-            is_new_badge: item.is_new ? '🆕 New' : '📌 Old',
-            is_new_class: item.is_new ? 'badge-new' : 'badge-old'
-          }));
-
           res.json({
             success: true,
-            data: formattedData,
+            data: results,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
@@ -266,10 +219,7 @@ router.get("/admin/stats", (req, res) => {
   });
 });
 
-// ============================================================
-// ==================== ADD UPDATE - WITHOUT file_size ====================
-// ============================================================
-
+// POST - Add Update
 router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   const { title, description, category, link, isNew } = req.body;
 
@@ -284,7 +234,6 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   const file_public_id = req.file ? req.file.filename : null;
   const file_type = req.file ? req.file.mimetype : null;
 
-  // ✅ SQL - WITHOUT file_size and file_original_name
   db.query(
     `INSERT INTO recent_updates 
     (title, description, file_url, file_public_id, file_type, category, link, is_new, created_at) 
@@ -313,9 +262,6 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
         "SELECT * FROM recent_updates WHERE id = ?",
         [result.insertId],
         (fetchErr, fetchResult) => {
-          if (fetchErr) {
-            console.error("❌ Fetch Error:", fetchErr);
-          }
           res.status(201).json({
             success: true,
             message: "Update added successfully ✅",
@@ -327,10 +273,7 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// ============================================================
-// ==================== UPDATE UPDATE - WITHOUT file_size ====================
-// ============================================================
-
+// PUT - Update Update
 router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   const { id } = req.params;
   const { title, description, category, link, isNew } = req.body;
@@ -368,7 +311,6 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
         file_type = req.file.mimetype;
       }
 
-      // ✅ SQL - WITHOUT file_size and file_original_name
       db.query(
         `UPDATE recent_updates 
         SET title = ?, description = ?, file_url = ?, file_public_id = ?, 
@@ -412,10 +354,7 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// ============================================================
-// ==================== DELETE UPDATE ====================
-// ============================================================
-
+// DELETE - Delete Update
 router.delete("/admin/delete/:id", (req, res) => {
   const { id } = req.params;
 
@@ -460,10 +399,7 @@ router.delete("/admin/delete/:id", (req, res) => {
   );
 });
 
-// ============================================================
-// ==================== TOGGLE NEW STATUS ====================
-// ============================================================
-
+// PATCH - Toggle New Status
 router.patch("/admin/toggle-new/:id", (req, res) => {
   const { id } = req.params;
 
@@ -488,10 +424,7 @@ router.patch("/admin/toggle-new/:id", (req, res) => {
   );
 });
 
-// ============================================================
-// ==================== BULK DELETE ====================
-// ============================================================
-
+// DELETE - Bulk Delete
 router.delete("/admin/bulk-delete", (req, res) => {
   const { ids } = req.body;
 
