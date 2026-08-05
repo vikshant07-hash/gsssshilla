@@ -1,18 +1,14 @@
 const db = require("../config/db");
-const cloudinary = require("../config/cloudinary");
+const { deleteFromCloudinary } = require("../config/cloudinary");
 
-// ==================== GET ALL UPDATES ====================
+// ==================== GET ALL UPDATES (Admin) ====================
 exports.getUpdates = (req, res) => {
   const { limit = 50, offset = 0 } = req.query;
 
   db.query(
-    `
-    SELECT * FROM recent_updates
-    ORDER BY created_at DESC
-    LIMIT ? OFFSET ?
-    `,
+    `SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT ? OFFSET ?`,
     [parseInt(limit), parseInt(offset)],
-    (err, result) => {
+    (err, results) => {
       if (err) {
         console.error("❌ Database Error:", err);
         return res.status(500).json({
@@ -22,19 +18,14 @@ exports.getUpdates = (req, res) => {
         });
       }
 
-      // Get total count
       db.query(
         "SELECT COUNT(*) as total FROM recent_updates",
         (countErr, countResult) => {
-          if (countErr) {
-            console.error("❌ Count Error:", countErr);
-          }
-
           res.json({
             success: true,
-            data: result,
+            data: results,
             pagination: {
-              total: countResult ? countResult[0].total : result.length,
+              total: countResult ? countResult[0].total : results.length,
               limit: parseInt(limit),
               offset: parseInt(offset)
             }
@@ -45,21 +36,86 @@ exports.getUpdates = (req, res) => {
   );
 };
 
+// ==================== GET PUBLIC UPDATES (With NEW Tag) ====================
+exports.getPublicUpdates = (req, res) => {
+  const { limit = 20 } = req.query;
+
+  db.query(
+    `SELECT *, 
+     CASE 
+       WHEN created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR) THEN 1 
+       ELSE 0 
+     END as is_new_dynamic
+     FROM recent_updates 
+     ORDER BY created_at DESC 
+     LIMIT ?`,
+    [parseInt(limit)],
+    (err, results) => {
+      if (err) {
+        console.error("❌ Database Error:", err);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch updates",
+          error: err.message
+        });
+      }
+
+      // Format data for frontend
+      const formattedData = results.map(item => ({
+        ...item,
+        is_new: item.created_at > new Date(Date.now() - 24 * 60 * 60 * 1000),
+        file_type_display: getFileTypeDisplay(item.file_type),
+        file_icon: getFileIcon(item.file_type)
+      }));
+
+      res.json({
+        success: true,
+        data: formattedData
+      });
+    }
+  );
+};
+
+// ==================== GET RECENT UPDATES (Homepage) ====================
+exports.getRecentUpdates = (req, res) => {
+  const { limit = 10 } = req.query;
+
+  db.query(
+    `SELECT *, 
+     CASE 
+       WHEN created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR) THEN 1 
+       ELSE 0 
+     END as is_new_dynamic
+     FROM recent_updates 
+     ORDER BY created_at DESC 
+     LIMIT ?`,
+    [parseInt(limit)],
+    (err, results) => {
+      if (err) {
+        console.error("❌ Database Error:", err);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch recent updates",
+          error: err.message
+        });
+      }
+
+      res.json({
+        success: true,
+        data: results
+      });
+    }
+  );
+};
+
 // ==================== GET SINGLE UPDATE ====================
 exports.getUpdateById = (req, res) => {
   const { id } = req.params;
 
-  if (!id || isNaN(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid update ID"
-    });
-  }
-
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
-    (err, result) => {
+    (err, results) => {
       if (err) {
         console.error("❌ Database Error:", err);
         return res.status(500).json({
@@ -69,7 +125,7 @@ exports.getUpdateById = (req, res) => {
         });
       }
 
-      if (!result.length) {
+      if (!results.length) {
         return res.status(404).json({
           success: false,
           message: "Update not found"
@@ -78,7 +134,7 @@ exports.getUpdateById = (req, res) => {
 
       res.json({
         success: true,
-        data: result[0]
+        data: results[0]
       });
     }
   );
@@ -88,7 +144,6 @@ exports.getUpdateById = (req, res) => {
 exports.addUpdate = (req, res) => {
   const { title, description, category, link } = req.body;
 
-  // Validation
   if (!title) {
     return res.status(400).json({
       success: false,
@@ -96,28 +151,26 @@ exports.addUpdate = (req, res) => {
     });
   }
 
-  // Cloudinary URL from multer
+  // Cloudinary file details
   const file_url = req.file ? req.file.path : null;
   const file_public_id = req.file ? req.file.filename : null;
   const file_type = req.file ? req.file.mimetype : null;
-
-  const now = new Date();
+  const file_size = req.file ? req.file.size : null;
 
   db.query(
-    `
-    INSERT INTO recent_updates 
-    (title, description, file_url, file_public_id, file_type, category, link, created_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `,
+    `INSERT INTO recent_updates 
+    (title, description, file_url, file_public_id, file_type, file_size, category, link, is_new) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       title,
       description || "",
       file_url,
       file_public_id,
       file_type,
+      file_size,
       category || "general",
       link || null,
-      now
+      1 // New by default
     ],
     (err, result) => {
       if (err) {
@@ -129,20 +182,16 @@ exports.addUpdate = (req, res) => {
         });
       }
 
-      // Fetch the newly created update
       db.query(
         "SELECT * FROM recent_updates WHERE id = ?",
         [result.insertId],
         (fetchErr, fetchResult) => {
-          if (fetchErr) {
-            console.error("❌ Fetch Error:", fetchErr);
-          }
-
           res.status(201).json({
             success: true,
             message: "Update added successfully ✅",
             data: fetchResult ? fetchResult[0] : { id: result.insertId },
-            file: file_url
+            file: file_url,
+            fileType: file_type
           });
         }
       );
@@ -155,14 +204,6 @@ exports.updateUpdate = (req, res) => {
   const { id } = req.params;
   const { title, description, category, link } = req.body;
 
-  // Validation
-  if (!id || isNaN(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid update ID"
-    });
-  }
-
   if (!title) {
     return res.status(400).json({
       success: false,
@@ -170,79 +211,52 @@ exports.updateUpdate = (req, res) => {
     });
   }
 
-  // First get existing update
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
     (fetchErr, fetchResult) => {
-      if (fetchErr) {
-        console.error("❌ Fetch Error:", fetchErr);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch update",
-          error: fetchErr.message
-        });
-      }
-
-      if (!fetchResult.length) {
+      if (fetchErr || !fetchResult.length) {
         return res.status(404).json({
           success: false,
           message: "Update not found"
         });
       }
 
-      const existingUpdate = fetchResult[0];
-      let file_url = existingUpdate.file_url;
-      let file_public_id = existingUpdate.file_public_id;
-      let file_type = existingUpdate.file_type;
+      const existing = fetchResult[0];
+      let file_url = existing.file_url;
+      let file_public_id = existing.file_public_id;
+      let file_type = existing.file_type;
+      let file_size = existing.file_size;
 
       // If new file uploaded, delete old from Cloudinary
       if (req.file) {
-        // Delete old file from Cloudinary if exists
-        if (existingUpdate.file_public_id) {
-          cloudinary.uploader.destroy(
-            existingUpdate.file_public_id,
-            (deleteErr) => {
-              if (deleteErr) {
-                console.error("❌ Cloudinary Delete Error:", deleteErr);
-              } else {
-                console.log("✅ Old file deleted from Cloudinary");
-              }
-            }
-          );
+        if (existing.file_public_id) {
+          deleteFromCloudinary(existing.file_public_id);
         }
         file_url = req.file.path;
         file_public_id = req.file.filename;
         file_type = req.file.mimetype;
+        file_size = req.file.size;
       }
 
-      // Update in database
       db.query(
-        `
-        UPDATE recent_updates 
-        SET title = ?, 
-            description = ?, 
-            file_url = ?, 
-            file_public_id = ?, 
-            file_type = ?, 
-            category = ?, 
-            link = ?,
-            updated_at = NOW()
-        WHERE id = ?
-        `,
+        `UPDATE recent_updates 
+        SET title = ?, description = ?, file_url = ?, file_public_id = ?, 
+            file_type = ?, file_size = ?, category = ?, link = ?, updated_at = NOW()
+        WHERE id = ?`,
         [
           title,
-          description || existingUpdate.description,
+          description || existing.description,
           file_url,
           file_public_id,
           file_type,
-          category || existingUpdate.category,
-          link || existingUpdate.link || null,
+          file_size,
+          category || existing.category,
+          link || existing.link || null,
           id
         ],
         (updateErr) => {
           if (updateErr) {
-            console.error("❌ Update Error:", updateErr);
             return res.status(500).json({
               success: false,
               message: "Failed to update",
@@ -250,15 +264,10 @@ exports.updateUpdate = (req, res) => {
             });
           }
 
-          // Fetch updated update
           db.query(
             "SELECT * FROM recent_updates WHERE id = ?",
             [id],
             (fetchUpdatedErr, fetchUpdatedResult) => {
-              if (fetchUpdatedErr) {
-                console.error("❌ Fetch Updated Error:", fetchUpdatedErr);
-              }
-
               res.json({
                 success: true,
                 message: "Update updated successfully ✅",
@@ -276,28 +285,11 @@ exports.updateUpdate = (req, res) => {
 exports.deleteUpdate = (req, res) => {
   const { id } = req.params;
 
-  if (!id || isNaN(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid update ID"
-    });
-  }
-
-  // First get update to delete file from Cloudinary
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
     (fetchErr, fetchResult) => {
-      if (fetchErr) {
-        console.error("❌ Fetch Error:", fetchErr);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch update",
-          error: fetchErr.message
-        });
-      }
-
-      if (!fetchResult.length) {
+      if (fetchErr || !fetchResult.length) {
         return res.status(404).json({
           success: false,
           message: "Update not found"
@@ -306,31 +298,20 @@ exports.deleteUpdate = (req, res) => {
 
       const update = fetchResult[0];
 
-      // Delete file from Cloudinary if exists
+      // Delete file from Cloudinary
       if (update.file_public_id) {
-        cloudinary.uploader.destroy(
-          update.file_public_id,
-          (deleteErr) => {
-            if (deleteErr) {
-              console.error("❌ Cloudinary Delete Error:", deleteErr);
-            } else {
-              console.log("✅ File deleted from Cloudinary");
-            }
-          }
-        );
+        deleteFromCloudinary(update.file_public_id);
       }
 
-      // Delete from database
       db.query(
         "DELETE FROM recent_updates WHERE id = ?",
         [id],
-        (deleteDbErr) => {
-          if (deleteDbErr) {
-            console.error("❌ Delete Error:", deleteDbErr);
+        (deleteErr) => {
+          if (deleteErr) {
             return res.status(500).json({
               success: false,
-              message: "Failed to delete update",
-              error: deleteDbErr.message
+              message: "Failed to delete",
+              error: deleteErr.message
             });
           }
 
@@ -344,98 +325,48 @@ exports.deleteUpdate = (req, res) => {
   );
 };
 
-// ==================== GET BY CATEGORY ====================
-exports.getUpdatesByCategory = (req, res) => {
-  const { category } = req.params;
-  const { limit = 20 } = req.query;
-
-  if (!category) {
-    return res.status(400).json({
-      success: false,
-      message: "Category is required"
-    });
-  }
+// ==================== TOGGLE NEW STATUS ====================
+exports.toggleNewStatus = (req, res) => {
+  const { id } = req.params;
 
   db.query(
-    "SELECT * FROM recent_updates WHERE category = ? ORDER BY created_at DESC LIMIT ?",
-    [category, parseInt(limit)],
-    (err, result) => {
+    "UPDATE recent_updates SET is_new = NOT is_new WHERE id = ?",
+    [id],
+    (err) => {
       if (err) {
-        console.error("❌ Database Error:", err);
         return res.status(500).json({
           success: false,
-          message: "Failed to fetch updates",
+          message: "Failed to toggle status",
           error: err.message
         });
       }
 
       res.json({
         success: true,
-        data: result
+        message: "Status toggled successfully ✅"
       });
     }
   );
 };
 
-// ==================== SEARCH UPDATES ====================
-exports.searchUpdates = (req, res) => {
-  const { query } = req.params;
-  const { limit = 20 } = req.query;
+// ==================== HELPER FUNCTIONS ====================
 
-  if (!query) {
-    return res.status(400).json({
-      success: false,
-      message: "Search query is required"
-    });
-  }
+function getFileTypeDisplay(mimeType) {
+  if (!mimeType) return "file";
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType === "application/pdf") return "pdf";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.includes("word") || mimeType.includes("document")) return "document";
+  return "file";
+}
 
-  db.query(
-    `
-    SELECT * FROM recent_updates 
-    WHERE title LIKE ? OR description LIKE ? 
-    ORDER BY created_at DESC 
-    LIMIT ?
-    `,
-    [`%${query}%`, `%${query}%`, parseInt(limit)],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Search Error:", err);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to search updates",
-          error: err.message
-        });
-      }
-
-      res.json({
-        success: true,
-        data: result
-      });
-    }
-  );
-};
-
-// ==================== GET RECENT UPDATES ====================
-exports.getRecentUpdates = (req, res) => {
-  const { limit = 5 } = req.query;
-
-  db.query(
-    "SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT ?",
-    [parseInt(limit)],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Database Error:", err);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch recent updates",
-          error: err.message
-        });
-      }
-
-      res.json({
-        success: true,
-        data: result
-      });
-    }
-  );
-};
+function getFileIcon(mimeType) {
+  if (!mimeType) return "📄";
+  if (mimeType.startsWith("image/")) return "🖼️";
+  if (mimeType === "application/pdf") return "📄";
+  if (mimeType.startsWith("audio/")) return "🎵";
+  if (mimeType.startsWith("video/")) return "🎬";
+  if (mimeType.includes("word") || mimeType.includes("document")) return "📝";
+  return "📄";
+}
