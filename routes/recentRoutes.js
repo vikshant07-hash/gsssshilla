@@ -1,14 +1,14 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../config/db");
-// ✅ SAHI IMPORT PATH
 const { cloudinary } = require("../config/cloudinary");
 const { uploadRecent } = require("../config/cloudinary");
 
 // ============================================================
-// PUBLIC ROUTES
+// ==================== PUBLIC ROUTES ====================
 // ============================================================
 
+// GET - Public Updates
 router.get("/public", (req, res) => {
   const { limit = 20 } = req.query;
 
@@ -36,6 +36,7 @@ router.get("/public", (req, res) => {
   );
 });
 
+// GET - Single Update
 router.get("/:id", (req, res) => {
   const { id } = req.params;
 
@@ -52,9 +53,10 @@ router.get("/:id", (req, res) => {
 });
 
 // ============================================================
-// ADMIN ROUTES
+// ==================== ADMIN ROUTES ====================
 // ============================================================
 
+// GET - All Updates
 router.get("/admin/all", (req, res) => {
   const { page = 1, limit = 10, search = "", category = "all", status = "all" } = req.query;
 
@@ -78,6 +80,7 @@ router.get("/admin/all", (req, res) => {
 
   db.query(`SELECT COUNT(*) as total FROM recent_updates WHERE ${whereClause}`, params, (countErr, countResult) => {
     if (countErr) {
+      console.error("❌ Count Error:", countErr);
       return res.status(500).json({ success: false, error: countErr.message });
     }
 
@@ -91,6 +94,7 @@ router.get("/admin/all", (req, res) => {
       [...params, parseInt(limit), offset],
       (err, results) => {
         if (err) {
+          console.error("❌ Query Error:", err);
           return res.status(500).json({ success: false, error: err.message });
         }
 
@@ -109,6 +113,7 @@ router.get("/admin/all", (req, res) => {
   });
 });
 
+// GET - Admin Stats
 router.get("/admin/stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as total FROM recent_updates",
@@ -124,6 +129,7 @@ router.get("/admin/stats", (req, res) => {
   Object.entries(queries).forEach(([key, query]) => {
     db.query(query, (err, result) => {
       if (err) {
+        console.error(`❌ Stats Error (${key}):`, err);
         results[key] = { error: err.message };
       } else {
         results[key] = result;
@@ -137,7 +143,10 @@ router.get("/admin/stats", (req, res) => {
   });
 });
 
-// POST - Add Update
+// ============================================================
+// ✅ POST - ADD UPDATE
+// ============================================================
+
 router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   const { title, description, category, link, isNew } = req.body;
 
@@ -172,6 +181,9 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
       }
 
       db.query("SELECT * FROM recent_updates WHERE id = ?", [result.insertId], (fetchErr, fetchResult) => {
+        if (fetchErr) {
+          console.error("❌ Fetch Error:", fetchErr);
+        }
         res.status(201).json({
           success: true,
           message: "✅ Update added successfully!",
@@ -182,7 +194,10 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// PUT - Update Update
+// ============================================================
+// ✅ PUT - UPDATE UPDATE
+// ============================================================
+
 router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   const { id } = req.params;
   const { title, description, category, link, isNew } = req.body;
@@ -232,6 +247,7 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
       ],
       (updateErr) => {
         if (updateErr) {
+          console.error("❌ Update Error:", updateErr);
           return res.status(500).json({ success: false, error: updateErr.message });
         }
 
@@ -247,7 +263,10 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   });
 });
 
-// DELETE - Delete Update
+// ============================================================
+// ✅ DELETE - DELETE UPDATE
+// ============================================================
+
 router.delete("/admin/delete/:id", (req, res) => {
   const { id } = req.params;
   console.log("🗑️ DELETE ID:", id);
@@ -287,7 +306,10 @@ router.delete("/admin/delete/:id", (req, res) => {
   });
 });
 
-// DELETE - Bulk Delete
+// ============================================================
+// ✅ DELETE - BULK DELETE
+// ============================================================
+
 router.delete("/admin/bulk-delete", (req, res) => {
   const { ids } = req.body;
 
@@ -299,6 +321,7 @@ router.delete("/admin/bulk-delete", (req, res) => {
   
   db.query(`SELECT * FROM recent_updates WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
     if (fetchErr) {
+      console.error("❌ Fetch Error:", fetchErr);
       return res.status(500).json({ success: false, error: fetchErr.message });
     }
 
@@ -311,6 +334,7 @@ router.delete("/admin/bulk-delete", (req, res) => {
 
     db.query(`DELETE FROM recent_updates WHERE id IN (${placeholders})`, ids, (deleteErr) => {
       if (deleteErr) {
+        console.error("❌ Delete Error:", deleteErr);
         return res.status(500).json({ success: false, error: deleteErr.message });
       }
       res.json({ success: true, message: `${ids.length} updates deleted successfully ✅` });
@@ -318,7 +342,10 @@ router.delete("/admin/bulk-delete", (req, res) => {
   });
 });
 
-// PATCH - Toggle New Status
+// ============================================================
+// ✅ PATCH - TOGGLE NEW STATUS
+// ============================================================
+
 router.patch("/admin/toggle-new/:id", (req, res) => {
   const { id } = req.params;
 
