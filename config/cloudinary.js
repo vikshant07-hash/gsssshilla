@@ -12,6 +12,8 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+console.log("☁️ Cloudinary configured for:", process.env.CLOUDINARY_CLOUD_NAME);
+
 // ============================================================
 // STORAGE FOR SLIDER IMAGES
 // ============================================================
