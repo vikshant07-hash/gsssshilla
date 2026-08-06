@@ -45,13 +45,127 @@ app.get("/db-test", (req, res) => {
 });
 
 // ============================================================
-// ==================== ✅ RECENT ROUTES ====================
+// ==================== ✅ RECENT ROUTES - FIXED ====================
 // ============================================================
 
-// ✅ Load routes from file
-const recentRoutes = require("./routes/recentRoutes");
-app.use("/recent", recentRoutes);
-console.log("✅ Recent Routes loaded from file");
+// ✅ Method 1: Direct require with full path
+try {
+  const recentRoutes = require("./routes/recentRoutes");
+  app.use("/recent", recentRoutes);
+  console.log("✅ Recent Routes loaded successfully");
+} catch (error) {
+  console.error("❌ Failed to load recent routes:", error.message);
+  
+  // ✅ Method 2: Fallback - Direct routes in server.js
+  console.log("⚠️ Using fallback routes...");
+  
+  // GET - All Updates (Admin)
+  app.get("/recent/admin/all", (req, res) => {
+    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC", (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ success: true, data: results });
+    });
+  });
+  
+  // GET - Public Updates
+  app.get("/recent/public", (req, res) => {
+    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ success: true, data: results });
+    });
+  });
+  
+  // POST - Add Update
+  app.post("/recent/admin/add", uploadRecent.single("file"), (req, res) => {
+    const { title, description, category, link, isNew } = req.body;
+    if (!title) {
+      return res.status(400).json({ success: false, message: "Title is required" });
+    }
+    const file_url = req.file ? req.file.path : null;
+    const file_public_id = req.file ? req.file.filename : null;
+    const file_type = req.file ? req.file.mimetype : null;
+    const file_size = req.file ? req.file.size : null;
+    db.query(
+      `INSERT INTO recent_updates 
+      (title, description, file_url, file_public_id, file_type, file_size, category, link, is_new, created_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [title, description || "", file_url, file_public_id, file_type, file_size, category || "general", link || null, isNew !== undefined ? parseInt(isNew) : 1],
+      (err, result) => {
+        if (err) {
+          console.error("❌ DB Error:", err);
+          return res.status(500).json({ success: false, error: err.message });
+        }
+        db.query("SELECT * FROM recent_updates WHERE id = ?", [result.insertId], (fetchErr, fetchResult) => {
+          res.status(201).json({
+            success: true,
+            message: "✅ Update added successfully!",
+            data: fetchResult ? fetchResult[0] : { id: result.insertId }
+          });
+        });
+      }
+    );
+  });
+  
+  // DELETE - Delete Update
+  app.delete("/recent/admin/delete/:id", (req, res) => {
+    const { id } = req.params;
+    console.log("🗑️ DELETE ID:", id);
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ success: false, message: "Invalid ID" });
+    }
+    db.query("SELECT * FROM recent_updates WHERE id = ?", [id], (fetchErr, fetchResult) => {
+      if (fetchErr) {
+        return res.status(500).json({ success: false, message: "Database error", error: fetchErr.message });
+      }
+      if (!fetchResult || fetchResult.length === 0) {
+        return res.status(404).json({ success: false, message: "Update not found with ID: " + id });
+      }
+      const update = fetchResult[0];
+      if (update.file_public_id) {
+        cloudinary.uploader.destroy(update.file_public_id)
+          .then(result => console.log("✅ Cloudinary deleted:", result))
+          .catch(err => console.error("❌ Cloudinary error:", err));
+      }
+      db.query("DELETE FROM recent_updates WHERE id = ?", [id], (deleteErr) => {
+        if (deleteErr) {
+          return res.status(500).json({ success: false, message: "Failed to delete", error: deleteErr.message });
+        }
+        console.log("✅ Deleted ID:", id);
+        res.json({ success: true, message: "✅ Update deleted successfully!" });
+      });
+    });
+  });
+  
+  // DELETE - Bulk Delete
+  app.delete("/recent/admin/bulk-delete", (req, res) => {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: "No IDs provided" });
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    db.query(`SELECT * FROM recent_updates WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
+      if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
+      fetchResults.forEach(update => {
+        if (update.file_public_id) {
+          cloudinary.uploader.destroy(update.file_public_id)
+            .catch(err => console.error("Cloudinary error:", err));
+        }
+      });
+      db.query(`DELETE FROM recent_updates WHERE id IN (${placeholders})`, ids, (deleteErr) => {
+        if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
+        res.json({ success: true, message: `${ids.length} updates deleted successfully ✅` });
+      });
+    });
+  });
+  
+  console.log("✅ Fallback routes registered");
+}
 
 // ============================================================
 // ==================== 404 & ERROR ====================
@@ -81,7 +195,5 @@ app.listen(PORT, () => {
   console.log("  GET  /recent/admin/all");
   console.log("  POST /recent/admin/add");
   console.log("  DELETE /recent/admin/delete/:id");
-  console.log("  DELETE /recent/admin/bulk-delete");
-  console.log("  GET  /recent/admin/stats");
   console.log("=".repeat(50));
 });
