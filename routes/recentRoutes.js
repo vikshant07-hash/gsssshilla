@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../config/db");
+const cloudinary = require("../config/cloudinary");
 const { uploadRecent } = require("../config/cloudinary");
 
 // ============================================================
@@ -226,17 +227,19 @@ router.post("/admin/add", uploadRecent.single("file"), (req, res) => {
   const file_url = req.file ? req.file.path : null;
   const file_public_id = req.file ? req.file.filename : null;
   const file_type = req.file ? req.file.mimetype : null;
+  const file_size = req.file ? req.file.size : null;
 
   db.query(
     `INSERT INTO recent_updates 
-    (title, description, file_url, file_public_id, file_type, category, link, is_new, created_at) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    (title, description, file_url, file_public_id, file_type, file_size, category, link, is_new, created_at) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
     [
       title,
       description || "",
       file_url,
       file_public_id,
       file_type,
+      file_size,
       category || "general",
       link || null,
       isNew !== undefined ? parseInt(isNew) : 1
@@ -293,6 +296,7 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
       let file_url = existing.file_url;
       let file_public_id = existing.file_public_id;
       let file_type = existing.file_type;
+      let file_size = existing.file_size;
 
       if (req.file) {
         if (existing.file_public_id) {
@@ -302,12 +306,13 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
         file_url = req.file.path;
         file_public_id = req.file.filename;
         file_type = req.file.mimetype;
+        file_size = req.file.size;
       }
 
       db.query(
         `UPDATE recent_updates 
         SET title = ?, description = ?, file_url = ?, file_public_id = ?, 
-            file_type = ?, category = ?, link = ?, is_new = ?, updated_at = NOW()
+            file_type = ?, file_size = ?, category = ?, link = ?, is_new = ?, updated_at = NOW()
         WHERE id = ?`,
         [
           title,
@@ -315,6 +320,7 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
           file_url,
           file_public_id,
           file_type,
+          file_size,
           category || existing.category,
           link || existing.link || null,
           isNew !== undefined ? parseInt(isNew) : existing.is_new,
@@ -347,26 +353,48 @@ router.put("/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// DELETE - Delete Update
+// ============================================================
+// ✅ DELETE - Delete Update (FIXED)
+// ============================================================
+
 router.delete("/admin/delete/:id", (req, res) => {
   const { id } = req.params;
+  console.log("🗑️ DELETE request for ID:", id);
+
+  if (!id || isNaN(id)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid ID provided"
+    });
+  }
 
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
     (fetchErr, fetchResult) => {
-      if (fetchErr || !fetchResult.length) {
+      if (fetchErr) {
+        console.error("❌ Fetch Error:", fetchErr);
+        return res.status(500).json({
+          success: false,
+          message: "Database error",
+          error: fetchErr.message
+        });
+      }
+
+      if (!fetchResult || fetchResult.length === 0) {
         return res.status(404).json({
           success: false,
-          message: "Update not found"
+          message: "Update not found with ID: " + id
         });
       }
 
       const update = fetchResult[0];
+      console.log("📦 Found update:", update.title);
 
       if (update.file_public_id) {
         cloudinary.uploader.destroy(update.file_public_id)
-          .catch(err => console.error("Cloudinary delete error:", err));
+          .then(result => console.log("✅ Cloudinary deleted:", result))
+          .catch(err => console.error("❌ Cloudinary error:", err));
       }
 
       db.query(
@@ -382,37 +410,13 @@ router.delete("/admin/delete/:id", (req, res) => {
             });
           }
 
+          console.log("✅ Deleted ID:", id);
           res.json({
             success: true,
             message: "Update deleted successfully ✅"
           });
         }
       );
-    }
-  );
-});
-
-// PATCH - Toggle New Status
-router.patch("/admin/toggle-new/:id", (req, res) => {
-  const { id } = req.params;
-
-  db.query(
-    "UPDATE recent_updates SET is_new = NOT is_new, updated_at = NOW() WHERE id = ?",
-    [id],
-    (err) => {
-      if (err) {
-        console.error("❌ Update Error:", err);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to toggle status",
-          error: err.message
-        });
-      }
-
-      res.json({
-        success: true,
-        message: "Status toggled successfully ✅"
-      });
     }
   );
 });
@@ -469,6 +473,31 @@ router.delete("/admin/bulk-delete", (req, res) => {
           });
         }
       );
+    }
+  );
+});
+
+// PATCH - Toggle New Status
+router.patch("/admin/toggle-new/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    "UPDATE recent_updates SET is_new = NOT is_new, updated_at = NOW() WHERE id = ?",
+    [id],
+    (err) => {
+      if (err) {
+        console.error("❌ Update Error:", err);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to toggle status",
+          error: err.message
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Status toggled successfully ✅"
+      });
     }
   );
 });
