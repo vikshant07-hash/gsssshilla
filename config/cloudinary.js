@@ -14,10 +14,6 @@ const recentStorage = new CloudinaryStorage({
     folder: "school/recent_updates",
     resource_type: "auto",
     allowed_formats: ["jpg", "jpeg", "png", "gif", "webp", "pdf", "doc", "docx", "mp3", "wav", "mp4", "avi"],
-    transformation: [
-      { quality: "auto" },
-      { fetch_format: "auto" }
-    ],
     public_id: (req, file) => {
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
       const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-");
