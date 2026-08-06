@@ -65,59 +65,20 @@ app.get("/db-test", (req, res) => {
 });
 
 // ============================================================
-// ==================== ✅ RECENT ROUTES - FIXED ====================
+// ==================== ✅ RECENT ROUTES ====================
 // ============================================================
 
-// ✅ Import recent routes
-let recentRoutes = null;
+// ✅ Load routes from file
 try {
-  recentRoutes = require("./routes/recentRoutes");
-  console.log("✅ Recent routes file loaded successfully");
-} catch (error) {
-  console.error("❌ Failed to load recent routes:", error.message);
-}
-
-// ✅ Register recent routes
-if (recentRoutes) {
+  const recentRoutes = require("./routes/recentRoutes");
   app.use("/recent", recentRoutes);
-  console.log("✅ Recent routes registered at /recent");
-} else {
-  console.log("⚠️ Creating fallback routes...");
-  
-  // ✅ FALLBACK: Direct routes if file not found
-  const router = express.Router();
-  
-  router.get("/public", (req, res) => {
-    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, data: results });
-    });
-  });
-  
-  router.get("/admin/all", (req, res) => {
-    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC", (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, data: results });
-    });
-  });
-  
-  // ✅ DELETE route in fallback
-  router.delete("/admin/delete/:id", (req, res) => {
-    const { id } = req.params;
-    console.log("🗑️ Fallback DELETE for ID:", id);
-    
-    db.query("DELETE FROM recent_updates WHERE id = ?", [id], (err) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, message: "Deleted successfully ✅" });
-    });
-  });
-  
-  app.use("/recent", router);
-  console.log("✅ Fallback recent routes registered");
+  console.log("✅ Recent Routes loaded from file");
+} catch (error) {
+  console.error("❌ Error loading recent routes:", error.message);
 }
 
 // ============================================================
-// ==================== FALLBACK DIRECT ROUTES ====================
+// ==================== FALLBACK ROUTES ====================
 // ============================================================
 
 // ✅ GET - All Updates (Public)
@@ -141,10 +102,7 @@ app.post("/recent-admin-add", uploadRecent.single("file"), (req, res) => {
   const { title, description, category, link, isNew } = req.body;
 
   if (!title) {
-    return res.status(400).json({
-      success: false,
-      message: "Title is required"
-    });
+    return res.status(400).json({ success: false, message: "Title is required" });
   }
 
   const file_url = req.file ? req.file.path : null;
@@ -168,7 +126,10 @@ app.post("/recent-admin-add", uploadRecent.single("file"), (req, res) => {
       isNew !== undefined ? parseInt(isNew) : 1
     ],
     (err, result) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
 
       db.query(
         "SELECT * FROM recent_updates WHERE id = ?",
@@ -185,16 +146,24 @@ app.post("/recent-admin-add", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// ✅ DELETE - Delete Update (FALLBACK)
+// ✅ DELETE - Delete Update (FIXED)
 app.delete("/recent-admin-delete/:id", (req, res) => {
   const { id } = req.params;
   console.log("🗑️ DELETE request for ID:", id);
+
+  if (!id || isNaN(id)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid ID provided"
+    });
+  }
 
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
     (fetchErr, fetchResult) => {
       if (fetchErr) {
+        console.error("❌ Fetch Error:", fetchErr);
         return res.status(500).json({
           success: false,
           message: "Database error",
@@ -205,15 +174,17 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
       if (!fetchResult || fetchResult.length === 0) {
         return res.status(404).json({
           success: false,
-          message: "Update not found"
+          message: "Update not found with ID: " + id
         });
       }
 
       const update = fetchResult[0];
+      console.log("📦 Found update:", update.title);
 
       if (update.file_public_id) {
         cloudinary.uploader.destroy(update.file_public_id)
-          .catch(err => console.error("Cloudinary delete error:", err));
+          .then(result => console.log("✅ Cloudinary deleted:", result))
+          .catch(err => console.error("❌ Cloudinary error:", err));
       }
 
       db.query(
@@ -221,6 +192,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
         [id],
         (deleteErr) => {
           if (deleteErr) {
+            console.error("❌ Delete Error:", deleteErr);
             return res.status(500).json({
               success: false,
               message: "Failed to delete",
@@ -228,6 +200,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
             });
           }
 
+          console.log("✅ Deleted ID:", id);
           res.json({
             success: true,
             message: "Update deleted successfully ✅"
@@ -260,7 +233,7 @@ app.delete("/recent-admin-bulk-delete", (req, res) => {
       fetchResults.forEach(update => {
         if (update.file_public_id) {
           cloudinary.uploader.destroy(update.file_public_id)
-            .catch(err => console.error("Cloudinary delete error:", err));
+            .catch(err => console.error("Cloudinary error:", err));
         }
       });
 
@@ -313,20 +286,7 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: "❌ Route not found",
-    path: req.originalUrl,
-    availableRoutes: [
-      "/",
-      "/test",
-      "/db-test",
-      "/recent/public",
-      "/recent/admin/all",
-      "/recent/admin/add",
-      "/recent/admin/update/:id",
-      "/recent/admin/delete/:id",
-      "/recent/admin/bulk-delete",
-      "/recent-admin-delete/:id (fallback)",
-      "/recent-admin-bulk-delete (fallback)"
-    ]
+    path: req.originalUrl
   });
 });
 
@@ -357,12 +317,11 @@ app.listen(PORT, () => {
   console.log("✅ Available Routes:");
   console.log("  GET  /");
   console.log("  GET  /test");
-  console.log("  GET  /recent/public");
-  console.log("  GET  /recent/admin/all");
-  console.log("  POST /recent/admin/add");
-  console.log("  PUT  /recent/admin/update/:id");
-  console.log("  DELETE /recent/admin/delete/:id");
-  console.log("  DELETE /recent/admin/bulk-delete");
-  console.log("  DELETE /recent-admin-delete/:id (fallback)");
+  console.log("  GET  /recent-public");
+  console.log("  GET  /recent-admin-all");
+  console.log("  POST /recent-admin-add");
+  console.log("  DELETE /recent-admin-delete/:id");
+  console.log("  DELETE /recent-admin-bulk-delete");
+  console.log("  GET  /recent-admin-stats");
   console.log("=".repeat(50));
 });
