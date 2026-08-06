@@ -68,19 +68,6 @@ app.get("/db-test", (req, res) => {
 // ==================== ✅ RECENT ROUTES ====================
 // ============================================================
 
-// ✅ Load routes from file
-try {
-  const recentRoutes = require("./routes/recentRoutes");
-  app.use("/recent", recentRoutes);
-  console.log("✅ Recent Routes loaded from file");
-} catch (error) {
-  console.error("❌ Error loading recent routes:", error.message);
-}
-
-// ============================================================
-// ==================== FALLBACK ROUTES ====================
-// ============================================================
-
 // ✅ GET - All Updates (Public)
 app.get("/recent-public", (req, res) => {
   db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
