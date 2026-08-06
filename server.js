@@ -10,6 +10,15 @@ const app = express();
 app.set("trust proxy", 1);
 
 // ============================================================
+// ENSURE UPLOAD DIRECTORIES EXIST (for local fallback)
+// ============================================================
+const UPLOAD_DIR = path.join(__dirname, "uploads");
+const THUMBNAIL_DIR = path.join(UPLOAD_DIR, "thumbnails");
+
+fs.ensureDirSync(UPLOAD_DIR);
+fs.ensureDirSync(THUMBNAIL_DIR);
+
+// ============================================================
 // CORS
 // ============================================================
 app.use(cors({
@@ -25,70 +34,7 @@ app.options('*', cors());
 // ============================================================
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// ============================================================
-// CREATE TABLES
-// ============================================================
-function createTables() {
-  const queries = [
-    `CREATE TABLE IF NOT EXISTS slider_images (
-      id INT PRIMARY KEY AUTO_INCREMENT,
-      filename VARCHAR(255) NOT NULL UNIQUE,
-      file_path VARCHAR(500) NOT NULL,
-      public_id VARCHAR(255),
-      file_size INT,
-      mime_type VARCHAR(100),
-      title VARCHAR(255) DEFAULT '',
-      alt_text VARCHAR(255) DEFAULT '',
-      \`order\` INT DEFAULT 0,
-      is_active BOOLEAN DEFAULT 1,
-      views INT DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      INDEX idx_order (\`order\`),
-      INDEX idx_active (is_active)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-
-    `CREATE TABLE IF NOT EXISTS recent_updates (
-      id INT PRIMARY KEY AUTO_INCREMENT,
-      title VARCHAR(255) NOT NULL,
-      description TEXT,
-      file_url VARCHAR(500),
-      public_id VARCHAR(255),
-      file_type VARCHAR(100),
-      file_size INT,
-      category VARCHAR(50) DEFAULT 'general',
-      link VARCHAR(500),
-      is_new BOOLEAN DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      INDEX idx_created (created_at DESC),
-      INDEX idx_category (category),
-      INDEX idx_is_new (is_new)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-
-    `CREATE TABLE IF NOT EXISTS analytics (
-      id INT PRIMARY KEY AUTO_INCREMENT,
-      type VARCHAR(50) NOT NULL,
-      ip_address VARCHAR(45),
-      user_agent TEXT,
-      referrer VARCHAR(500),
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_type (type),
-      INDEX idx_timestamp (timestamp DESC),
-      INDEX idx_ip (ip_address)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
-  ];
-
-  queries.forEach((query) => {
-    db.query(query, (err) => {
-      if (err) console.error("❌ Table creation error:", err.message);
-    });
-  });
-}
-
-// Create tables on start
-createTables();
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ============================================================
 // ROOT & TEST
@@ -126,13 +72,13 @@ app.get("/images", (req, res) => {
         console.error("❌ DB Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
-      console.log("📸 Images fetched:", results.length);
-      res.json(results);
+      console.log("📸 Images fetched:", results ? results.length : 0);
+      res.json(results || []);
     }
   );
 });
 
-// GET - Public Slider Images
+// GET - Public Slider Images (for homepage)
 app.get("/images/public", (req, res) => {
   db.query(
     `SELECT filename, file_path, public_id, title, alt_text, \`order\`
@@ -144,7 +90,7 @@ app.get("/images/public", (req, res) => {
         console.error("❌ DB Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
-      res.json(results);
+      res.json(results || []);
     }
   );
 });
@@ -162,19 +108,22 @@ app.get("/images/stats", (req, res) => {
         console.error("❌ Stats Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
-      res.json({ success: true, data: results[0] });
+      res.json({ 
+        success: true, 
+        data: results[0] || { total: 0, active: 0, inactive: 0 }
+      });
     }
   );
 });
 
 // ============================================================
-// UPLOAD - Slider Images to Cloudinary
+// POST - Upload Slider Images to Cloudinary
 // ============================================================
 app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
+  console.log("📸 Upload request received");
+  console.log("📸 Files:", req.files ? req.files.length : 0);
+  
   try {
-    console.log("📸 Upload request received");
-    console.log("📸 Files:", req.files ? req.files.length : 0);
-    
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ 
         success: false, 
@@ -243,9 +192,12 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
           file: file.originalname || file.filename, 
           error: err.message 
         });
+        // Try to delete from Cloudinary if DB insert fails
         try {
           await cloudinary.uploader.destroy(file.filename);
-        } catch (e) {}
+        } catch (e) {
+          console.warn("⚠️ Cloudinary cleanup warning:", e.message);
+        }
       }
     }
 
@@ -266,7 +218,7 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
 });
 
 // ============================================================
-// DELETE - Slider Image from Cloudinary
+// DELETE - Delete Slider Image from Cloudinary & Database
 // ============================================================
 app.delete("/delete", (req, res) => {
   const { filename } = req.body;
@@ -280,18 +232,24 @@ app.delete("/delete", (req, res) => {
     });
   }
 
-  // First get image info from DB
+  // Get image info from DB
   db.query(
     "SELECT * FROM slider_images WHERE filename = ? OR public_id = ?",
     [filename, filename],
     (err, results) => {
       if (err) {
         console.error("❌ DB Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
+        return res.status(500).json({ 
+          success: false, 
+          error: err.message 
+        });
       }
 
-      if (results.length === 0) {
-        return res.status(404).json({ success: false, message: "Image not found" });
+      if (!results || results.length === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: "Image not found" 
+        });
       }
 
       const image = results[0];
@@ -313,7 +271,10 @@ app.delete("/delete", (req, res) => {
         (deleteErr) => {
           if (deleteErr) {
             console.error("❌ Delete DB Error:", deleteErr);
-            return res.status(500).json({ success: false, error: deleteErr.message });
+            return res.status(500).json({ 
+              success: false, 
+              error: deleteErr.message 
+            });
           }
 
           // Reorder remaining images
@@ -336,40 +297,16 @@ app.delete("/delete", (req, res) => {
 });
 
 // ============================================================
-// UPDATE - Slider Image
-// ============================================================
-app.put("/images/update/:id", (req, res) => {
-  const { id } = req.params;
-  const { title, alt_text, is_active } = req.body;
-
-  db.query(
-    `UPDATE slider_images 
-     SET title = ?, alt_text = ?, is_active = ?, updated_at = NOW()
-     WHERE id = ?`,
-    [title || '', alt_text || '', is_active !== undefined ? is_active : 1, id],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Update Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ success: false, message: "Image not found" });
-      }
-
-      res.json({ success: true, message: "Image updated successfully" });
-    }
-  );
-});
-
-// ============================================================
-// REORDER - Slider Images
+// PUT - Update Slider Image Order
 // ============================================================
 app.put("/images/reorder", (req, res) => {
   const { orders } = req.body;
 
   if (!orders || !Array.isArray(orders)) {
-    return res.status(400).json({ success: false, message: "Orders array is required" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Orders array is required" 
+    });
   }
 
   const queries = orders.map(({ id, order }) => {
@@ -387,12 +324,54 @@ app.put("/images/reorder", (req, res) => {
 
   Promise.all(queries)
     .then(() => {
-      res.json({ success: true, message: "Order updated successfully" });
+      res.json({ 
+        success: true, 
+        message: "Order updated successfully" 
+      });
     })
     .catch(error => {
       console.error("❌ Reorder Error:", error);
-      res.status(500).json({ success: false, error: error.message });
+      res.status(500).json({ 
+        success: false, 
+        error: error.message 
+      });
     });
+});
+
+// ============================================================
+// PUT - Update Slider Image (title, alt, active)
+// ============================================================
+app.put("/images/update/:id", (req, res) => {
+  const { id } = req.params;
+  const { title, alt_text, is_active } = req.body;
+
+  db.query(
+    `UPDATE slider_images 
+     SET title = ?, alt_text = ?, is_active = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [title || '', alt_text || '', is_active !== undefined ? is_active : 1, id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Update Error:", err);
+        return res.status(500).json({ 
+          success: false, 
+          error: err.message 
+        });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: "Image not found" 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: "Image updated successfully" 
+      });
+    }
+  );
 });
 
 // ============================================================
@@ -411,8 +390,8 @@ app.get("/recent/admin/all", (req, res) => {
         console.error("❌ DB Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
-      console.log("📋 Recent updates fetched:", results.length);
-      res.json({ success: true, data: results });
+      console.log("📋 Recent updates fetched:", results ? results.length : 0);
+      res.json({ success: true, data: results || [] });
     }
   );
 });
@@ -428,7 +407,7 @@ app.get("/recent/public", (req, res) => {
         console.error("❌ DB Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
-      res.json({ success: true, data: results });
+      res.json({ success: true, data: results || [] });
     }
   );
 });
@@ -448,7 +427,7 @@ app.get("/recent/:id", (req, res) => {
         console.error("❌ DB Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
-      if (!results.length) {
+      if (!results || results.length === 0) {
         return res.status(404).json({ success: false, message: "Update not found" });
       }
       res.json({ success: true, data: results[0] });
@@ -457,12 +436,12 @@ app.get("/recent/:id", (req, res) => {
 });
 
 // ============================================================
-// POST - Add Recent Update
+// POST - Add Recent Update with Cloudinary
 // ============================================================
 app.post("/recent/admin/add", uploadRecent.single("file"), (req, res) => {
   console.log("📋 Add Update Request");
   console.log("📋 Body:", req.body);
-  console.log("📋 File:", req.file);
+  console.log("📋 File:", req.file ? req.file.filename : "No file");
 
   const { title, description, category, link, isNew } = req.body;
 
@@ -516,7 +495,7 @@ app.post("/recent/admin/add", uploadRecent.single("file"), (req, res) => {
 });
 
 // ============================================================
-// PUT - Update Recent Update
+// PUT - Update Recent Update with Cloudinary
 // ============================================================
 app.put("/recent/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   const { id } = req.params;
@@ -529,7 +508,7 @@ app.put("/recent/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   }
 
   db.query("SELECT * FROM recent_updates WHERE id = ?", [id], (fetchErr, fetchResult) => {
-    if (fetchErr || !fetchResult.length) {
+    if (fetchErr || !fetchResult || fetchResult.length === 0) {
       return res.status(404).json({ success: false, message: "Update not found" });
     }
 
@@ -540,6 +519,7 @@ app.put("/recent/admin/update/:id", uploadRecent.single("file"), (req, res) => {
     let file_size = existing.file_size;
 
     if (req.file) {
+      // Delete old file from Cloudinary
       if (existing.public_id) {
         cloudinary.uploader.destroy(existing.public_id)
           .then(result => console.log("✅ Old Cloudinary file deleted:", result))
@@ -594,12 +574,11 @@ app.put("/recent/admin/update/:id", uploadRecent.single("file"), (req, res) => {
 });
 
 // ============================================================
-// DELETE - Recent Update
+// DELETE - Delete Recent Update
 // ============================================================
 app.delete("/recent/admin/delete/:id", (req, res) => {
   const { id } = req.params;
-
-  console.log("🗑️ Delete Recent Update ID:", id);
+  console.log("🗑️ DELETE ID:", id);
 
   if (!id || isNaN(id)) {
     return res.status(400).json({ success: false, message: "Invalid ID" });
@@ -608,7 +587,7 @@ app.delete("/recent/admin/delete/:id", (req, res) => {
   db.query("SELECT * FROM recent_updates WHERE id = ?", [id], (fetchErr, fetchResult) => {
     if (fetchErr) {
       console.error("❌ Fetch Error:", fetchErr);
-      return res.status(500).json({ success: false, message: "Database error" });
+      return res.status(500).json({ success: false, message: "Database error", error: fetchErr.message });
     }
 
     if (!fetchResult || fetchResult.length === 0) {
@@ -618,6 +597,7 @@ app.delete("/recent/admin/delete/:id", (req, res) => {
     const update = fetchResult[0];
     console.log("📦 Found:", update.title);
 
+    // Delete from Cloudinary
     if (update.public_id) {
       cloudinary.uploader.destroy(update.public_id)
         .then(result => console.log("✅ Cloudinary deleted:", result))
@@ -627,7 +607,7 @@ app.delete("/recent/admin/delete/:id", (req, res) => {
     db.query("DELETE FROM recent_updates WHERE id = ?", [id], (deleteErr) => {
       if (deleteErr) {
         console.error("❌ Delete Error:", deleteErr);
-        return res.status(500).json({ success: false, message: "Failed to delete" });
+        return res.status(500).json({ success: false, message: "Failed to delete", error: deleteErr.message });
       }
 
       console.log("✅ Deleted ID:", id);
@@ -705,6 +685,7 @@ app.get("/recent/admin/stats", (req, res) => {
 // ANALYTICS ROUTES
 // ============================================================
 
+// Track visitor
 app.get("/analytics/track", (req, res) => {
   const ip = req.ip || req.connection.remoteAddress;
   const userAgent = req.headers['user-agent'] || '';
@@ -723,6 +704,7 @@ app.get("/analytics/track", (req, res) => {
   );
 });
 
+// Get analytics stats
 app.get("/analytics/stats", (req, res) => {
   db.query(
     `SELECT 
