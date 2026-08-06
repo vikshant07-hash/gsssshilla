@@ -28,55 +28,6 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ============================================================
-// DATABASE MIGRATION - AUTO ADD COLUMNS
-// ============================================================
-function runMigration() {
-  console.log("🔄 Checking database schema...");
-  
-  // Check if public_id column exists in slider_images
-  db.query("SHOW COLUMNS FROM slider_images LIKE 'public_id'", (err, results) => {
-    if (err) {
-      console.error("❌ Error checking columns:", err.message);
-      return;
-    }
-    
-    if (!results || results.length === 0) {
-      console.log("📌 Adding public_id column to slider_images...");
-      db.query("ALTER TABLE slider_images ADD COLUMN public_id VARCHAR(255) AFTER file_path", (err) => {
-        if (err) {
-          console.error("❌ Error adding public_id to slider_images:", err.message);
-        } else {
-          console.log("✅ public_id column added to slider_images");
-        }
-      });
-    } else {
-      console.log("✅ public_id column already exists in slider_images");
-    }
-  });
-
-  // Check if public_id column exists in recent_updates
-  db.query("SHOW COLUMNS FROM recent_updates LIKE 'public_id'", (err, results) => {
-    if (err) {
-      console.error("❌ Error checking columns:", err.message);
-      return;
-    }
-    
-    if (!results || results.length === 0) {
-      console.log("📌 Adding public_id column to recent_updates...");
-      db.query("ALTER TABLE recent_updates ADD COLUMN public_id VARCHAR(255) AFTER file_url", (err) => {
-        if (err) {
-          console.error("❌ Error adding public_id to recent_updates:", err.message);
-        } else {
-          console.log("✅ public_id column added to recent_updates");
-        }
-      });
-    } else {
-      console.log("✅ public_id column already exists in recent_updates");
-    }
-  });
-}
-
-// ============================================================
 // CREATE TABLES (if not exist)
 // ============================================================
 function createTables() {
@@ -141,17 +92,53 @@ function createTables() {
 }
 
 // ============================================================
-// DATABASE CONNECTION
+// DATABASE MIGRATION - AUTO ADD COLUMNS
 // ============================================================
-db.connect((err) => {
-  if (err) {
-    console.error("❌ Database connection failed:", err.message);
-    process.exit(1);
-  } else {
-    console.log("✅ Database connected successfully");
-    createTables();
-  }
-});
+function runMigration() {
+  console.log("🔄 Checking database schema...");
+  
+  // Check if public_id column exists in slider_images
+  db.query("SHOW COLUMNS FROM slider_images LIKE 'public_id'", (err, results) => {
+    if (err) {
+      console.error("❌ Error checking columns:", err.message);
+      return;
+    }
+    
+    if (!results || results.length === 0) {
+      console.log("📌 Adding public_id column to slider_images...");
+      db.query("ALTER TABLE slider_images ADD COLUMN public_id VARCHAR(255) AFTER file_path", (err) => {
+        if (err) {
+          console.error("❌ Error adding public_id to slider_images:", err.message);
+        } else {
+          console.log("✅ public_id column added to slider_images");
+        }
+      });
+    } else {
+      console.log("✅ public_id column already exists in slider_images");
+    }
+  });
+
+  // Check if public_id column exists in recent_updates
+  db.query("SHOW COLUMNS FROM recent_updates LIKE 'public_id'", (err, results) => {
+    if (err) {
+      console.error("❌ Error checking columns:", err.message);
+      return;
+    }
+    
+    if (!results || results.length === 0) {
+      console.log("📌 Adding public_id column to recent_updates...");
+      db.query("ALTER TABLE recent_updates ADD COLUMN public_id VARCHAR(255) AFTER file_url", (err) => {
+        if (err) {
+          console.error("❌ Error adding public_id to recent_updates:", err.message);
+        } else {
+          console.log("✅ public_id column added to recent_updates");
+        }
+      });
+    } else {
+      console.log("✅ public_id column already exists in recent_updates");
+    }
+  });
+}
 
 // ============================================================
 // ROOT & TEST
