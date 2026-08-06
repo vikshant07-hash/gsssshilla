@@ -8,7 +8,6 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// ==================== RECENT UPDATES STORAGE ====================
 const recentStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
@@ -27,12 +26,9 @@ const recentStorage = new CloudinaryStorage({
   }
 });
 
-// ==================== MULTER INSTANCE ====================
 const uploadRecent = multer({
   storage: recentStorage,
-  limits: {
-    fileSize: 50 * 1024 * 1024 // 50MB
-  },
+  limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
       "image/jpeg", "image/png", "image/gif", "image/webp",
@@ -50,7 +46,4 @@ const uploadRecent = multer({
   }
 });
 
-module.exports = {
-  cloudinary,
-  uploadRecent
-};
+module.exports = { cloudinary, uploadRecent };
