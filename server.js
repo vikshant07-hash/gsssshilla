@@ -4,30 +4,27 @@ require("dotenv").config();
 const path = require("path");
 const fs = require("fs-extra");
 const { cloudinary, uploadSlider, uploadRecent } = require("./config/cloudinary");
-const mysql = require("mysql2");
+const { db } = require("./config/db");
 
 const app = express();
 app.set("trust proxy", 1);
 
 // ============================================================
-// DATABASE CONNECTION
+// CORS
 // ============================================================
-const db = mysql.createConnection({
-  host: process.env.DB_HOST || "localhost",
-  user: process.env.DB_USER || "root",
-  password: process.env.DB_PASSWORD || "",
-  database: process.env.DB_NAME || "school_db",
-  port: process.env.DB_PORT || 3306
-});
+app.use(cors({
+  origin: "*",
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+}));
+app.options('*', cors());
 
-db.connect((err) => {
-  if (err) {
-    console.error("❌ Database connection failed:", err.message);
-  } else {
-    console.log("✅ Database connected successfully");
-    createTables();
-  }
-});
+// ============================================================
+// MIDDLEWARE
+// ============================================================
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ============================================================
 // CREATE TABLES
@@ -90,22 +87,8 @@ function createTables() {
   });
 }
 
-// ============================================================
-// CORS
-// ============================================================
-app.use(cors({
-  origin: "*",
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
-}));
-app.options('*', cors());
-
-// ============================================================
-// MIDDLEWARE
-// ============================================================
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Create tables on start
+createTables();
 
 // ============================================================
 // ROOT & TEST
@@ -131,6 +114,7 @@ app.get("/test", (req, res) => {
 // SLIDER IMAGE ROUTES
 // ============================================================
 
+// GET - All Slider Images
 app.get("/images", (req, res) => {
   db.query(
     `SELECT *, 
@@ -147,6 +131,7 @@ app.get("/images", (req, res) => {
   );
 });
 
+// GET - Public Slider Images
 app.get("/images/public", (req, res) => {
   db.query(
     `SELECT filename, file_path, public_id, title, alt_text, \`order\`
@@ -163,6 +148,7 @@ app.get("/images/public", (req, res) => {
   );
 });
 
+// GET - Slider Image Stats
 app.get("/images/stats", (req, res) => {
   db.query(
     `SELECT 
@@ -181,10 +167,13 @@ app.get("/images/stats", (req, res) => {
 });
 
 // ============================================================
-// UPLOAD - Slider Images
+// UPLOAD - Slider Images to Cloudinary
 // ============================================================
 app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
   try {
+    console.log("📸 Upload request received");
+    console.log("📸 Files:", req.files ? req.files.length : 0);
+    
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ 
         success: false, 
@@ -209,6 +198,8 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
         const cloudinaryUrl = file.path;
         const publicId = file.filename;
         const { title, alt_text } = req.body;
+
+        console.log("📸 Saving to DB:", publicId);
 
         await new Promise((resolve, reject) => {
           db.query(
@@ -238,6 +229,7 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
         });
 
       } catch (err) {
+        console.error("❌ Error saving image:", err);
         errors.push({ 
           file: file.originalname || file.filename, 
           error: err.message 
@@ -269,6 +261,8 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
 // ============================================================
 app.delete("/delete", (req, res) => {
   const { filename } = req.body;
+
+  console.log("🗑️ Delete request for:", filename);
 
   if (!filename) {
     return res.status(400).json({ 
@@ -389,6 +383,7 @@ app.put("/images/reorder", (req, res) => {
 // RECENT UPDATES ROUTES
 // ============================================================
 
+// GET - All Updates (Admin)
 app.get("/recent/admin/all", (req, res) => {
   db.query(
     `SELECT *, 
@@ -405,6 +400,7 @@ app.get("/recent/admin/all", (req, res) => {
   );
 });
 
+// GET - Public Updates
 app.get("/recent/public", (req, res) => {
   db.query(
     `SELECT *, 
@@ -420,6 +416,7 @@ app.get("/recent/public", (req, res) => {
   );
 });
 
+// GET - Single Update
 app.get("/recent/:id", (req, res) => {
   const { id } = req.params;
 
@@ -442,8 +439,11 @@ app.get("/recent/:id", (req, res) => {
   );
 });
 
+// POST - Add Update
 app.post("/recent/admin/add", uploadRecent.single("file"), (req, res) => {
   const { title, description, category, link, isNew } = req.body;
+
+  console.log("📋 Adding update:", title);
 
   if (!title) {
     return res.status(400).json({ success: false, message: "Title is required" });
@@ -492,6 +492,7 @@ app.post("/recent/admin/add", uploadRecent.single("file"), (req, res) => {
   );
 });
 
+// PUT - Update Update
 app.put("/recent/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   const { id } = req.params;
   const { title, description, category, link, isNew } = req.body;
@@ -565,6 +566,7 @@ app.put("/recent/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   });
 });
 
+// DELETE - Delete Update
 app.delete("/recent/admin/delete/:id", (req, res) => {
   const { id } = req.params;
 
@@ -601,6 +603,7 @@ app.delete("/recent/admin/delete/:id", (req, res) => {
   });
 });
 
+// DELETE - Bulk Delete
 app.delete("/recent/admin/bulk-delete", (req, res) => {
   const { ids } = req.body;
 
@@ -633,6 +636,7 @@ app.delete("/recent/admin/bulk-delete", (req, res) => {
   });
 });
 
+// GET - Admin Stats
 app.get("/recent/admin/stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as total FROM recent_updates",
