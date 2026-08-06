@@ -65,50 +65,78 @@ app.get("/db-test", (req, res) => {
 });
 
 // ============================================================
-// ==================== ✅ RECENT ROUTES (FROM FILE) ====================
+// ==================== ✅ RECENT ROUTES - FIXED ====================
 // ============================================================
 
-// ✅ YEH IMPORTANT HAI - /recent route register karein
+// ✅ Import recent routes
+let recentRoutes = null;
 try {
-  const recentRoutes = require("./routes/recentRoutes");
-  app.use("/recent", recentRoutes);
-  console.log("✅ Recent Routes loaded successfully");
-  console.log("  📌 Available routes:");
-  console.log("     GET  /recent/public");
-  console.log("     GET  /recent/admin/all");
-  console.log("     POST /recent/admin/add");
-  console.log("     PUT  /recent/admin/update/:id");
-  console.log("     DELETE /recent/admin/delete/:id");
-  console.log("     DELETE /recent/admin/bulk-delete");
+  recentRoutes = require("./routes/recentRoutes");
+  console.log("✅ Recent routes file loaded successfully");
 } catch (error) {
-  console.error("❌ Error loading recent routes:", error.message);
+  console.error("❌ Failed to load recent routes:", error.message);
+}
+
+// ✅ Register recent routes
+if (recentRoutes) {
+  app.use("/recent", recentRoutes);
+  console.log("✅ Recent routes registered at /recent");
+} else {
+  console.log("⚠️ Creating fallback routes...");
+  
+  // ✅ FALLBACK: Direct routes if file not found
+  const router = express.Router();
+  
+  router.get("/public", (req, res) => {
+    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, data: results });
+    });
+  });
+  
+  router.get("/admin/all", (req, res) => {
+    db.query("SELECT * FROM recent_updates ORDER BY created_at DESC", (err, results) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, data: results });
+    });
+  });
+  
+  // ✅ DELETE route in fallback
+  router.delete("/admin/delete/:id", (req, res) => {
+    const { id } = req.params;
+    console.log("🗑️ Fallback DELETE for ID:", id);
+    
+    db.query("DELETE FROM recent_updates WHERE id = ?", [id], (err) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, message: "Deleted successfully ✅" });
+    });
+  });
+  
+  app.use("/recent", router);
+  console.log("✅ Fallback recent routes registered");
 }
 
 // ============================================================
 // ==================== FALLBACK DIRECT ROUTES ====================
 // ============================================================
 
-// ✅ GET - All Updates (Public) - Fallback
+// ✅ GET - All Updates (Public)
 app.get("/recent-public", (req, res) => {
   db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
-    if (err) {
-      return res.status(500).json({ success: false, error: err.message });
-    }
+    if (err) return res.status(500).json({ success: false, error: err.message });
     res.json({ success: true, data: results });
   });
 });
 
-// ✅ GET - All Updates (Admin) - Fallback
+// ✅ GET - All Updates (Admin)
 app.get("/recent-admin-all", (req, res) => {
   db.query("SELECT * FROM recent_updates ORDER BY created_at DESC", (err, results) => {
-    if (err) {
-      return res.status(500).json({ success: false, error: err.message });
-    }
+    if (err) return res.status(500).json({ success: false, error: err.message });
     res.json({ success: true, data: results });
   });
 });
 
-// ✅ POST - Add Update - Fallback
+// ✅ POST - Add Update
 app.post("/recent-admin-add", uploadRecent.single("file"), (req, res) => {
   const { title, description, category, link, isNew } = req.body;
 
@@ -140,14 +168,7 @@ app.post("/recent-admin-add", uploadRecent.single("file"), (req, res) => {
       isNew !== undefined ? parseInt(isNew) : 1
     ],
     (err, result) => {
-      if (err) {
-        console.error("❌ DB Error:", err);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to add update",
-          error: err.message
-        });
-      }
+      if (err) return res.status(500).json({ success: false, error: err.message });
 
       db.query(
         "SELECT * FROM recent_updates WHERE id = ?",
@@ -164,7 +185,7 @@ app.post("/recent-admin-add", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// ✅ DELETE - Delete Update - Fallback
+// ✅ DELETE - Delete Update (FALLBACK)
 app.delete("/recent-admin-delete/:id", (req, res) => {
   const { id } = req.params;
   console.log("🗑️ DELETE request for ID:", id);
@@ -217,7 +238,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
   );
 });
 
-// ✅ DELETE - Bulk Delete - Fallback
+// ✅ DELETE - Bulk Delete
 app.delete("/recent-admin-bulk-delete", (req, res) => {
   const { ids } = req.body;
 
@@ -234,13 +255,7 @@ app.delete("/recent-admin-bulk-delete", (req, res) => {
     `SELECT * FROM recent_updates WHERE id IN (${placeholders})`,
     ids,
     (fetchErr, fetchResults) => {
-      if (fetchErr) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch updates",
-          error: fetchErr.message
-        });
-      }
+      if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
 
       fetchResults.forEach(update => {
         if (update.file_public_id) {
@@ -253,25 +268,15 @@ app.delete("/recent-admin-bulk-delete", (req, res) => {
         `DELETE FROM recent_updates WHERE id IN (${placeholders})`,
         ids,
         (deleteErr) => {
-          if (deleteErr) {
-            return res.status(500).json({
-              success: false,
-              message: "Failed to delete",
-              error: deleteErr.message
-            });
-          }
-
-          res.json({
-            success: true,
-            message: `${ids.length} updates deleted successfully ✅`
-          });
+          if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
+          res.json({ success: true, message: `${ids.length} updates deleted successfully ✅` });
         }
       );
     }
   );
 });
 
-// ✅ GET - Admin Stats - Fallback
+// ✅ GET - Admin Stats
 app.get("/recent-admin-stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as total FROM recent_updates",
@@ -287,7 +292,6 @@ app.get("/recent-admin-stats", (req, res) => {
   Object.entries(queries).forEach(([key, query]) => {
     db.query(query, (err, result) => {
       if (err) {
-        console.error(`❌ Stats Error (${key}):`, err);
         results[key] = { error: err.message };
       } else {
         results[key] = result;
@@ -295,10 +299,7 @@ app.get("/recent-admin-stats", (req, res) => {
       completed++;
       
       if (completed === totalQueries) {
-        res.json({
-          success: true,
-          data: results
-        });
+        res.json({ success: true, data: results });
       }
     });
   });
@@ -322,7 +323,9 @@ app.use((req, res) => {
       "/recent/admin/add",
       "/recent/admin/update/:id",
       "/recent/admin/delete/:id",
-      "/recent/admin/bulk-delete"
+      "/recent/admin/bulk-delete",
+      "/recent-admin-delete/:id (fallback)",
+      "/recent-admin-bulk-delete (fallback)"
     ]
   });
 });
@@ -360,6 +363,6 @@ app.listen(PORT, () => {
   console.log("  PUT  /recent/admin/update/:id");
   console.log("  DELETE /recent/admin/delete/:id");
   console.log("  DELETE /recent/admin/bulk-delete");
-  console.log("  GET  /recent/admin/stats");
+  console.log("  DELETE /recent-admin-delete/:id (fallback)");
   console.log("=".repeat(50));
 });
