@@ -10,7 +10,7 @@ const db = require("./config/db");
 const app = express();
 app.set("trust proxy", 1);
 
-// ✅ CORS - COMPLETE FIX
+// ✅ CORS - Allow all
 app.use(cors({
   origin: "*",
   credentials: true,
@@ -24,15 +24,15 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ============================================================
-// ROUTES
+// ROOT & TEST ROUTES
 // ============================================================
 
 app.get("/", (req, res) => {
-  res.json({ success: true, message: "🏫 School Management Backend 🚀" });
+  res.json({ success: true, message: "🏛️ School Management Backend" });
 });
 
 app.get("/test", (req, res) => {
-  res.json({ success: true, message: "✅ TEST WORKING!" });
+  res.json({ success: true, message: "✅ Server Working!" });
 });
 
 app.get("/db-test", (req, res) => {
@@ -42,7 +42,11 @@ app.get("/db-test", (req, res) => {
   });
 });
 
-// ✅ GET - All Updates (Public)
+// ============================================================
+// RECENT UPDATES - API
+// ============================================================
+
+// GET - Public Updates
 app.get("/recent-public", (req, res) => {
   db.query("SELECT * FROM recent_updates ORDER BY created_at DESC LIMIT 20", (err, results) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
@@ -50,7 +54,7 @@ app.get("/recent-public", (req, res) => {
   });
 });
 
-// ✅ GET - All Updates (Admin)
+// GET - Admin All Updates
 app.get("/recent-admin-all", (req, res) => {
   db.query("SELECT * FROM recent_updates ORDER BY created_at DESC", (err, results) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
@@ -58,7 +62,7 @@ app.get("/recent-admin-all", (req, res) => {
   });
 });
 
-// ✅ POST - Add Update
+// POST - Add Update
 app.post("/recent-admin-add", uploadRecent.single("file"), (req, res) => {
   const { title, description, category, link, isNew } = req.body;
 
@@ -75,142 +79,86 @@ app.post("/recent-admin-add", uploadRecent.single("file"), (req, res) => {
     `INSERT INTO recent_updates 
     (title, description, file_url, file_public_id, file_type, file_size, category, link, is_new, created_at) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-    [
-      title,
-      description || "",
-      file_url,
-      file_public_id,
-      file_type,
-      file_size,
-      category || "general",
-      link || null,
-      isNew !== undefined ? parseInt(isNew) : 1
-    ],
+    [title, description || "", file_url, file_public_id, file_type, file_size, category || "general", link || null, isNew !== undefined ? parseInt(isNew) : 1],
     (err, result) => {
       if (err) {
         console.error("❌ DB Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
 
-      db.query(
-        "SELECT * FROM recent_updates WHERE id = ?",
-        [result.insertId],
-        (fetchErr, fetchResult) => {
-          res.status(201).json({
-            success: true,
-            message: "Update added successfully ✅",
-            data: fetchResult ? fetchResult[0] : { id: result.insertId }
-          });
-        }
-      );
+      db.query("SELECT * FROM recent_updates WHERE id = ?", [result.insertId], (fetchErr, fetchResult) => {
+        res.status(201).json({
+          success: true,
+          message: "✅ Update added successfully!",
+          data: fetchResult ? fetchResult[0] : { id: result.insertId }
+        });
+      });
     }
   );
 });
 
-// ✅ DELETE - Delete Update (FIXED)
+// ✅ DELETE - Delete Update (WORKING)
 app.delete("/recent-admin-delete/:id", (req, res) => {
   const { id } = req.params;
-  console.log("🗑️ DELETE request for ID:", id);
+  console.log("🗑️ DELETE ID:", id);
 
   if (!id || isNaN(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid ID provided"
-    });
+    return res.status(400).json({ success: false, message: "Invalid ID" });
   }
 
-  db.query(
-    "SELECT * FROM recent_updates WHERE id = ?",
-    [id],
-    (fetchErr, fetchResult) => {
-      if (fetchErr) {
-        console.error("❌ Fetch Error:", fetchErr);
-        return res.status(500).json({
-          success: false,
-          message: "Database error",
-          error: fetchErr.message
-        });
-      }
-
-      if (!fetchResult || fetchResult.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: "Update not found with ID: " + id
-        });
-      }
-
-      const update = fetchResult[0];
-      console.log("📦 Found update:", update.title);
-
-      if (update.file_public_id) {
-        cloudinary.uploader.destroy(update.file_public_id)
-          .then(result => console.log("✅ Cloudinary deleted:", result))
-          .catch(err => console.error("❌ Cloudinary error:", err));
-      }
-
-      db.query(
-        "DELETE FROM recent_updates WHERE id = ?",
-        [id],
-        (deleteErr) => {
-          if (deleteErr) {
-            console.error("❌ Delete Error:", deleteErr);
-            return res.status(500).json({
-              success: false,
-              message: "Failed to delete",
-              error: deleteErr.message
-            });
-          }
-
-          console.log("✅ Deleted ID:", id);
-          res.json({
-            success: true,
-            message: "Update deleted successfully ✅"
-          });
-        }
-      );
+  db.query("SELECT * FROM recent_updates WHERE id = ?", [id], (fetchErr, fetchResult) => {
+    if (fetchErr) {
+      return res.status(500).json({ success: false, message: "Database error", error: fetchErr.message });
     }
-  );
+
+    if (!fetchResult || fetchResult.length === 0) {
+      return res.status(404).json({ success: false, message: "Update not found" });
+    }
+
+    const update = fetchResult[0];
+
+    if (update.file_public_id) {
+      cloudinary.uploader.destroy(update.file_public_id).catch(err => console.error("Cloudinary error:", err));
+    }
+
+    db.query("DELETE FROM recent_updates WHERE id = ?", [id], (deleteErr) => {
+      if (deleteErr) {
+        return res.status(500).json({ success: false, message: "Failed to delete", error: deleteErr.message });
+      }
+
+      console.log("✅ Deleted ID:", id);
+      res.json({ success: true, message: "✅ Update deleted successfully!" });
+    });
+  });
 });
 
-// ✅ DELETE - Bulk Delete
+// DELETE - Bulk Delete
 app.delete("/recent-admin-bulk-delete", (req, res) => {
   const { ids } = req.body;
 
   if (!ids || !Array.isArray(ids) || ids.length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: "No IDs provided"
-    });
+    return res.status(400).json({ success: false, message: "No IDs provided" });
   }
 
   const placeholders = ids.map(() => '?').join(',');
   
-  db.query(
-    `SELECT * FROM recent_updates WHERE id IN (${placeholders})`,
-    ids,
-    (fetchErr, fetchResults) => {
-      if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
+  db.query(`SELECT * FROM recent_updates WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
+    if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
 
-      fetchResults.forEach(update => {
-        if (update.file_public_id) {
-          cloudinary.uploader.destroy(update.file_public_id)
-            .catch(err => console.error("Cloudinary error:", err));
-        }
-      });
+    fetchResults.forEach(update => {
+      if (update.file_public_id) {
+        cloudinary.uploader.destroy(update.file_public_id).catch(err => console.error("Cloudinary error:", err));
+      }
+    });
 
-      db.query(
-        `DELETE FROM recent_updates WHERE id IN (${placeholders})`,
-        ids,
-        (deleteErr) => {
-          if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-          res.json({ success: true, message: `${ids.length} updates deleted successfully ✅` });
-        }
-      );
-    }
-  );
+    db.query(`DELETE FROM recent_updates WHERE id IN (${placeholders})`, ids, (deleteErr) => {
+      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
+      res.json({ success: true, message: `${ids.length} updates deleted successfully ✅` });
+    });
+  });
 });
 
-// ✅ GET - Admin Stats
+// GET - Admin Stats
 app.get("/recent-admin-stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as total FROM recent_updates",
@@ -240,41 +188,25 @@ app.get("/recent-admin-stats", (req, res) => {
 });
 
 // ============================================================
-// 404 & ERROR HANDLER
+// 404 & ERROR
 // ============================================================
 
 app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "❌ Route not found",
-    path: req.originalUrl
-  });
+  res.status(404).json({ success: false, message: "❌ Route not found", path: req.originalUrl });
 });
 
 app.use((err, req, res, next) => {
-  console.error("❌ Server Error:", err.message);
-  res.status(500).json({
-    success: false,
-    message: err.message || "Internal Server Error"
-  });
+  console.error("❌ Error:", err.message);
+  res.status(500).json({ success: false, message: err.message || "Internal Server Error" });
 });
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("=".repeat(50));
-  console.log("🚀 SERVER STARTED");
+  console.log("🏛️ SERVER STARTED");
   console.log("=".repeat(50));
   console.log(`📡 Port: ${PORT}`);
-  console.log("=".repeat(50));
-  console.log("✅ Available Routes:");
-  console.log("  GET  /");
-  console.log("  GET  /test");
-  console.log("  GET  /recent-public");
-  console.log("  GET  /recent-admin-all");
-  console.log("  POST /recent-admin-add");
-  console.log("  DELETE /recent-admin-delete/:id");
-  console.log("  DELETE /recent-admin-bulk-delete");
-  console.log("  GET  /recent-admin-stats");
+  console.log("✅ DELETE /recent-admin-delete/:id");
   console.log("=".repeat(50));
 });
