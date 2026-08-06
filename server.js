@@ -137,21 +137,18 @@ function createTables() {
   });
   
   // Run migration after tables are created
-  setTimeout(runMigration, 1000);
+  setTimeout(runMigration, 2000);
 }
 
 // ============================================================
-// DATABASE CONNECTION
+// CHECK DATABASE CONNECTION AND CREATE TABLES
 // ============================================================
-db.connect((err) => {
-  if (err) {
-    console.error("❌ Database connection failed:", err.message);
-    process.exit(1);
-  } else {
-    console.log("✅ Database connected successfully");
-    createTables();
-  }
-});
+// db is already connected in config/db.js
+// Just create tables
+setTimeout(() => {
+  console.log("🔄 Creating tables if not exist...");
+  createTables();
+}, 1000);
 
 // ============================================================
 // ROOT & TEST
@@ -177,7 +174,7 @@ app.get("/test", (req, res) => {
 // SLIDER IMAGE ROUTES
 // ============================================================
 
-// GET - All Slider Images (with full data for debugging)
+// GET - All Slider Images
 app.get("/images", (req, res) => {
   db.query(
     `SELECT *, 
@@ -190,20 +187,12 @@ app.get("/images", (req, res) => {
         return res.status(500).json({ success: false, error: err.message });
       }
       console.log("📸 Images fetched:", results ? results.length : 0);
-      
-      // Log each image for debugging
-      if (results && results.length > 0) {
-        results.forEach((img, i) => {
-          console.log(`📸 Image ${i+1}: file_path=${img.file_path}, public_id=${img.public_id}`);
-        });
-      }
-      
       res.json(results || []);
     }
   );
 });
 
-// GET - Public Slider Images (for homepage)
+// GET - Public Slider Images
 app.get("/images/public", (req, res) => {
   db.query(
     `SELECT filename, file_path, public_id, title, alt_text, \`order\`
@@ -271,7 +260,6 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
 
     for (const file of req.files) {
       try {
-        // Cloudinary returns file.path as URL and file.filename as public_id
         const cloudinaryUrl = file.path;
         const publicId = file.filename;
         const { title, alt_text } = req.body;
@@ -279,7 +267,6 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
         console.log("📸 Cloudinary URL:", cloudinaryUrl);
         console.log("📸 Public ID:", publicId);
 
-        // Insert into database with Cloudinary URL
         await new Promise((resolve, reject) => {
           db.query(
             `INSERT INTO slider_images 
@@ -287,7 +274,7 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
             [
               publicId,
-              cloudinaryUrl,    // Cloudinary URL - THIS IS IMPORTANT
+              cloudinaryUrl,
               publicId,
               file.size || 0,
               file.mimetype || 'image/jpeg',
@@ -318,12 +305,9 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
           file: file.originalname || file.filename, 
           error: err.message 
         });
-        // Try to delete from Cloudinary if DB insert fails
         try {
           await cloudinary.uploader.destroy(file.filename);
-        } catch (e) {
-          console.warn("⚠️ Cloudinary cleanup warning:", e.message);
-        }
+        } catch (e) {}
       }
     }
 
@@ -344,7 +328,7 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
 });
 
 // ============================================================
-// DELETE - Slider Image from Cloudinary & Database
+// DELETE - Slider Image
 // ============================================================
 app.delete("/delete", (req, res) => {
   const { filename } = req.body;
@@ -358,30 +342,22 @@ app.delete("/delete", (req, res) => {
     });
   }
 
-  // Get image info from DB
   db.query(
     "SELECT * FROM slider_images WHERE filename = ? OR public_id = ?",
     [filename, filename],
     (err, results) => {
       if (err) {
         console.error("❌ DB Error:", err);
-        return res.status(500).json({ 
-          success: false, 
-          error: err.message 
-        });
+        return res.status(500).json({ success: false, error: err.message });
       }
 
       if (!results || results.length === 0) {
-        return res.status(404).json({ 
-          success: false, 
-          message: "Image not found" 
-        });
+        return res.status(404).json({ success: false, message: "Image not found" });
       }
 
       const image = results[0];
       const publicId = image.public_id || image.filename;
 
-      // Delete from Cloudinary
       cloudinary.uploader.destroy(publicId)
         .then((result) => {
           console.log("✅ Cloudinary deleted:", result);
@@ -390,20 +366,15 @@ app.delete("/delete", (req, res) => {
           console.warn("⚠️ Cloudinary delete warning:", err.message);
         });
 
-      // Delete from DB
       db.query(
         "DELETE FROM slider_images WHERE id = ?",
         [image.id],
         (deleteErr) => {
           if (deleteErr) {
             console.error("❌ Delete DB Error:", deleteErr);
-            return res.status(500).json({ 
-              success: false, 
-              error: deleteErr.message 
-            });
+            return res.status(500).json({ success: false, error: deleteErr.message });
           }
 
-          // Reorder remaining images
           db.query(
             "SET @new_order = 0; UPDATE slider_images SET `order` = (@new_order := @new_order + 1) ORDER BY `order` ASC;",
             (reorderErr) => {
@@ -423,16 +394,40 @@ app.delete("/delete", (req, res) => {
 });
 
 // ============================================================
-// PUT - Update Slider Image Order
+// PUT - Update Slider Image
+// ============================================================
+app.put("/images/update/:id", (req, res) => {
+  const { id } = req.params;
+  const { title, alt_text, is_active } = req.body;
+
+  db.query(
+    `UPDATE slider_images 
+     SET title = ?, alt_text = ?, is_active = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [title || '', alt_text || '', is_active !== undefined ? is_active : 1, id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Update Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
+      }
+
+      res.json({ success: true, message: "Image updated successfully" });
+    }
+  );
+});
+
+// ============================================================
+// PUT - Reorder Slider Images
 // ============================================================
 app.put("/images/reorder", (req, res) => {
   const { orders } = req.body;
 
   if (!orders || !Array.isArray(orders)) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "Orders array is required" 
-    });
+    return res.status(400).json({ success: false, message: "Orders array is required" });
   }
 
   const queries = orders.map(({ id, order }) => {
@@ -450,58 +445,16 @@ app.put("/images/reorder", (req, res) => {
 
   Promise.all(queries)
     .then(() => {
-      res.json({ 
-        success: true, 
-        message: "Order updated successfully" 
-      });
+      res.json({ success: true, message: "Order updated successfully" });
     })
     .catch(error => {
       console.error("❌ Reorder Error:", error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message 
-      });
+      res.status(500).json({ success: false, error: error.message });
     });
 });
 
 // ============================================================
-// PUT - Update Slider Image (title, alt, active)
-// ============================================================
-app.put("/images/update/:id", (req, res) => {
-  const { id } = req.params;
-  const { title, alt_text, is_active } = req.body;
-
-  db.query(
-    `UPDATE slider_images 
-     SET title = ?, alt_text = ?, is_active = ?, updated_at = NOW()
-     WHERE id = ?`,
-    [title || '', alt_text || '', is_active !== undefined ? is_active : 1, id],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Update Error:", err);
-        return res.status(500).json({ 
-          success: false, 
-          error: err.message 
-        });
-      }
-
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ 
-          success: false, 
-          message: "Image not found" 
-        });
-      }
-
-      res.json({ 
-        success: true, 
-        message: "Image updated successfully" 
-      });
-    }
-  );
-});
-
-// ============================================================
-// RECENT UPDATES ROUTES - (Already Working, Keep as is)
+// RECENT UPDATES ROUTES
 // ============================================================
 
 // GET - All Updates (Admin)
@@ -561,7 +514,7 @@ app.get("/recent/:id", (req, res) => {
   );
 });
 
-// POST - Add Recent Update (Cloudinary)
+// POST - Add Recent Update
 app.post("/recent/admin/add", uploadRecent.single("file"), (req, res) => {
   console.log("📋 Add Update Request");
   console.log("📋 Body:", req.body);
@@ -618,7 +571,7 @@ app.post("/recent/admin/add", uploadRecent.single("file"), (req, res) => {
   );
 });
 
-// PUT - Update Recent Update (Cloudinary)
+// PUT - Update Recent Update
 app.put("/recent/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   const { id } = req.params;
   const { title, description, category, link, isNew } = req.body;
@@ -734,7 +687,7 @@ app.delete("/recent/admin/delete/:id", (req, res) => {
   });
 });
 
-// DELETE - Bulk Delete Recent Updates
+// DELETE - Bulk Delete
 app.delete("/recent/admin/bulk-delete", (req, res) => {
   const { ids } = req.body;
 
