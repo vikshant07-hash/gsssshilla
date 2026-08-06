@@ -65,7 +65,7 @@ app.get("/db-test", (req, res) => {
 });
 
 // ============================================================
-// ==================== ✅ ALL RECENT ROUTES ====================
+// ==================== RECENT ROUTES ====================
 // ============================================================
 
 // ✅ GET - All Updates (Public)
@@ -234,7 +234,7 @@ app.put("/recent-admin-update/:id", uploadRecent.single("file"), (req, res) => {
 });
 
 // ============================================================
-// ✅ DELETE - Delete Single Update (FIXED)
+// ✅ DELETE - Delete Update (FIXED - VERIFIED)
 // ============================================================
 
 app.delete("/recent-admin-delete/:id", (req, res) => {
@@ -249,7 +249,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
     });
   }
 
-  // First check if update exists
+  // Check if update exists
   db.query(
     "SELECT * FROM recent_updates WHERE id = ?",
     [id],
@@ -299,7 +299,7 @@ app.delete("/recent-admin-delete/:id", (req, res) => {
             });
           }
 
-          console.log("✅ Update deleted successfully from database");
+          console.log("✅ Update deleted successfully");
           res.json({
             success: true,
             message: "Update deleted successfully ✅"
@@ -338,7 +338,6 @@ app.delete("/recent-admin-bulk-delete", (req, res) => {
         });
       }
 
-      // Delete files from Cloudinary
       fetchResults.forEach(update => {
         if (update.file_public_id) {
           cloudinary.uploader.destroy(update.file_public_id)
@@ -419,8 +418,8 @@ app.use((req, res) => {
       "/recent-admin-all",
       "/recent-admin-add",
       "/recent-admin-update/:id",
-      "/recent-admin-delete/:id",
-      "/recent-admin-bulk-delete",
+      "/recent-admin-delete/:id (DELETE)",
+      "/recent-admin-bulk-delete (DELETE)",
       "/recent-admin-stats"
     ]
   });
