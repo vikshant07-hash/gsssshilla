@@ -3,7 +3,6 @@ const cors = require("cors");
 require("dotenv").config();
 const path = require("path");
 
-// ==================== IMPORT CONFIGS ====================
 const { cloudinary } = require("./config/cloudinary");
 const { uploadRecent } = require("./config/cloudinary");
 const db = require("./config/db");
@@ -11,7 +10,7 @@ const db = require("./config/db");
 const app = express();
 app.set("trust proxy", 1);
 
-// ==================== ✅ CORS - COMPLETE FIX ====================
+// ✅ CORS - COMPLETE FIX
 app.use(cors({
   origin: "*",
   credentials: true,
@@ -20,23 +19,16 @@ app.use(cors({
 }));
 app.options('*', cors());
 
-// ==================== MIDDLEWARE ====================
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// ==================== STATIC FILES ====================
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ============================================================
-// ==================== ROOT & TEST ROUTES ====================
+// ROUTES
 // ============================================================
 
 app.get("/", (req, res) => {
-  res.json({
-    success: true,
-    message: "🏫 School Management Backend 🚀",
-    timestamp: new Date().toISOString()
-  });
+  res.json({ success: true, message: "🏫 School Management Backend 🚀" });
 });
 
 app.get("/test", (req, res) => {
@@ -45,24 +37,10 @@ app.get("/test", (req, res) => {
 
 app.get("/db-test", (req, res) => {
   db.query("SELECT 1 as test, NOW() as time", (err, results) => {
-    if (err) {
-      return res.status(500).json({
-        success: false,
-        message: "❌ Database connection failed",
-        error: err.message
-      });
-    }
-    res.json({
-      success: true,
-      message: "✅ Database connected successfully",
-      data: results[0]
-    });
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    res.json({ success: true, data: results[0] });
   });
 });
-
-// ============================================================
-// ==================== ✅ RECENT ROUTES ====================
-// ============================================================
 
 // ✅ GET - All Updates (Public)
 app.get("/recent-public", (req, res) => {
@@ -262,7 +240,7 @@ app.get("/recent-admin-stats", (req, res) => {
 });
 
 // ============================================================
-// ==================== 404 HANDLER ====================
+// 404 & ERROR HANDLER
 // ============================================================
 
 app.use((req, res) => {
@@ -273,10 +251,6 @@ app.use((req, res) => {
   });
 });
 
-// ============================================================
-// ==================== ERROR HANDLER ====================
-// ============================================================
-
 app.use((err, req, res, next) => {
   console.error("❌ Server Error:", err.message);
   res.status(500).json({
@@ -284,10 +258,6 @@ app.use((err, req, res, next) => {
     message: err.message || "Internal Server Error"
   });
 });
-
-// ============================================================
-// ==================== PORT ====================
-// ============================================================
 
 const PORT = process.env.PORT || 3000;
 
