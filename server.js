@@ -11,7 +11,7 @@ const db = require("./config/db");
 const app = express();
 app.set("trust proxy", 1);
 
-// ==================== CORS ====================
+// ==================== ✅ CORS - COMPLETE FIX ====================
 app.use(cors({
   origin: "*",
   credentials: true,
@@ -42,10 +42,6 @@ app.get("/", (req, res) => {
 app.get("/test", (req, res) => {
   res.json({ success: true, message: "✅ TEST WORKING!" });
 });
-
-// ============================================================
-// ==================== DATABASE TEST ====================
-// ============================================================
 
 app.get("/db-test", (req, res) => {
   db.query("SELECT 1 as test, NOW() as time", (err, results) => {
