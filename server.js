@@ -8,6 +8,10 @@ const { db } = require("./config/db");
 
 const app = express();
 app.set("trust proxy", 1);
+const adminRoutes = require("./routes/adminRoutes"); // assuming aapne ye file adminRoutes.js rakhi hai
+
+// Use admin routes
+app.use("/api/admin", adminRoutes);
 
 // ============================================================
 // CORS
