@@ -117,6 +117,25 @@ function createTables() {
       INDEX idx_is_new (is_new)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    `CREATE TABLE IF NOT EXISTS notifications (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      title VARCHAR(255) NOT NULL,
+      description TEXT,
+      file_url VARCHAR(500),
+      public_id VARCHAR(255),
+      file_name VARCHAR(255),
+      file_size VARCHAR(50),
+      file_type VARCHAR(100),
+      attendance VARCHAR(50) DEFAULT 'all',
+      is_active BOOLEAN DEFAULT 1,
+      views INT DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_created (created_at DESC),
+      INDEX idx_attendance (attendance),
+      INDEX idx_active (is_active)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
     `CREATE TABLE IF NOT EXISTS analytics (
       id INT PRIMARY KEY AUTO_INCREMENT,
       type VARCHAR(50) NOT NULL,
@@ -143,8 +162,6 @@ function createTables() {
 // ============================================================
 // CHECK DATABASE CONNECTION AND CREATE TABLES
 // ============================================================
-// db is already connected in config/db.js
-// Just create tables
 setTimeout(() => {
   console.log("🔄 Creating tables if not exist...");
   createTables();
@@ -160,6 +177,7 @@ app.get("/", (req, res) => {
     features: [
       "Recent Updates CRUD",
       "Slider Image Management",
+      "Notification Module",
       "Analytics Tracking",
       "Cloudinary Storage"
     ]
@@ -248,7 +266,6 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
     const uploaded = [];
     const errors = [];
 
-    // Get current max order
     const orderResult = await new Promise((resolve, reject) => {
       db.query("SELECT MAX(`order`) as maxOrder FROM slider_images", (err, result) => {
         if (err) reject(err);
@@ -751,6 +768,329 @@ app.get("/recent/admin/stats", (req, res) => {
 });
 
 // ============================================================
+// ============================================================
+// NOTIFICATION MODULE ROUTES
+// ============================================================
+// ============================================================
+
+// ============================================================
+// GET - All Notifications (Admin)
+// ============================================================
+app.get("/api/notifications/admin/all", (req, res) => {
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist,
+     DATE_FORMAT(CONVERT_TZ(updated_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as updated_at_ist
+     FROM notifications 
+     ORDER BY created_at DESC`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      console.log("📋 Notifications fetched:", results ? results.length : 0);
+      res.json({ success: true, data: results || [] });
+    }
+  );
+});
+
+// ============================================================
+// GET - Public Notifications
+// ============================================================
+app.get("/api/notifications/public", (req, res) => {
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+     FROM notifications 
+     WHERE is_active = 1 
+     ORDER BY created_at DESC 
+     LIMIT 20`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ success: true, data: results || [] });
+    }
+  );
+});
+
+// ============================================================
+// GET - Single Notification
+// ============================================================
+app.get("/api/notifications/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist,
+     DATE_FORMAT(CONVERT_TZ(updated_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as updated_at_ist
+     FROM notifications WHERE id = ?`,
+    [id],
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      if (!results || results.length === 0) {
+        return res.status(404).json({ success: false, message: "Notification not found" });
+      }
+      res.json({ success: true, data: results[0] });
+    }
+  );
+});
+
+// ============================================================
+// POST - Add Notification with File Upload
+// ============================================================
+app.post("/api/notifications/admin/add", uploadRecent.single("file"), (req, res) => {
+  console.log("📋 Add Notification Request");
+  console.log("📋 Body:", req.body);
+  console.log("📋 File:", req.file ? req.file.filename : "No file");
+
+  const { title, description, attendance } = req.body;
+
+  if (!title) {
+    return res.status(400).json({ success: false, message: "Title is required" });
+  }
+
+  const file_url = req.file ? req.file.path : null;
+  const public_id = req.file ? req.file.filename : null;
+  const file_name = req.file ? req.file.originalname : null;
+  const file_size = req.file ? req.file.size : null;
+  const file_type = req.file ? req.file.mimetype : null;
+
+  db.query(
+    `INSERT INTO notifications 
+    (title, description, file_url, public_id, file_name, file_size, file_type, attendance, created_at) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [
+      title,
+      description || "",
+      file_url,
+      public_id,
+      file_name,
+      file_size,
+      file_type,
+      attendance || "all"
+    ],
+    (err, result) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      console.log("✅ Notification added with ID:", result.insertId);
+
+      db.query(
+        `SELECT *, 
+         DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+         FROM notifications WHERE id = ?`,
+        [result.insertId],
+        (fetchErr, fetchResult) => {
+          res.status(201).json({
+            success: true,
+            message: "✅ Notification added successfully!",
+            data: fetchResult ? fetchResult[0] : { id: result.insertId }
+          });
+        }
+      );
+    }
+  );
+});
+
+// ============================================================
+// PUT - Update Notification
+// ============================================================
+app.put("/api/notifications/admin/update/:id", uploadRecent.single("file"), (req, res) => {
+  const { id } = req.params;
+  const { title, description, attendance, is_active } = req.body;
+
+  console.log("📋 Update Notification Request for ID:", id);
+
+  if (!title) {
+    return res.status(400).json({ success: false, message: "Title is required" });
+  }
+
+  db.query("SELECT * FROM notifications WHERE id = ?", [id], (fetchErr, fetchResult) => {
+    if (fetchErr || !fetchResult || fetchResult.length === 0) {
+      return res.status(404).json({ success: false, message: "Notification not found" });
+    }
+
+    const existing = fetchResult[0];
+    let file_url = existing.file_url;
+    let public_id = existing.public_id;
+    let file_name = existing.file_name;
+    let file_size = existing.file_size;
+    let file_type = existing.file_type;
+
+    if (req.file) {
+      // Delete old file from Cloudinary if exists
+      if (existing.public_id) {
+        cloudinary.uploader.destroy(existing.public_id)
+          .then(result => console.log("✅ Old Cloudinary file deleted:", result))
+          .catch(err => console.error("❌ Cloudinary delete error:", err));
+      }
+      file_url = req.file.path;
+      public_id = req.file.filename;
+      file_name = req.file.originalname;
+      file_size = req.file.size;
+      file_type = req.file.mimetype;
+    }
+
+    db.query(
+      `UPDATE notifications 
+      SET title = ?, description = ?, file_url = ?, public_id = ?, 
+          file_name = ?, file_size = ?, file_type = ?, 
+          attendance = ?, is_active = ?, updated_at = NOW()
+      WHERE id = ?`,
+      [
+        title,
+        description || existing.description,
+        file_url,
+        public_id,
+        file_name,
+        file_size,
+        file_type,
+        attendance || existing.attendance || "all",
+        is_active !== undefined ? parseInt(is_active) : existing.is_active,
+        id
+      ],
+      (updateErr) => {
+        if (updateErr) {
+          console.error("❌ Update Error:", updateErr);
+          return res.status(500).json({ success: false, error: updateErr.message });
+        }
+
+        db.query(
+          `SELECT *, 
+           DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist,
+           DATE_FORMAT(CONVERT_TZ(updated_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as updated_at_ist
+           FROM notifications WHERE id = ?`,
+          [id],
+          (fetchUpdatedErr, fetchUpdatedResult) => {
+            res.json({
+              success: true,
+              message: "✅ Notification updated successfully!",
+              data: fetchUpdatedResult ? fetchUpdatedResult[0] : null
+            });
+          }
+        );
+      }
+    );
+  });
+});
+
+// ============================================================
+// DELETE - Delete Notification
+// ============================================================
+app.delete("/api/notifications/admin/delete/:id", (req, res) => {
+  const { id } = req.params;
+  console.log("🗑️ DELETE Notification ID:", id);
+
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ success: false, message: "Invalid ID" });
+  }
+
+  db.query("SELECT * FROM notifications WHERE id = ?", [id], (fetchErr, fetchResult) => {
+    if (fetchErr) {
+      console.error("❌ Fetch Error:", fetchErr);
+      return res.status(500).json({ success: false, message: "Database error", error: fetchErr.message });
+    }
+
+    if (!fetchResult || fetchResult.length === 0) {
+      return res.status(404).json({ success: false, message: "Notification not found with ID: " + id });
+    }
+
+    const notification = fetchResult[0];
+    console.log("📦 Found:", notification.title);
+
+    if (notification.public_id) {
+      cloudinary.uploader.destroy(notification.public_id)
+        .then(result => console.log("✅ Cloudinary deleted:", result))
+        .catch(err => console.error("❌ Cloudinary error:", err));
+    }
+
+    db.query("DELETE FROM notifications WHERE id = ?", [id], (deleteErr) => {
+      if (deleteErr) {
+        console.error("❌ Delete Error:", deleteErr);
+        return res.status(500).json({ success: false, message: "Failed to delete", error: deleteErr.message });
+      }
+
+      console.log("✅ Deleted ID:", id);
+      res.json({ success: true, message: "✅ Notification deleted successfully!" });
+    });
+  });
+});
+
+// ============================================================
+// DELETE - Bulk Delete Notifications
+// ============================================================
+app.delete("/api/notifications/admin/bulk-delete", (req, res) => {
+  const { ids } = req.body;
+
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ success: false, message: "No IDs provided" });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  
+  db.query(`SELECT * FROM notifications WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
+    if (fetchErr) {
+      console.error("❌ Fetch Error:", fetchErr);
+      return res.status(500).json({ success: false, error: fetchErr.message });
+    }
+
+    fetchResults.forEach(notification => {
+      if (notification.public_id) {
+        cloudinary.uploader.destroy(notification.public_id)
+          .catch(err => console.error("Cloudinary error:", err));
+      }
+    });
+
+    db.query(`DELETE FROM notifications WHERE id IN (${placeholders})`, ids, (deleteErr) => {
+      if (deleteErr) {
+        console.error("❌ Delete Error:", deleteErr);
+        return res.status(500).json({ success: false, error: deleteErr.message });
+      }
+      res.json({ success: true, message: `${ids.length} notifications deleted successfully ✅` });
+    });
+  });
+});
+
+// ============================================================
+// GET - Notification Stats
+// ============================================================
+app.get("/api/notifications/admin/stats", (req, res) => {
+  const queries = {
+    total: "SELECT COUNT(*) as total FROM notifications",
+    active: "SELECT COUNT(*) as active FROM notifications WHERE is_active = 1",
+    inactive: "SELECT COUNT(*) as inactive FROM notifications WHERE is_active = 0",
+    withFile: "SELECT COUNT(*) as withFile FROM notifications WHERE file_url IS NOT NULL"
+  };
+
+  const results = {};
+  let completed = 0;
+  const totalQueries = Object.keys(queries).length;
+
+  Object.entries(queries).forEach(([key, query]) => {
+    db.query(query, (err, result) => {
+      if (err) {
+        console.error(`❌ Stats Error (${key}):`, err);
+        results[key] = { error: err.message };
+      } else {
+        results[key] = result;
+      }
+      completed++;
+      
+      if (completed === totalQueries) {
+        res.json({ success: true, data: results });
+      }
+    });
+  });
+});
+
+// ============================================================
 // ANALYTICS ROUTES
 // ============================================================
 
@@ -821,6 +1161,14 @@ app.use((req, res) => {
       "/recent/admin/delete/:id",
       "/recent/admin/bulk-delete",
       "/recent/admin/stats",
+      "/api/notifications/public",
+      "/api/notifications/admin/all",
+      "/api/notifications/admin/add",
+      "/api/notifications/admin/update/:id",
+      "/api/notifications/admin/delete/:id",
+      "/api/notifications/admin/bulk-delete",
+      "/api/notifications/admin/stats",
+      "/api/notifications/:id",
       "/analytics/track",
       "/analytics/stats"
     ]
@@ -866,6 +1214,16 @@ app.listen(PORT, () => {
   console.log("  DELETE /recent/admin/delete/:id");
   console.log("  DELETE /recent/admin/bulk-delete");
   console.log("  GET    /recent/admin/stats");
+  console.log("");
+  console.log("🔔 NOTIFICATIONS (Cloudinary):");
+  console.log("  GET    /api/notifications/public");
+  console.log("  GET    /api/notifications/admin/all");
+  console.log("  POST   /api/notifications/admin/add");
+  console.log("  PUT    /api/notifications/admin/update/:id");
+  console.log("  DELETE /api/notifications/admin/delete/:id");
+  console.log("  DELETE /api/notifications/admin/bulk-delete");
+  console.log("  GET    /api/notifications/admin/stats");
+  console.log("  GET    /api/notifications/:id");
   console.log("");
   console.log("📊 ANALYTICS:");
   console.log("  GET    /analytics/track");
