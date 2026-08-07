@@ -1249,6 +1249,327 @@ app.get("/api/gallery/stats", (req, res) => {
   });
 });
 
+
+
+
+// ============================================================
+// DOWNLOAD MODULE ROUTES
+// ============================================================
+
+// Import uploadDownload from cloudinary config
+const { cloudinary, uploadSlider, uploadRecent, uploadDownload } = require("./config/cloudinary");
+
+// GET - Public Downloads with Filters
+app.get("/api/downloads", (req, res) => {
+  const { class: classFilter, session, category, search, page = 1, limit = 20 } = req.query;
+  
+  let query = `SELECT id, title, description, class, session_year, category, series, subject, 
+               file_type, file_size, download_count, 
+               DATE_FORMAT(created_at, '%d/%m/%Y') as upload_date
+               FROM downloads WHERE is_active = 1`;
+  let countQuery = `SELECT COUNT(*) as total FROM downloads WHERE is_active = 1`;
+  let params = [];
+
+  if (classFilter && classFilter !== 'all') {
+    query += ` AND class = ?`;
+    countQuery += ` AND class = ?`;
+    params.push(classFilter);
+  }
+
+  if (session && session !== 'all') {
+    query += ` AND session_year = ?`;
+    countQuery += ` AND session_year = ?`;
+    params.push(session);
+  }
+
+  if (category && category !== 'all') {
+    query += ` AND category = ?`;
+    countQuery += ` AND category = ?`;
+    params.push(category);
+  }
+
+  if (search) {
+    query += ` AND (title LIKE ? OR description LIKE ? OR subject LIKE ?)`;
+    countQuery += ` AND (title LIKE ? OR description LIKE ? OR subject LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  
+  db.query(countQuery, params, (countErr, countResult) => {
+    if (countErr) {
+      console.error("❌ Count Error:", countErr);
+      return res.status(500).json({ success: false, error: countErr.message });
+    }
+
+    const total = countResult[0]?.total || 0;
+    
+    query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    params.push(parseInt(limit), offset);
+
+    db.query(query, params, (err, results) => {
+      if (err) {
+        console.error("❌ Downloads Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({
+        success: true,
+        data: results || [],
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(total / parseInt(limit))
+        }
+      });
+    });
+  });
+});
+
+// GET - Single Download
+app.get("/api/downloads/:id", (req, res) => {
+  const { id } = req.params;
+  
+  db.query("SELECT * FROM downloads WHERE id = ? AND is_active = 1", [id], (err, results) => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    if (!results || results.length === 0) return res.status(404).json({ success: false, message: "File not found" });
+    res.json({ success: true, data: results[0] });
+  });
+});
+
+// GET - Download File (Track Download Count)
+app.get("/api/downloads/:id/download", (req, res) => {
+  const { id } = req.params;
+  
+  db.query("SELECT * FROM downloads WHERE id = ? AND is_active = 1", [id], (err, results) => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    if (!results || results.length === 0) return res.status(404).json({ success: false, message: "File not found" });
+
+    const file = results[0];
+    
+    // Increment download count
+    db.query("UPDATE downloads SET download_count = download_count + 1 WHERE id = ?", [id]);
+    
+    // Redirect to Cloudinary URL (direct download)
+    res.redirect(file.file_path);
+  });
+});
+
+// GET - Available Sessions
+app.get("/api/downloads/sessions", (req, res) => {
+  db.query("SELECT DISTINCT session_year FROM downloads WHERE is_active = 1 ORDER BY session_year DESC", 
+    (err, results) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, data: results.map(r => r.session_year) });
+    }
+  );
+});
+
+// GET - Available Classes
+app.get("/api/downloads/classes", (req, res) => {
+  db.query("SELECT DISTINCT class FROM downloads WHERE is_active = 1 ORDER BY CAST(class AS UNSIGNED) ASC", 
+    (err, results) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, data: results.map(r => r.class) });
+    }
+  );
+});
+
+// ============================================================
+// ADMIN DOWNLOAD ROUTES
+// ============================================================
+
+// GET - All Downloads (Admin)
+app.get("/admin/downloads", (req, res) => {
+  const { page = 1, limit = 50 } = req.query;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  
+  db.query("SELECT COUNT(*) as total FROM downloads", (countErr, countResult) => {
+    if (countErr) return res.status(500).json({ success: false, error: countErr.message });
+    
+    const total = countResult[0]?.total || 0;
+    
+    db.query("SELECT * FROM downloads ORDER BY created_at DESC LIMIT ? OFFSET ?", 
+      [parseInt(limit), offset], 
+      (err, results) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        res.json({
+          success: true,
+          data: results || [],
+          pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) }
+        });
+      }
+    );
+  });
+});
+
+// POST - Add Download (Admin)
+app.post("/admin/downloads/add", uploadDownload.single("file"), (req, res) => {
+  const { title, description, class: classNum, session_year, category, series, subject } = req.body;
+
+  console.log("📥 Add Download Request:", req.body);
+
+  if (!title || !classNum || !session_year || !category) {
+    return res.status(400).json({ success: false, message: "Title, Class, Session and Category are required" });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: "File is required" });
+  }
+
+  db.query(
+    `INSERT INTO downloads (title, description, class, session_year, category, series, subject, 
+     filename, file_path, public_id, file_size, file_type, created_at) 
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [
+      title,
+      description || '',
+      classNum,
+      session_year,
+      category,
+      series || null,
+      subject || null,
+      req.file.filename,
+      req.file.path,
+      req.file.filename,
+      req.file.size || 0,
+      req.file.mimetype || 'application/pdf'
+    ],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Insert Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      res.status(201).json({
+        success: true,
+        message: "✅ File uploaded successfully!",
+        data: { id: result.insertId }
+      });
+    }
+  );
+});
+
+// PUT - Update Download (Admin)
+app.put("/admin/downloads/update/:id", uploadDownload.single("file"), (req, res) => {
+  const { id } = req.params;
+  const { title, description, class: classNum, session_year, category, series, subject, is_active } = req.body;
+
+  if (!title || !classNum || !session_year || !category) {
+    return res.status(400).json({ success: false, message: "Title, Class, Session and Category are required" });
+  }
+
+  db.query("SELECT * FROM downloads WHERE id = ?", [id], (fetchErr, fetchResult) => {
+    if (fetchErr || !fetchResult || fetchResult.length === 0) {
+      return res.status(404).json({ success: false, message: "Download not found" });
+    }
+
+    const existing = fetchResult[0];
+    let file_path = existing.file_path;
+    let public_id = existing.public_id;
+    let filename = existing.filename;
+    let file_size = existing.file_size;
+    let file_type = existing.file_type;
+
+    if (req.file) {
+      // Delete old file from Cloudinary
+      if (existing.public_id) {
+        cloudinary.uploader.destroy(existing.public_id)
+          .catch(err => console.error("Cloudinary delete error:", err));
+      }
+      file_path = req.file.path;
+      public_id = req.file.filename;
+      filename = req.file.filename;
+      file_size = req.file.size || 0;
+      file_type = req.file.mimetype || 'application/pdf';
+    }
+
+    db.query(
+      `UPDATE downloads SET title=?, description=?, class=?, session_year=?, category=?, 
+       series=?, subject=?, filename=?, file_path=?, public_id=?, file_size=?, file_type=?, 
+       is_active=?, updated_at=NOW() WHERE id=?`,
+      [
+        title, description || '', classNum, session_year, category,
+        series || null, subject || null, filename, file_path, public_id,
+        file_size, file_type, is_active !== undefined ? parseInt(is_active) : 1, id
+      ],
+      (updateErr) => {
+        if (updateErr) return res.status(500).json({ success: false, error: updateErr.message });
+        res.json({ success: true, message: "✅ Download updated successfully!" });
+      }
+    );
+  });
+});
+
+// DELETE - Delete Download (Admin)
+app.delete("/admin/downloads/delete/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query("SELECT * FROM downloads WHERE id = ?", [id], (err, results) => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    if (!results || results.length === 0) return res.status(404).json({ success: false, message: "Not found" });
+
+    const item = results[0];
+    if (item.public_id) {
+      cloudinary.uploader.destroy(item.public_id)
+        .catch(err => console.error("Cloudinary error:", err));
+    }
+
+    db.query("DELETE FROM downloads WHERE id = ?", [id], (deleteErr) => {
+      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
+      res.json({ success: true, message: "✅ Deleted successfully!" });
+    });
+  });
+});
+
+// DELETE - Bulk Delete (Admin)
+app.delete("/admin/downloads/bulk-delete", (req, res) => {
+  const { ids } = req.body;
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ success: false, message: "No IDs provided" });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  
+  db.query(`SELECT * FROM downloads WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
+    if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
+    
+    fetchResults.forEach(item => {
+      if (item.public_id) cloudinary.uploader.destroy(item.public_id).catch(err => console.error(err));
+    });
+
+    db.query(`DELETE FROM downloads WHERE id IN (${placeholders})`, ids, (deleteErr) => {
+      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
+      res.json({ success: true, message: `${ids.length} items deleted ✅` });
+    });
+  });
+});
+
+// GET - Download Stats (Admin)
+app.get("/admin/downloads/stats", (req, res) => {
+  const queries = {
+    total: "SELECT COUNT(*) as count FROM downloads",
+    active: "SELECT COUNT(*) as count FROM downloads WHERE is_active = 1",
+    total_downloads: "SELECT SUM(download_count) as count FROM downloads",
+    categories: "SELECT category, COUNT(*) as count FROM downloads GROUP BY category"
+  };
+
+  const results = {};
+  let completed = 0;
+  const totalQueries = Object.keys(queries).length;
+
+  Object.entries(queries).forEach(([key, query]) => {
+    db.query(query, (err, result) => {
+      if (err) results[key] = { count: 0 };
+      else results[key] = key === 'categories' ? result : (result[0] || { count: 0 });
+      completed++;
+      if (completed === totalQueries) {
+        res.json({ success: true, data: results });
+      }
+    });
+  });
+});
+
 // ============================================================
 // ANALYTICS ROUTES
 // ============================================================
