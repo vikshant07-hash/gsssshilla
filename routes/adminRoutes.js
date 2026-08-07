@@ -36,7 +36,7 @@ const loginLimiter = rateLimit({
 });
 
 // ============================================================
-// JWT VERIFY FUNCTION
+// JWT VERIFY
 // ============================================================
 async function verifyToken(req, res, next) {
   try {
@@ -83,7 +83,7 @@ async function sendEmail(to, otp, title, type = "login") {
       {
         sender: {
           name: "Govt. Sr. Sec. School Shilla",
-          email: process.env.BREVO_SENDER_EMAIL || 'noreply@gsssshilla.com'
+          email: process.env.BREVO_SENDER_EMAIL || 'magicalmathsquiz@gmail.com'
         },
         to: [{ email: to }],
         subject: title,
@@ -405,7 +405,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 });
 
 // ============================================================
-// 3. SEND RESET OTP
+// 3. SEND RESET OTP (FORGOT PASSWORD)
 // ============================================================
 router.post('/send-reset-otp', otpLimiter, async (req, res) => {
   const { email } = req.body;
@@ -605,6 +605,6 @@ router.post('/logout', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// EXPORT ROUTER
+// EXPORT
 // ============================================================
 module.exports = router;
