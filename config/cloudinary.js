@@ -95,11 +95,55 @@ const uploadRecent = multer({
   }
 });
 
+
+
+
 // ============================================================
-// EXPORTS
+// STORAGE FOR DOWNLOADS (PDF, Images)
+// ============================================================
+const downloadStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: process.env.CLOUDINARY_DOWNLOAD_FOLDER || "school/downloads",
+    resource_type: "auto",
+    allowed_formats: ["jpg", "jpeg", "png", "gif", "webp", "pdf", "doc", "docx"],
+    public_id: (req, file) => {
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
+      return `download-${originalName}-${uniqueSuffix}`;
+    }
+  }
+});
+
+// ============================================================
+// MULTER UPLOAD: DOWNLOADS (15MB limit)
+// ============================================================
+const uploadDownload = multer({
+  storage: downloadStorage,
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only PDF, Word documents, and images are allowed!"), false);
+    }
+  }
+});
+
+// ============================================================
+// EXPORTS (update existing exports)
 // ============================================================
 module.exports = {
   cloudinary,
   uploadSlider,
-  uploadRecent
+  uploadRecent,
+  uploadDownload  // <-- Add this line
 };
+
