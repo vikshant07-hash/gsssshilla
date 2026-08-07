@@ -657,38 +657,322 @@ app.delete("/api/notifications/admin/bulk-delete", (req, res) => {
 // CONTACT MODULE ROUTES
 // ============================================================
 
-app.get("/admin/contact/info", (req, res) => {
-  db.query(`SELECT * FROM contact_info WHERE id = 1`, (err, results) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    res.json(results && results.length ? results[0] : { school_name: "GSS School Shilla", address: "Shilla, Himachal Pradesh", phone: "+91 98765 43210", email: "info@gssshilla.edu.in" });
-  });
-});
+// ============================================================
+// CONTACT MODULE ROUTES - COMPLETE
+// ============================================================
 
-app.post("/contact", (req, res) => {
-  const { name, email, message } = req.body;
-  if (!name || !email || !message) return res.status(400).json({ success: false, message: "All fields are required" });
-  db.query(`INSERT INTO contact_messages (name, email, message, created_at) VALUES (?, ?, ?, NOW())`, [name, email, message],
-    (err, result) => {
-      if (err) return res.status(500).json({ success: false, message: "Failed to send message" });
-      res.json({ success: true, message: "✅ Message sent successfully!" });
+// GET - Contact Info (Public)
+app.get("/api/contact/info", (req, res) => {
+  db.query(
+    `SELECT * FROM contact_info WHERE id = 1`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      
+      if (!results || results.length === 0) {
+        return res.json({
+          success: true,
+          data: {
+            school_name: "GSS School Shilla",
+            address: "Shilla, Himachal Pradesh",
+            phone: "+91 98765 43210",
+            email: "info@gssshilla.edu.in"
+          }
+        });
+      }
+      
+      res.json({ success: true, data: results[0] });
     }
   );
 });
 
-app.get("/admin/contact/messages", (req, res) => {
-  db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM contact_messages ORDER BY created_at DESC`,
+// GET - Contact Info (Admin)
+app.get("/admin/contact/info", (req, res) => {
+  db.query(
+    `SELECT * FROM contact_info WHERE id = 1`,
     (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      
+      if (!results || results.length === 0) {
+        return res.json({
+          school_name: "GSS School Shilla",
+          address: "Shilla, Himachal Pradesh",
+          phone: "+91 98765 43210",
+          email: "info@gssshilla.edu.in"
+        });
+      }
+      
+      res.json(results[0]);
+    }
+  );
+});
+
+// PUT - Update Contact Info (Admin)
+app.put("/admin/contact/info/update", (req, res) => {
+  const { school_name, address, phone, email } = req.body;
+
+  console.log("📝 Update Contact Info:", req.body);
+
+  if (!school_name || !address || !phone || !email) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "All fields are required (school_name, address, phone, email)" 
+    });
+  }
+
+  // Check if record exists
+  db.query("SELECT id FROM contact_info WHERE id = 1", (err, results) => {
+    if (err) {
+      console.error("❌ DB Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+
+    if (results && results.length > 0) {
+      // Update existing
+      db.query(
+        `UPDATE contact_info 
+         SET school_name = ?, address = ?, phone = ?, email = ?, updated_at = NOW()
+         WHERE id = 1`,
+        [school_name, address, phone, email],
+        (updateErr, result) => {
+          if (updateErr) {
+            console.error("❌ Update Error:", updateErr);
+            return res.status(500).json({ success: false, error: updateErr.message });
+          }
+
+          console.log("✅ Contact info updated");
+          res.json({ 
+            success: true, 
+            message: "✅ Contact information updated successfully!" 
+          });
+        }
+      );
+    } else {
+      // Insert new
+      db.query(
+        `INSERT INTO contact_info (id, school_name, address, phone, email, created_at) 
+         VALUES (1, ?, ?, ?, ?, NOW())`,
+        [school_name, address, phone, email],
+        (insertErr, result) => {
+          if (insertErr) {
+            console.error("❌ Insert Error:", insertErr);
+            return res.status(500).json({ success: false, error: insertErr.message });
+          }
+
+          console.log("✅ Contact info created");
+          res.json({ 
+            success: true, 
+            message: "✅ Contact information saved successfully!" 
+          });
+        }
+      );
+    }
+  });
+});
+
+// POST - Contact Form Submit (Public)
+app.post("/contact", (req, res) => {
+  const { name, email, message } = req.body;
+
+  console.log("📩 Contact Form Submission:");
+  console.log("  Name:", name);
+  console.log("  Email:", email);
+  console.log("  Message:", message);
+
+  // Validation
+  if (!name || !email || !message) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "All fields are required (name, email, message)" 
+    });
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({
+      success: false,
+      message: "Please enter a valid email address"
+    });
+  }
+
+  db.query(
+    `INSERT INTO contact_messages (name, email, message, created_at) 
+     VALUES (?, ?, ?, NOW())`,
+    [name, email, message],
+    (err, result) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ 
+          success: false, 
+          message: "Failed to send message. Please try again later." 
+        });
+      }
+
+      console.log("✅ Message saved with ID:", result.insertId);
+      
+      res.status(201).json({
+        success: true,
+        message: "✅ Message sent successfully! We'll get back to you soon."
+      });
+    }
+  );
+});
+
+// GET - All Contact Messages (Admin)
+app.get("/admin/contact/messages", (req, res) => {
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+     FROM contact_messages 
+     ORDER BY created_at DESC`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
       res.json({ success: true, data: results || [] });
     }
   );
 });
 
+// GET - Single Contact Message (Admin)
+app.get("/admin/contact/messages/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+     FROM contact_messages WHERE id = ?`,
+    [id],
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      if (!results || results.length === 0) {
+        return res.status(404).json({ success: false, message: "Message not found" });
+      }
+
+      // Mark as read
+      db.query("UPDATE contact_messages SET is_read = 1 WHERE id = ?", [id]);
+
+      res.json({ success: true, data: results[0] });
+    }
+  );
+});
+
+// PUT - Mark Message as Read (Admin)
+app.put("/admin/contact/messages/read/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    "UPDATE contact_messages SET is_read = 1 WHERE id = ?",
+    [id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Update Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Message not found" });
+      }
+      res.json({ success: true, message: "✅ Marked as read" });
+    }
+  );
+});
+
+// DELETE - Delete Contact Message (Admin)
 app.delete("/admin/contact/messages/delete/:id", (req, res) => {
-  db.query("DELETE FROM contact_messages WHERE id = ?", [req.params.id], (err, result) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    if (result.affectedRows === 0) return res.status(404).json({ success: false, message: "Message not found" });
-    res.json({ success: true, message: "✅ Message deleted successfully!" });
+  const { id } = req.params;
+
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ success: false, message: "Invalid ID" });
+  }
+
+  db.query(
+    "DELETE FROM contact_messages WHERE id = ?",
+    [id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Delete Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Message not found" });
+      }
+
+      res.json({ success: true, message: "✅ Message deleted successfully!" });
+    }
+  );
+});
+
+// DELETE - Bulk Delete Messages (Admin)
+app.delete("/admin/contact/messages/bulk-delete", (req, res) => {
+  const { ids } = req.body;
+
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ success: false, message: "No IDs provided" });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  
+  db.query(
+    `DELETE FROM contact_messages WHERE id IN (${placeholders})`, 
+    ids, 
+    (deleteErr, result) => {
+      if (deleteErr) {
+        console.error("❌ Delete Error:", deleteErr);
+        return res.status(500).json({ success: false, error: deleteErr.message });
+      }
+      res.json({ 
+        success: true, 
+        message: `${result.affectedRows} messages deleted successfully ✅` 
+      });
+    }
+  );
+});
+
+// GET - Contact Stats (Admin)
+app.get("/admin/contact/stats", (req, res) => {
+  const queries = {
+    total: "SELECT COUNT(*) as count FROM contact_messages",
+    unread: "SELECT COUNT(*) as count FROM contact_messages WHERE is_read = 0",
+    today: "SELECT COUNT(*) as count FROM contact_messages WHERE DATE(created_at) = CURDATE()",
+    week: "SELECT COUNT(*) as count FROM contact_messages WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)"
+  };
+
+  const results = {};
+  let completed = 0;
+  const totalQueries = Object.keys(queries).length;
+
+  Object.entries(queries).forEach(([key, query]) => {
+    db.query(query, (err, result) => {
+      if (err) {
+        console.error(`❌ Stats Error (${key}):`, err);
+        results[key] = { count: 0 };
+      } else {
+        results[key] = result[0] || { count: 0 };
+      }
+      completed++;
+      
+      if (completed === totalQueries) {
+        res.json({
+          success: true,
+          data: {
+            total: results.total?.count || 0,
+            unread: results.unread?.count || 0,
+            today: results.today?.count || 0,
+            week: results.week?.count || 0
+          }
+        });
+      }
+    });
   });
 });
 
