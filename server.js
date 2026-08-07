@@ -3,7 +3,7 @@ const cors = require("cors");
 require("dotenv").config();
 const path = require("path");
 const fs = require("fs-extra");
-const { cloudinary, uploadSlider, uploadRecent } = require("./config/cloudinary");
+const { cloudinary, uploadSlider, uploadRecent, uploadDownload } = require("./config/cloudinary");
 const { db } = require("./config/db");
 
 const app = express();
