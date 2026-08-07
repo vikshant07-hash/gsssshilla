@@ -79,6 +79,7 @@ function runMigration() {
 // ============================================================
 function createTables() {
   const queries = [
+    // Slider Images (Homepage)
     `CREATE TABLE IF NOT EXISTS slider_images (
       id INT PRIMARY KEY AUTO_INCREMENT,
       filename VARCHAR(255) NOT NULL UNIQUE,
@@ -97,6 +98,7 @@ function createTables() {
       INDEX idx_active (is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    // Recent Updates
     `CREATE TABLE IF NOT EXISTS recent_updates (
       id INT PRIMARY KEY AUTO_INCREMENT,
       title VARCHAR(255) NOT NULL,
@@ -115,6 +117,7 @@ function createTables() {
       INDEX idx_is_new (is_new)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    // Notifications
     `CREATE TABLE IF NOT EXISTS notifications (
       id INT PRIMARY KEY AUTO_INCREMENT,
       title VARCHAR(255) NOT NULL,
@@ -134,6 +137,7 @@ function createTables() {
       INDEX idx_active (is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    // Contact Info
     `CREATE TABLE IF NOT EXISTS contact_info (
       id INT PRIMARY KEY DEFAULT 1,
       school_name VARCHAR(255) NOT NULL,
@@ -144,6 +148,7 @@ function createTables() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    // Contact Messages
     `CREATE TABLE IF NOT EXISTS contact_messages (
       id INT PRIMARY KEY AUTO_INCREMENT,
       name VARCHAR(100) NOT NULL,
@@ -156,6 +161,81 @@ function createTables() {
       INDEX idx_read (is_read)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    // ============================================================
+    // GALLERY TABLES
+    // ============================================================
+    
+    // Gallery Albums
+    `CREATE TABLE IF NOT EXISTS gallery_albums (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      title VARCHAR(255) NOT NULL,
+      slug VARCHAR(255) NOT NULL UNIQUE,
+      description TEXT,
+      cover_image VARCHAR(500),
+      cover_public_id VARCHAR(255),
+      category VARCHAR(100) DEFAULT 'general',
+      event_date DATE,
+      venue VARCHAR(255),
+      is_featured BOOLEAN DEFAULT 0,
+      is_active BOOLEAN DEFAULT 1,
+      view_count INT DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_category (category),
+      INDEX idx_featured (is_featured),
+      INDEX idx_created (created_at DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    // Gallery Images
+    `CREATE TABLE IF NOT EXISTS gallery_images (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      album_id INT NOT NULL,
+      filename VARCHAR(255) NOT NULL,
+      file_path VARCHAR(500) NOT NULL,
+      public_id VARCHAR(255),
+      file_size INT,
+      mime_type VARCHAR(100),
+      title VARCHAR(255),
+      description TEXT,
+      alt_text VARCHAR(255),
+      \`order\` INT DEFAULT 0,
+      is_featured BOOLEAN DEFAULT 0,
+      view_count INT DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (album_id) REFERENCES gallery_albums(id) ON DELETE CASCADE,
+      INDEX idx_album (album_id),
+      INDEX idx_order (\`order\`),
+      INDEX idx_featured (is_featured)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    // Gallery Slider (Separate from Homepage)
+    `CREATE TABLE IF NOT EXISTS gallery_slider (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      filename VARCHAR(255) NOT NULL,
+      file_path VARCHAR(500) NOT NULL,
+      public_id VARCHAR(255),
+      title VARCHAR(255),
+      description TEXT,
+      link VARCHAR(500),
+      \`order\` INT DEFAULT 0,
+      is_active BOOLEAN DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_order (\`order\`),
+      INDEX idx_active (is_active)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    // Gallery Categories
+    `CREATE TABLE IF NOT EXISTS gallery_categories (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(100) NOT NULL UNIQUE,
+      slug VARCHAR(100) NOT NULL UNIQUE,
+      icon VARCHAR(50),
+      \`order\` INT DEFAULT 0,
+      is_active BOOLEAN DEFAULT 1
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    // Analytics
     `CREATE TABLE IF NOT EXISTS analytics (
       id INT PRIMARY KEY AUTO_INCREMENT,
       type VARCHAR(50) NOT NULL,
@@ -187,6 +267,28 @@ function createTables() {
       }
     );
   }, 3000);
+
+  // Insert default gallery categories
+  setTimeout(() => {
+    db.query(
+      `INSERT IGNORE INTO gallery_categories (name, slug, icon, \`order\`) VALUES
+      ('Academic', 'academic', 'fa-graduation-cap', 1),
+      ('Sports', 'sports', 'fa-football-ball', 2),
+      ('Cultural', 'cultural', 'fa-music', 3),
+      ('Annual Function', 'annual-function', 'fa-calendar-star', 4),
+      ('Science Exhibition', 'science-exhibition', 'fa-flask', 5),
+      ('Republic Day', 'republic-day', 'fa-flag-india', 6),
+      ('Independence Day', 'independence-day', 'fa-flag', 7),
+      ('Workshops', 'workshops', 'fa-tools', 8),
+      ('Seminars', 'seminars', 'fa-chalkboard-teacher', 9),
+      ('Alumni', 'alumni', 'fa-users', 10),
+      ('Achievements', 'achievements', 'fa-trophy', 11)`,
+      (err) => {
+        if (err) console.error("❌ Error inserting default categories:", err.message);
+        else console.log("✅ Default gallery categories inserted");
+      }
+    );
+  }, 3500);
   
   setTimeout(runMigration, 2000);
 }
@@ -211,6 +313,7 @@ app.get("/", (req, res) => {
       "Slider Image Management",
       "Notification Module",
       "Contact Module",
+      "Gallery Module",
       "Analytics Tracking",
       "Cloudinary Storage"
     ]
@@ -222,7 +325,7 @@ app.get("/test", (req, res) => {
 });
 
 // ============================================================
-// SLIDER IMAGE ROUTES
+// SLIDER IMAGE ROUTES (Homepage)
 // ============================================================
 
 // GET - All Slider Images
@@ -281,9 +384,7 @@ app.get("/images/stats", (req, res) => {
   );
 });
 
-// ============================================================
 // POST - Upload Slider Images to Cloudinary
-// ============================================================
 app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
   console.log("📸 Upload request received");
   console.log("📸 Files:", req.files ? req.files.length : 0);
@@ -377,9 +478,7 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
   }
 });
 
-// ============================================================
 // DELETE - Slider Image
-// ============================================================
 app.delete("/delete", (req, res) => {
   const { filename } = req.body;
 
@@ -443,9 +542,7 @@ app.delete("/delete", (req, res) => {
   );
 });
 
-// ============================================================
 // PUT - Update Slider Image
-// ============================================================
 app.put("/images/update/:id", (req, res) => {
   const { id } = req.params;
   const { title, alt_text, is_active } = req.body;
@@ -470,9 +567,7 @@ app.put("/images/update/:id", (req, res) => {
   );
 });
 
-// ============================================================
 // PUT - Reorder Slider Images
-// ============================================================
 app.put("/images/reorder", (req, res) => {
   const { orders } = req.body;
 
@@ -1314,6 +1409,609 @@ app.get("/admin/contact/stats", (req, res) => {
 });
 
 // ============================================================
+// GALLERY MODULE ROUTES
+// ============================================================
+
+// ============================================================
+// GET - Gallery Slider Images (Public)
+// ============================================================
+app.get("/api/gallery/slider", (req, res) => {
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+     FROM gallery_slider 
+     WHERE is_active = 1 
+     ORDER BY \`order\` ASC, created_at DESC 
+     LIMIT 10`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ Gallery Slider Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      console.log("📸 Gallery Slider fetched:", results ? results.length : 0);
+      res.json(results || []);
+    }
+  );
+});
+
+// ============================================================
+// POST - Add Gallery Slider Image (Admin)
+// ============================================================
+app.post("/api/gallery/slider/add", uploadSlider.single("image"), (req, res) => {
+  console.log("📸 Add Gallery Slider Request");
+
+  const { title, description, link } = req.body;
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: "Image is required" });
+  }
+
+  const file_path = req.file.path;
+  const public_id = req.file.filename;
+  const filename = req.file.filename;
+
+  db.query("SELECT MAX(`order`) as maxOrder FROM gallery_slider", (err, result) => {
+    const nextOrder = (result[0]?.maxOrder || 0) + 1;
+
+    db.query(
+      `INSERT INTO gallery_slider 
+       (filename, file_path, public_id, title, description, link, \`order\`, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [filename, file_path, public_id, title || '', description || '', link || '', nextOrder],
+      (insertErr, insertResult) => {
+        if (insertErr) {
+          console.error("❌ DB Error:", insertErr);
+          return res.status(500).json({ success: false, error: insertErr.message });
+        }
+
+        res.json({
+          success: true,
+          message: "✅ Gallery slider image added successfully!",
+          data: { id: insertResult.insertId }
+        });
+      }
+    );
+  });
+});
+
+// ============================================================
+// DELETE - Delete Gallery Slider Image (Admin)
+// ============================================================
+app.delete("/api/gallery/slider/delete/:id", (req, res) => {
+  const { id } = req.params;
+
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ success: false, message: "Invalid ID" });
+  }
+
+  db.query(
+    "SELECT * FROM gallery_slider WHERE id = ?",
+    [id],
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (!results || results.length === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
+      }
+
+      const image = results[0];
+
+      if (image.public_id) {
+        cloudinary.uploader.destroy(image.public_id)
+          .then(result => console.log("✅ Cloudinary deleted:", result))
+          .catch(err => console.error("❌ Cloudinary error:", err));
+      }
+
+      db.query(
+        "DELETE FROM gallery_slider WHERE id = ?",
+        [id],
+        (deleteErr) => {
+          if (deleteErr) {
+            console.error("❌ Delete DB Error:", deleteErr);
+            return res.status(500).json({ success: false, error: deleteErr.message });
+          }
+
+          db.query(
+            "SET @new_order = 0; UPDATE gallery_slider SET `order` = (@new_order := @new_order + 1) ORDER BY `order` ASC;",
+            (reorderErr) => {
+              if (reorderErr) {
+                console.warn("⚠️ Reorder warning:", reorderErr.message);
+              }
+              res.json({ success: true, message: "✅ Slider image deleted successfully!" });
+            }
+          );
+        }
+      );
+    }
+  );
+});
+
+// ============================================================
+// PUT - Update Gallery Slider Image (Admin)
+// ============================================================
+app.put("/api/gallery/slider/update/:id", (req, res) => {
+  const { id } = req.params;
+  const { title, description, link, is_active } = req.body;
+
+  db.query(
+    `UPDATE gallery_slider 
+     SET title = ?, description = ?, link = ?, is_active = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [title || '', description || '', link || '', is_active !== undefined ? is_active : 1, id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Update Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
+      }
+
+      res.json({ success: true, message: "✅ Slider image updated successfully!" });
+    }
+  );
+});
+
+// ============================================================
+// PUT - Gallery Slider Reorder (Admin)
+// ============================================================
+app.put("/api/gallery/slider/reorder", (req, res) => {
+  const { orders } = req.body;
+
+  if (!orders || !Array.isArray(orders)) {
+    return res.status(400).json({ success: false, message: "Orders array is required" });
+  }
+
+  const queries = orders.map(({ id, order }) => {
+    return new Promise((resolve, reject) => {
+      db.query(
+        "UPDATE gallery_slider SET `order` = ? WHERE id = ?",
+        [order, id],
+        (err) => {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+  });
+
+  Promise.all(queries)
+    .then(() => {
+      res.json({ success: true, message: "✅ Order updated successfully!" });
+    })
+    .catch(error => {
+      console.error("❌ Reorder Error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    });
+});
+
+// ============================================================
+// GET - Gallery Slider Stats (Admin)
+// ============================================================
+app.get("/api/gallery/slider/stats", (req, res) => {
+  db.query(
+    `SELECT 
+      COUNT(*) as total,
+      SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active,
+      SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) as inactive
+     FROM gallery_slider`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ Stats Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({
+        success: true,
+        data: results[0] || { total: 0, active: 0, inactive: 0 }
+      });
+    }
+  );
+});
+
+// ============================================================
+// GET - All Gallery Albums
+// ============================================================
+app.get("/api/gallery/albums", (req, res) => {
+  const { category, year, search, page = 1, limit = 12 } = req.query;
+  let query = `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+     FROM gallery_albums WHERE is_active = 1`;
+  let params = [];
+  let countQuery = `SELECT COUNT(*) as total FROM gallery_albums WHERE is_active = 1`;
+
+  if (category && category !== 'all') {
+    query += ` AND category = ?`;
+    countQuery += ` AND category = ?`;
+    params.push(category);
+  }
+
+  if (year && year !== 'all') {
+    query += ` AND YEAR(event_date) = ?`;
+    countQuery += ` AND YEAR(event_date) = ?`;
+    params.push(year);
+  }
+
+  if (search) {
+    query += ` AND (title LIKE ? OR description LIKE ?)`;
+    countQuery += ` AND (title LIKE ? OR description LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  params.push(parseInt(limit), offset);
+
+  // Get total count
+  db.query(countQuery, params.slice(0, params.length - 2), (countErr, countResult) => {
+    if (countErr) {
+      console.error("❌ Count Error:", countErr);
+      return res.status(500).json({ success: false, error: countErr.message });
+    }
+
+    const total = countResult[0]?.total || 0;
+
+    db.query(query, params, (err, results) => {
+      if (err) {
+        console.error("❌ Gallery Albums Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({
+        success: true,
+        data: results || [],
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(total / parseInt(limit))
+        }
+      });
+    });
+  });
+});
+
+// ============================================================
+// GET - Featured Albums
+// ============================================================
+app.get("/api/gallery/featured", (req, res) => {
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+     FROM gallery_albums 
+     WHERE is_active = 1 AND is_featured = 1 
+     ORDER BY created_at DESC LIMIT 6`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ Featured Albums Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ success: true, data: results || [] });
+    }
+  );
+});
+
+// ============================================================
+// GET - Single Album with Images
+// ============================================================
+app.get("/api/gallery/albums/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    `SELECT * FROM gallery_albums WHERE id = ? AND is_active = 1`,
+    [id],
+    (err, albumResults) => {
+      if (err) {
+        console.error("❌ Album Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (!albumResults || albumResults.length === 0) {
+        return res.status(404).json({ success: false, message: "Album not found" });
+      }
+
+      db.query(
+        `SELECT * FROM gallery_images WHERE album_id = ? ORDER BY \`order\` ASC, created_at DESC`,
+        [id],
+        (imgErr, imgResults) => {
+          if (imgErr) {
+            console.error("❌ Gallery Images Error:", imgErr);
+            return res.status(500).json({ success: false, error: imgErr.message });
+          }
+
+          db.query(
+            `UPDATE gallery_albums SET view_count = view_count + 1 WHERE id = ?`,
+            [id]
+          );
+
+          res.json({
+            success: true,
+            data: {
+              album: albumResults[0],
+              images: imgResults || []
+            }
+          });
+        }
+      );
+    }
+  );
+});
+
+// ============================================================
+// GET - All Gallery Images
+// ============================================================
+app.get("/api/gallery/images", (req, res) => {
+  db.query(
+    `SELECT gi.*, ga.title as album_title, ga.category
+     FROM gallery_images gi
+     JOIN gallery_albums ga ON gi.album_id = ga.id
+     WHERE ga.is_active = 1
+     ORDER BY gi.created_at DESC LIMIT 50`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ Gallery Images Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ success: true, data: results || [] });
+    }
+  );
+});
+
+// ============================================================
+// GET - Gallery Categories
+// ============================================================
+app.get("/api/gallery/categories", (req, res) => {
+  db.query(
+    `SELECT * FROM gallery_categories WHERE is_active = 1 ORDER BY \`order\` ASC`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ Categories Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ success: true, data: results || [] });
+    }
+  );
+});
+
+// ============================================================
+// GET - Gallery Stats
+// ============================================================
+app.get("/api/gallery/stats", (req, res) => {
+  const queries = {
+    total_albums: "SELECT COUNT(*) as count FROM gallery_albums WHERE is_active = 1",
+    total_images: "SELECT COUNT(*) as count FROM gallery_images",
+    total_views: "SELECT SUM(view_count) as count FROM gallery_albums"
+  };
+
+  const results = {};
+  let completed = 0;
+  const totalQueries = Object.keys(queries).length;
+
+  Object.entries(queries).forEach(([key, query]) => {
+    db.query(query, (err, result) => {
+      if (err) {
+        console.error(`❌ Stats Error (${key}):`, err);
+        results[key] = { count: 0 };
+      } else {
+        results[key] = result[0] || { count: 0 };
+      }
+      completed++;
+      
+      if (completed === totalQueries) {
+        res.json({
+          success: true,
+          data: {
+            total_albums: results.total_albums?.count || 0,
+            total_images: results.total_images?.count || 0,
+            total_views: results.total_views?.count || 0
+          }
+        });
+      }
+    });
+  });
+});
+
+// ============================================================
+// POST - Add Gallery Album (Admin)
+// ============================================================
+app.post("/api/gallery/albums/add", uploadSlider.single("cover"), (req, res) => {
+  const { title, description, category, event_date, venue, is_featured } = req.body;
+
+  if (!title) {
+    return res.status(400).json({ success: false, message: "Title is required" });
+  }
+
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const cover_image = req.file ? req.file.path : null;
+  const cover_public_id = req.file ? req.file.filename : null;
+
+  db.query(
+    `INSERT INTO gallery_albums 
+     (title, slug, description, cover_image, cover_public_id, category, event_date, venue, is_featured, created_at) 
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [title, slug, description || '', cover_image, cover_public_id, category || 'general', event_date || null, venue || '', is_featured || 0],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Add Album Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      res.json({
+        success: true,
+        message: "✅ Album created successfully!",
+        data: { id: result.insertId }
+      });
+    }
+  );
+});
+
+// ============================================================
+// POST - Add Gallery Images (Admin)
+// ============================================================
+app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req, res) => {
+  const { album_id, title, description } = req.body;
+
+  if (!album_id) {
+    return res.status(400).json({ success: false, message: "Album ID is required" });
+  }
+
+  if (!req.files || req.files.length === 0) {
+    return res.status(400).json({ success: false, message: "No images uploaded" });
+  }
+
+  const uploaded = [];
+  const errors = [];
+
+  // Get current max order
+  const orderResult = await new Promise((resolve, reject) => {
+    db.query("SELECT MAX(`order`) as maxOrder FROM gallery_images WHERE album_id = ?", [album_id], (err, result) => {
+      if (err) reject(err);
+      else resolve(result);
+    });
+  });
+
+  let nextOrder = (orderResult[0]?.maxOrder || 0) + 1;
+
+  for (const file of req.files) {
+    try {
+      const cloudinaryUrl = file.path;
+      const publicId = file.filename;
+
+      await new Promise((resolve, reject) => {
+        db.query(
+          `INSERT INTO gallery_images 
+           (album_id, filename, file_path, public_id, file_size, mime_type, title, description, \`order\`, created_at) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+          [album_id, publicId, cloudinaryUrl, publicId, file.size || 0, file.mimetype || 'image/jpeg', title || '', description || '', nextOrder++],
+          (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+          }
+        );
+      });
+
+      uploaded.push(publicId);
+
+    } catch (err) {
+      errors.push({ file: file.originalname, error: err.message });
+    }
+  }
+
+  db.query(
+    `UPDATE gallery_albums SET updated_at = NOW() WHERE id = ?`,
+    [album_id]
+  );
+
+  res.json({
+    success: true,
+    message: `${uploaded.length} images uploaded successfully!`,
+    uploaded: uploaded,
+    errors: errors.length > 0 ? errors : undefined
+  });
+});
+
+// ============================================================
+// DELETE - Delete Gallery Image
+// ============================================================
+app.delete("/api/gallery/images/delete/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    "SELECT * FROM gallery_images WHERE id = ?",
+    [id],
+    (err, results) => {
+      if (err) {
+        console.error("❌ Delete Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (!results || results.length === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
+      }
+
+      const image = results[0];
+
+      if (image.public_id) {
+        cloudinary.uploader.destroy(image.public_id).catch(err => console.error("Cloudinary error:", err));
+      }
+
+      db.query(
+        "DELETE FROM gallery_images WHERE id = ?",
+        [id],
+        (deleteErr) => {
+          if (deleteErr) {
+            console.error("❌ Delete DB Error:", deleteErr);
+            return res.status(500).json({ success: false, error: deleteErr.message });
+          }
+
+          res.json({ success: true, message: "✅ Image deleted successfully!" });
+        }
+      );
+    }
+  );
+});
+
+// ============================================================
+// DELETE - Delete Gallery Album
+// ============================================================
+app.delete("/api/gallery/albums/delete/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    "DELETE FROM gallery_albums WHERE id = ?",
+    [id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Delete Album Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Album not found" });
+      }
+
+      res.json({ success: true, message: "✅ Album deleted successfully!" });
+    }
+  );
+});
+
+// ============================================================
+// PUT - Update Gallery Album
+// ============================================================
+app.put("/api/gallery/albums/update/:id", (req, res) => {
+  const { id } = req.params;
+  const { title, description, category, event_date, venue, is_featured, is_active } = req.body;
+
+  if (!title) {
+    return res.status(400).json({ success: false, message: "Title is required" });
+  }
+
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+  db.query(
+    `UPDATE gallery_albums 
+     SET title = ?, slug = ?, description = ?, category = ?, 
+         event_date = ?, venue = ?, is_featured = ?, is_active = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [title, slug, description || '', category || 'general', event_date || null, venue || '', is_featured || 0, is_active !== undefined ? is_active : 1, id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Update Album Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Album not found" });
+      }
+
+      res.json({ success: true, message: "✅ Album updated successfully!" });
+    }
+  );
+});
+
+// ============================================================
 // ANALYTICS ROUTES
 // ============================================================
 
@@ -1399,6 +2097,23 @@ app.use((req, res) => {
       "/admin/contact/messages/delete/:id",
       "/admin/contact/stats",
       "/contact",
+      "/api/gallery/slider",
+      "/api/gallery/slider/add",
+      "/api/gallery/slider/update/:id",
+      "/api/gallery/slider/delete/:id",
+      "/api/gallery/slider/reorder",
+      "/api/gallery/slider/stats",
+      "/api/gallery/albums",
+      "/api/gallery/albums/add",
+      "/api/gallery/albums/update/:id",
+      "/api/gallery/albums/delete/:id",
+      "/api/gallery/albums/:id",
+      "/api/gallery/featured",
+      "/api/gallery/images",
+      "/api/gallery/images/add",
+      "/api/gallery/images/delete/:id",
+      "/api/gallery/categories",
+      "/api/gallery/stats",
       "/analytics/track",
       "/analytics/stats"
     ]
@@ -1427,7 +2142,7 @@ app.listen(PORT, () => {
   console.log("=".repeat(60));
   console.log("✅ AVAILABLE ROUTES:");
   console.log("");
-  console.log("📸 SLIDER IMAGES (Cloudinary):");
+  console.log("📸 SLIDER IMAGES (Homepage):");
   console.log("  GET    /images");
   console.log("  GET    /images/public");
   console.log("  GET    /images/stats");
@@ -1436,7 +2151,7 @@ app.listen(PORT, () => {
   console.log("  POST   /upload");
   console.log("  DELETE /delete");
   console.log("");
-  console.log("📋 RECENT UPDATES (Cloudinary):");
+  console.log("📋 RECENT UPDATES:");
   console.log("  GET    /recent/public");
   console.log("  GET    /recent/admin/all");
   console.log("  POST   /recent/admin/add");
@@ -1445,7 +2160,7 @@ app.listen(PORT, () => {
   console.log("  DELETE /recent/admin/bulk-delete");
   console.log("  GET    /recent/admin/stats");
   console.log("");
-  console.log("🔔 NOTIFICATIONS (Cloudinary):");
+  console.log("🔔 NOTIFICATIONS:");
   console.log("  GET    /api/notifications/public");
   console.log("  GET    /api/notifications/admin/all");
   console.log("  POST   /api/notifications/admin/add");
@@ -1463,6 +2178,25 @@ app.listen(PORT, () => {
   console.log("  GET    /admin/contact/messages/:id");
   console.log("  DELETE /admin/contact/messages/delete/:id");
   console.log("  GET    /admin/contact/stats");
+  console.log("");
+  console.log("🖼️ GALLERY MODULE:");
+  console.log("  GET    /api/gallery/slider");
+  console.log("  POST   /api/gallery/slider/add");
+  console.log("  PUT    /api/gallery/slider/update/:id");
+  console.log("  DELETE /api/gallery/slider/delete/:id");
+  console.log("  PUT    /api/gallery/slider/reorder");
+  console.log("  GET    /api/gallery/slider/stats");
+  console.log("  GET    /api/gallery/albums");
+  console.log("  POST   /api/gallery/albums/add");
+  console.log("  PUT    /api/gallery/albums/update/:id");
+  console.log("  DELETE /api/gallery/albums/delete/:id");
+  console.log("  GET    /api/gallery/albums/:id");
+  console.log("  GET    /api/gallery/featured");
+  console.log("  GET    /api/gallery/images");
+  console.log("  POST   /api/gallery/images/add");
+  console.log("  DELETE /api/gallery/images/delete/:id");
+  console.log("  GET    /api/gallery/categories");
+  console.log("  GET    /api/gallery/stats");
   console.log("");
   console.log("📊 ANALYTICS:");
   console.log("  GET    /analytics/track");
