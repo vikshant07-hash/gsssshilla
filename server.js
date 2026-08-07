@@ -1256,8 +1256,6 @@ app.get("/api/gallery/stats", (req, res) => {
 // DOWNLOAD MODULE ROUTES
 // ============================================================
 
-// Import uploadDownload from cloudinary config
-const { cloudinary, uploadSlider, uploadRecent, uploadDownload } = require("./config/cloudinary");
 
 // GET - Public Downloads with Filters
 app.get("/api/downloads", (req, res) => {
