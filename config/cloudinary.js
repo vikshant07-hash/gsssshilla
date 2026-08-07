@@ -137,13 +137,56 @@ const uploadDownload = multer({
   }
 });
 
+
 // ============================================================
-// EXPORTS (update existing exports)
+// STORAGE FOR FACULTY PHOTOS
+// ============================================================
+const facultyStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: process.env.CLOUDINARY_FACULTY_FOLDER || "school/faculty",
+    resource_type: "auto",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    transformation: [
+      { width: 400, height: 400, crop: "thumb", gravity: "face" },
+      { quality: "auto:good" }
+    ],
+    public_id: (req, file) => {
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
+      return `faculty-${originalName}-${uniqueSuffix}`;
+    }
+  }
+});
+
+// ============================================================
+// MULTER UPLOAD: FACULTY PHOTOS
+// ============================================================
+const uploadFaculty = multer({
+  storage: facultyStorage,
+  limits: { fileSize: 3 * 1024 * 1024 }, // 3MB
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only images (JPEG, PNG, WebP) are allowed!"), false);
+    }
+  }
+});
+
+// ============================================================
+// EXPORTS (update)
 // ============================================================
 module.exports = {
   cloudinary,
   uploadSlider,
   uploadRecent,
-  uploadDownload  // <-- Add this line
+  uploadDownload,
+  uploadFaculty    // <-- Add this
 };
+
+// ============================================================
+// EXPORTS (update existing exports)
+// ============================================================
 
