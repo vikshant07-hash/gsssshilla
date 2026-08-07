@@ -3,7 +3,7 @@ const cors = require("cors");
 require("dotenv").config();
 const path = require("path");
 const fs = require("fs-extra");
-const { cloudinary, uploadSlider, uploadRecent, uploadDownload } = require("./config/cloudinary");
+const { cloudinary, uploadSlider, uploadRecent, uploadFaculty, uploadDownload } = require("./config/cloudinary");
 const { db } = require("./config/db");
 
 const app = express();
@@ -1567,6 +1567,161 @@ app.get("/admin/downloads/stats", (req, res) => {
     });
   });
 });
+
+
+// ============================================================
+// FACULTY MODULE ROUTES
+// ============================================================
+
+// GET - Public Faculty (Grouped by Subject)
+app.get("/api/faculty", (req, res) => {
+  const query = `
+    SELECT * FROM faculty 
+    WHERE is_active = 1 
+    ORDER BY is_principal DESC, \`order\` ASC, name ASC
+  `;
+
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error("❌ Faculty Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+
+    // Separate Principal
+    const principal = results.find(f => f.is_principal == 1);
+    
+    // Group teaching staff by subject
+    const teachingStaff = {};
+    results.forEach(f => {
+      if (!f.is_principal && f.staff_type === 'teaching') {
+        const dept = f.department || 'Other';
+        if (!teachingStaff[dept]) teachingStaff[dept] = [];
+        teachingStaff[dept].push(f);
+      }
+    });
+
+    // Non-teaching staff
+    const nonTeaching = results.filter(f => !f.is_principal && f.staff_type !== 'teaching');
+
+    res.json({
+      success: true,
+      data: {
+        principal: principal || null,
+        teachingStaff: teachingStaff,
+        nonTeaching: nonTeaching
+      }
+    });
+  });
+});
+
+// GET - Admin All Faculty
+app.get("/admin/faculty", (req, res) => {
+  db.query(
+    "SELECT * FROM faculty ORDER BY is_principal DESC, staff_type ASC, `order` ASC, name ASC",
+    (err, results) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, data: results || [] });
+    }
+  );
+});
+
+// GET - Single Faculty
+app.get("/admin/faculty/:id", (req, res) => {
+  db.query("SELECT * FROM faculty WHERE id = ?", [req.params.id], (err, results) => {
+    if (err) return res.status(500).json({ success: false, error: err.message });
+    if (!results || results.length === 0) return res.status(404).json({ success: false, message: "Not found" });
+    res.json({ success: true, data: results[0] });
+  });
+});
+
+// POST - Add Faculty
+app.post("/admin/faculty/add", uploadFaculty.single("photo"), (req, res) => {
+  const { name, designation, department, subject, qualification, experience, email, phone, message, is_principal, staff_type, joining_date } = req.body;
+
+  if (!name || !designation) {
+    return res.status(400).json({ success: false, message: "Name and Designation are required" });
+  }
+
+  const photo_url = req.file ? req.file.path : null;
+  const photo_public_id = req.file ? req.file.filename : null;
+
+  db.query(
+    `INSERT INTO faculty (name, designation, department, subject, qualification, experience, email, phone, message, photo_url, photo_public_id, is_principal, staff_type, joining_date, created_at) 
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [name, designation, department || null, subject || null, qualification || null, experience || null, email || null, phone || null, message || null, photo_url, photo_public_id, is_principal || 0, staff_type || 'teaching', joining_date || null],
+    (err, result) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.status(201).json({ success: true, message: "✅ Faculty added!", data: { id: result.insertId } });
+    }
+  );
+});
+
+// PUT - Update Faculty
+app.put("/admin/faculty/update/:id", uploadFaculty.single("photo"), (req, res) => {
+  const { id } = req.params;
+  const { name, designation, department, subject, qualification, experience, email, phone, message, is_principal, staff_type, is_active, joining_date } = req.body;
+
+  if (!name || !designation) {
+    return res.status(400).json({ success: false, message: "Name and Designation are required" });
+  }
+
+  db.query("SELECT * FROM faculty WHERE id = ?", [id], (err, results) => {
+    if (err || !results || results.length === 0) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+
+    const existing = results[0];
+    let photo_url = existing.photo_url;
+    let photo_public_id = existing.photo_public_id;
+
+    if (req.file) {
+      if (existing.photo_public_id) {
+        cloudinary.uploader.destroy(existing.photo_public_id).catch(e => console.error(e));
+      }
+      photo_url = req.file.path;
+      photo_public_id = req.file.filename;
+    }
+
+    db.query(
+      `UPDATE faculty SET name=?, designation=?, department=?, subject=?, qualification=?, experience=?, email=?, phone=?, message=?, photo_url=?, photo_public_id=?, is_principal=?, staff_type=?, is_active=?, joining_date=?, updated_at=NOW() WHERE id=?`,
+      [name, designation, department || null, subject || null, qualification || null, experience || null, email || null, phone || null, message || null, photo_url, photo_public_id, is_principal || 0, staff_type || 'teaching', is_active !== undefined ? parseInt(is_active) : 1, joining_date || null, id],
+      (updateErr) => {
+        if (updateErr) return res.status(500).json({ success: false, error: updateErr.message });
+        res.json({ success: true, message: "✅ Faculty updated!" });
+      }
+    );
+  });
+});
+
+// DELETE - Delete Faculty
+app.delete("/admin/faculty/delete/:id", (req, res) => {
+  const { id } = req.params;
+  db.query("SELECT * FROM faculty WHERE id = ?", [id], (err, results) => {
+    if (err || !results || results.length === 0) return res.status(404).json({ success: false, message: "Not found" });
+
+    const item = results[0];
+    if (item.photo_public_id) {
+      cloudinary.uploader.destroy(item.photo_public_id).catch(e => console.error(e));
+    }
+
+    db.query("DELETE FROM faculty WHERE id = ?", [id], (deleteErr) => {
+      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
+      res.json({ success: true, message: "✅ Faculty deleted!" });
+    });
+  });
+});
+
+// GET - Departments List
+app.get("/api/faculty/departments", (req, res) => {
+  db.query("SELECT DISTINCT department FROM faculty WHERE is_active = 1 AND department IS NOT NULL ORDER BY department",
+    (err, results) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, data: results.map(r => r.department) });
+    }
+  );
+});
+
+
 
 // ============================================================
 // ANALYTICS ROUTES
