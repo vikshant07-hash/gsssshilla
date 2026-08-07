@@ -33,7 +33,6 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 function runMigration() {
   console.log("🔄 Checking database schema...");
   
-  // Check if public_id column exists in slider_images
   db.query("SHOW COLUMNS FROM slider_images LIKE 'public_id'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
@@ -54,7 +53,6 @@ function runMigration() {
     }
   });
 
-  // Check if public_id column exists in recent_updates
   db.query("SHOW COLUMNS FROM recent_updates LIKE 'public_id'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
@@ -136,6 +134,28 @@ function createTables() {
       INDEX idx_active (is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+    `CREATE TABLE IF NOT EXISTS contact_info (
+      id INT PRIMARY KEY DEFAULT 1,
+      school_name VARCHAR(255) NOT NULL,
+      address TEXT NOT NULL,
+      phone VARCHAR(50) NOT NULL,
+      email VARCHAR(100) NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS contact_messages (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(100) NOT NULL,
+      email VARCHAR(100) NOT NULL,
+      message TEXT NOT NULL,
+      is_read BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_created (created_at DESC),
+      INDEX idx_read (is_read)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
     `CREATE TABLE IF NOT EXISTS analytics (
       id INT PRIMARY KEY AUTO_INCREMENT,
       type VARCHAR(50) NOT NULL,
@@ -155,7 +175,19 @@ function createTables() {
     });
   });
   
-  // Run migration after tables are created
+  // Insert default contact info if not exists
+  setTimeout(() => {
+    db.query(
+      `INSERT INTO contact_info (id, school_name, address, phone, email) 
+       VALUES (1, 'GSS School Shilla', 'Shilla, Himachal Pradesh', '+91 98765 43210', 'info@gssshilla.edu.in')
+       ON DUPLICATE KEY UPDATE id = id`,
+      (err) => {
+        if (err) console.error("❌ Error inserting default contact info:", err.message);
+        else console.log("✅ Default contact info inserted");
+      }
+    );
+  }, 3000);
+  
   setTimeout(runMigration, 2000);
 }
 
@@ -178,6 +210,7 @@ app.get("/", (req, res) => {
       "Recent Updates CRUD",
       "Slider Image Management",
       "Notification Module",
+      "Contact Module",
       "Analytics Tracking",
       "Cloudinary Storage"
     ]
@@ -768,14 +801,10 @@ app.get("/recent/admin/stats", (req, res) => {
 });
 
 // ============================================================
-// ============================================================
 // NOTIFICATION MODULE ROUTES
 // ============================================================
-// ============================================================
 
-// ============================================================
 // GET - All Notifications (Admin)
-// ============================================================
 app.get("/api/notifications/admin/all", (req, res) => {
   db.query(
     `SELECT *, 
@@ -794,9 +823,7 @@ app.get("/api/notifications/admin/all", (req, res) => {
   );
 });
 
-// ============================================================
 // GET - Public Notifications
-// ============================================================
 app.get("/api/notifications/public", (req, res) => {
   db.query(
     `SELECT *, 
@@ -815,9 +842,7 @@ app.get("/api/notifications/public", (req, res) => {
   );
 });
 
-// ============================================================
 // GET - Single Notification
-// ============================================================
 app.get("/api/notifications/:id", (req, res) => {
   const { id } = req.params;
 
@@ -840,9 +865,7 @@ app.get("/api/notifications/:id", (req, res) => {
   );
 });
 
-// ============================================================
 // POST - Add Notification with File Upload
-// ============================================================
 app.post("/api/notifications/admin/add", uploadRecent.single("file"), (req, res) => {
   console.log("📋 Add Notification Request");
   console.log("📋 Body:", req.body);
@@ -899,9 +922,7 @@ app.post("/api/notifications/admin/add", uploadRecent.single("file"), (req, res)
   );
 });
 
-// ============================================================
 // PUT - Update Notification
-// ============================================================
 app.put("/api/notifications/admin/update/:id", uploadRecent.single("file"), (req, res) => {
   const { id } = req.params;
   const { title, description, attendance, is_active } = req.body;
@@ -925,7 +946,6 @@ app.put("/api/notifications/admin/update/:id", uploadRecent.single("file"), (req
     let file_type = existing.file_type;
 
     if (req.file) {
-      // Delete old file from Cloudinary if exists
       if (existing.public_id) {
         cloudinary.uploader.destroy(existing.public_id)
           .then(result => console.log("✅ Old Cloudinary file deleted:", result))
@@ -981,9 +1001,7 @@ app.put("/api/notifications/admin/update/:id", uploadRecent.single("file"), (req
   });
 });
 
-// ============================================================
 // DELETE - Delete Notification
-// ============================================================
 app.delete("/api/notifications/admin/delete/:id", (req, res) => {
   const { id } = req.params;
   console.log("🗑️ DELETE Notification ID:", id);
@@ -1023,9 +1041,7 @@ app.delete("/api/notifications/admin/delete/:id", (req, res) => {
   });
 });
 
-// ============================================================
 // DELETE - Bulk Delete Notifications
-// ============================================================
 app.delete("/api/notifications/admin/bulk-delete", (req, res) => {
   const { ids } = req.body;
 
@@ -1058,9 +1074,7 @@ app.delete("/api/notifications/admin/bulk-delete", (req, res) => {
   });
 });
 
-// ============================================================
 // GET - Notification Stats
-// ============================================================
 app.get("/api/notifications/admin/stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as total FROM notifications",
@@ -1094,9 +1108,7 @@ app.get("/api/notifications/admin/stats", (req, res) => {
 // CONTACT MODULE ROUTES
 // ============================================================
 
-// ============================================================
 // GET - Contact Info (Public)
-// ============================================================
 app.get("/admin/contact/info", (req, res) => {
   db.query(
     `SELECT * FROM contact_info WHERE id = 1`,
@@ -1107,7 +1119,6 @@ app.get("/admin/contact/info", (req, res) => {
       }
       
       if (!results || results.length === 0) {
-        // Default values if no data
         return res.json({
           school_name: "GSS School Shilla",
           address: "Shilla, Himachal Pradesh",
@@ -1121,9 +1132,7 @@ app.get("/admin/contact/info", (req, res) => {
   );
 });
 
-// ============================================================
 // POST - Contact Form Submit
-// ============================================================
 app.post("/contact", (req, res) => {
   const { name, email, message } = req.body;
 
@@ -1139,7 +1148,14 @@ app.post("/contact", (req, res) => {
     });
   }
 
-  // Save to database
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({
+      success: false,
+      message: "Please enter a valid email address"
+    });
+  }
+
   db.query(
     `INSERT INTO contact_messages (name, email, message, created_at) 
      VALUES (?, ?, ?, NOW())`,
@@ -1163,9 +1179,7 @@ app.post("/contact", (req, res) => {
   );
 });
 
-// ============================================================
 // GET - All Contact Messages (Admin)
-// ============================================================
 app.get("/admin/contact/messages", (req, res) => {
   db.query(
     `SELECT *, 
@@ -1182,9 +1196,7 @@ app.get("/admin/contact/messages", (req, res) => {
   );
 });
 
-// ============================================================
 // GET - Single Contact Message
-// ============================================================
 app.get("/admin/contact/messages/:id", (req, res) => {
   const { id } = req.params;
 
@@ -1204,9 +1216,7 @@ app.get("/admin/contact/messages/:id", (req, res) => {
   );
 });
 
-// ============================================================
 // DELETE - Delete Contact Message
-// ============================================================
 app.delete("/admin/contact/messages/delete/:id", (req, res) => {
   const { id } = req.params;
 
@@ -1232,9 +1242,7 @@ app.delete("/admin/contact/messages/delete/:id", (req, res) => {
   );
 });
 
-// ============================================================
 // PUT - Update Contact Info
-// ============================================================
 app.put("/admin/contact/info/update", (req, res) => {
   const { school_name, address, phone, email } = req.body;
 
@@ -1256,7 +1264,6 @@ app.put("/admin/contact/info/update", (req, res) => {
         return res.status(500).json({ success: false, error: err.message });
       }
 
-      // If no rows affected, insert new
       if (result.affectedRows === 0) {
         db.query(
           `INSERT INTO contact_info (id, school_name, address, phone, email, created_at) 
@@ -1277,9 +1284,7 @@ app.put("/admin/contact/info/update", (req, res) => {
   );
 });
 
-// ============================================================
 // GET - Contact Stats
-// ============================================================
 app.get("/admin/contact/stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as total FROM contact_messages",
@@ -1387,6 +1392,13 @@ app.use((req, res) => {
       "/api/notifications/admin/bulk-delete",
       "/api/notifications/admin/stats",
       "/api/notifications/:id",
+      "/admin/contact/info",
+      "/admin/contact/info/update",
+      "/admin/contact/messages",
+      "/admin/contact/messages/:id",
+      "/admin/contact/messages/delete/:id",
+      "/admin/contact/stats",
+      "/contact",
       "/analytics/track",
       "/analytics/stats"
     ]
@@ -1442,6 +1454,15 @@ app.listen(PORT, () => {
   console.log("  DELETE /api/notifications/admin/bulk-delete");
   console.log("  GET    /api/notifications/admin/stats");
   console.log("  GET    /api/notifications/:id");
+  console.log("");
+  console.log("📞 CONTACT MODULE:");
+  console.log("  GET    /admin/contact/info");
+  console.log("  PUT    /admin/contact/info/update");
+  console.log("  POST   /contact");
+  console.log("  GET    /admin/contact/messages");
+  console.log("  GET    /admin/contact/messages/:id");
+  console.log("  DELETE /admin/contact/messages/delete/:id");
+  console.log("  GET    /admin/contact/stats");
   console.log("");
   console.log("📊 ANALYTICS:");
   console.log("  GET    /analytics/track");
