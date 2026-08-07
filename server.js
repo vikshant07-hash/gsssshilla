@@ -33,43 +33,71 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 function runMigration() {
   console.log("🔄 Checking database schema...");
   
+  // Check for slider_images
   db.query("SHOW COLUMNS FROM slider_images LIKE 'public_id'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
       return;
     }
-    
     if (!results || results.length === 0) {
       console.log("📌 Adding public_id column to slider_images...");
       db.query("ALTER TABLE slider_images ADD COLUMN public_id VARCHAR(255) AFTER file_path", (err) => {
-        if (err) {
-          console.error("❌ Error adding public_id to slider_images:", err.message);
-        } else {
-          console.log("✅ public_id column added to slider_images");
-        }
+        if (err) console.error("❌ Error adding public_id to slider_images:", err.message);
+        else console.log("✅ public_id column added to slider_images");
       });
     } else {
       console.log("✅ public_id column already exists in slider_images");
     }
   });
 
+  // Check for recent_updates
   db.query("SHOW COLUMNS FROM recent_updates LIKE 'public_id'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
       return;
     }
-    
     if (!results || results.length === 0) {
       console.log("📌 Adding public_id column to recent_updates...");
       db.query("ALTER TABLE recent_updates ADD COLUMN public_id VARCHAR(255) AFTER file_url", (err) => {
-        if (err) {
-          console.error("❌ Error adding public_id to recent_updates:", err.message);
-        } else {
-          console.log("✅ public_id column added to recent_updates");
-        }
+        if (err) console.error("❌ Error adding public_id to recent_updates:", err.message);
+        else console.log("✅ public_id column added to recent_updates");
       });
     } else {
       console.log("✅ public_id column already exists in recent_updates");
+    }
+  });
+
+  // Check for gallery_images - is_recent column
+  db.query("SHOW COLUMNS FROM gallery_images LIKE 'is_recent'", (err, results) => {
+    if (err) {
+      console.error("❌ Error checking columns:", err.message);
+      return;
+    }
+    if (!results || results.length === 0) {
+      console.log("📌 Adding is_recent column to gallery_images...");
+      db.query("ALTER TABLE gallery_images ADD COLUMN is_recent BOOLEAN DEFAULT 1 AFTER is_featured", (err) => {
+        if (err) console.error("❌ Error adding is_recent to gallery_images:", err.message);
+        else console.log("✅ is_recent column added to gallery_images");
+      });
+    } else {
+      console.log("✅ is_recent column already exists in gallery_images");
+    }
+  });
+
+  // Check for gallery_images - category column
+  db.query("SHOW COLUMNS FROM gallery_images LIKE 'category'", (err, results) => {
+    if (err) {
+      console.error("❌ Error checking columns:", err.message);
+      return;
+    }
+    if (!results || results.length === 0) {
+      console.log("📌 Adding category column to gallery_images...");
+      db.query("ALTER TABLE gallery_images ADD COLUMN category VARCHAR(100) DEFAULT 'general' AFTER album_id", (err) => {
+        if (err) console.error("❌ Error adding category to gallery_images:", err.message);
+        else console.log("✅ category column added to gallery_images");
+      });
+    } else {
+      console.log("✅ category column already exists in gallery_images");
     }
   });
 }
@@ -190,6 +218,7 @@ function createTables() {
     `CREATE TABLE IF NOT EXISTS gallery_images (
       id INT PRIMARY KEY AUTO_INCREMENT,
       album_id INT NOT NULL,
+      category VARCHAR(100) DEFAULT 'general',
       filename VARCHAR(255) NOT NULL,
       file_path VARCHAR(500) NOT NULL,
       public_id VARCHAR(255),
@@ -200,11 +229,14 @@ function createTables() {
       alt_text VARCHAR(255),
       \`order\` INT DEFAULT 0,
       is_featured BOOLEAN DEFAULT 0,
+      is_recent BOOLEAN DEFAULT 1,
       view_count INT DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (album_id) REFERENCES gallery_albums(id) ON DELETE CASCADE,
       INDEX idx_album (album_id),
+      INDEX idx_category (category),
       INDEX idx_order (\`order\`),
+      INDEX idx_recent (is_recent),
       INDEX idx_featured (is_featured)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -255,7 +287,7 @@ function createTables() {
     });
   });
   
-  // Insert default contact info if not exists
+  // Insert default contact info
   setTimeout(() => {
     db.query(
       `INSERT INTO contact_info (id, school_name, address, phone, email) 
@@ -277,12 +309,7 @@ function createTables() {
       ('Cultural', 'cultural', 'fa-music', 3),
       ('Annual Function', 'annual-function', 'fa-calendar-star', 4),
       ('Science Exhibition', 'science-exhibition', 'fa-flask', 5),
-      ('Republic Day', 'republic-day', 'fa-flag-india', 6),
-      ('Independence Day', 'independence-day', 'fa-flag', 7),
-      ('Workshops', 'workshops', 'fa-tools', 8),
-      ('Seminars', 'seminars', 'fa-chalkboard-teacher', 9),
-      ('Alumni', 'alumni', 'fa-users', 10),
-      ('Achievements', 'achievements', 'fa-trophy', 11)`,
+      ('Republic Day', 'republic-day', 'fa-flag-india', 6)`,
       (err) => {
         if (err) console.error("❌ Error inserting default categories:", err.message);
         else console.log("✅ Default gallery categories inserted");
@@ -960,7 +987,7 @@ app.get("/api/notifications/:id", (req, res) => {
   );
 });
 
-// POST - Add Notification with File Upload
+// POST - Add Notification
 app.post("/api/notifications/admin/add", uploadRecent.single("file"), (req, res) => {
   console.log("📋 Add Notification Request");
   console.log("📋 Body:", req.body);
@@ -1617,35 +1644,36 @@ app.get("/api/gallery/slider/stats", (req, res) => {
 // ============================================================
 app.get("/api/gallery/albums", (req, res) => {
   const { category, year, search, page = 1, limit = 12 } = req.query;
-  let query = `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
-     FROM gallery_albums WHERE is_active = 1`;
+  let query = `SELECT a.*, 
+     (SELECT COUNT(*) FROM gallery_images WHERE album_id = a.id) as photo_count,
+     DATE_FORMAT(CONVERT_TZ(a.created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+     FROM gallery_albums a
+     WHERE a.is_active = 1`;
   let params = [];
   let countQuery = `SELECT COUNT(*) as total FROM gallery_albums WHERE is_active = 1`;
 
   if (category && category !== 'all') {
-    query += ` AND category = ?`;
+    query += ` AND a.category = ?`;
     countQuery += ` AND category = ?`;
     params.push(category);
   }
 
   if (year && year !== 'all') {
-    query += ` AND YEAR(event_date) = ?`;
-    countQuery += ` AND YEAR(event_date) = ?`;
+    query += ` AND YEAR(a.created_at) = ?`;
+    countQuery += ` AND YEAR(created_at) = ?`;
     params.push(year);
   }
 
   if (search) {
-    query += ` AND (title LIKE ? OR description LIKE ?)`;
+    query += ` AND (a.title LIKE ? OR a.description LIKE ?)`;
     countQuery += ` AND (title LIKE ? OR description LIKE ?)`;
     params.push(`%${search}%`, `%${search}%`);
   }
 
   const offset = (parseInt(page) - 1) * parseInt(limit);
-  query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  query += ` ORDER BY a.created_at DESC LIMIT ? OFFSET ?`;
   params.push(parseInt(limit), offset);
 
-  // Get total count
   db.query(countQuery, params.slice(0, params.length - 2), (countErr, countResult) => {
     if (countErr) {
       console.error("❌ Count Error:", countErr);
@@ -1740,18 +1768,54 @@ app.get("/api/gallery/albums/:id", (req, res) => {
 });
 
 // ============================================================
-// GET - All Gallery Images
+// GET - All Gallery Images (with category & recent filter)
 // ============================================================
 app.get("/api/gallery/images", (req, res) => {
-  db.query(
-    `SELECT gi.*, ga.title as album_title, ga.category
+  const { category, recent, album_id } = req.query;
+  let query = `SELECT gi.*, ga.title as album_title, ga.category as album_category
      FROM gallery_images gi
-     JOIN gallery_albums ga ON gi.album_id = ga.id
-     WHERE ga.is_active = 1
-     ORDER BY gi.created_at DESC LIMIT 50`,
+     LEFT JOIN gallery_albums ga ON gi.album_id = ga.id
+     WHERE 1=1`;
+  let params = [];
+
+  if (category && category !== 'all') {
+    query += ` AND gi.category = ?`;
+    params.push(category);
+  }
+
+  if (recent === '1') {
+    query += ` AND gi.is_recent = 1`;
+  }
+
+  if (album_id) {
+    query += ` AND gi.album_id = ?`;
+    params.push(album_id);
+  }
+
+  query += ` ORDER BY gi.created_at DESC LIMIT 50`;
+
+  db.query(query, params, (err, results) => {
+    if (err) {
+      console.error("❌ Gallery Images Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    res.json({ success: true, data: results || [] });
+  });
+});
+
+// ============================================================
+// GET - Recent Images (for collage)
+// ============================================================
+app.get("/api/gallery/recent", (req, res) => {
+  db.query(
+    `SELECT gi.*, ga.title as album_title
+     FROM gallery_images gi
+     LEFT JOIN gallery_albums ga ON gi.album_id = ga.id
+     WHERE gi.is_recent = 1
+     ORDER BY gi.created_at DESC LIMIT 5`,
     (err, results) => {
       if (err) {
-        console.error("❌ Gallery Images Error:", err);
+        console.error("❌ Recent Images Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
       res.json({ success: true, data: results || [] });
@@ -1848,10 +1912,15 @@ app.post("/api/gallery/albums/add", uploadSlider.single("cover"), (req, res) => 
 });
 
 // ============================================================
-// POST - Add Gallery Images (Admin)
+// POST - Add Gallery Images (Admin) - WITH CATEGORY & RECENT
 // ============================================================
 app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req, res) => {
-  const { album_id, title, description } = req.body;
+  const { album_id, category, title, description, is_recent } = req.body;
+
+  console.log("📸 Add Gallery Image Request");
+  console.log("📸 Album ID:", album_id);
+  console.log("📸 Category:", category);
+  console.log("📸 Recent:", is_recent);
 
   if (!album_id) {
     return res.status(400).json({ success: false, message: "Album ID is required" });
@@ -1882,9 +1951,9 @@ app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req
       await new Promise((resolve, reject) => {
         db.query(
           `INSERT INTO gallery_images 
-           (album_id, filename, file_path, public_id, file_size, mime_type, title, description, \`order\`, created_at) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-          [album_id, publicId, cloudinaryUrl, publicId, file.size || 0, file.mimetype || 'image/jpeg', title || '', description || '', nextOrder++],
+           (album_id, category, filename, file_path, public_id, file_size, mime_type, title, description, is_recent, \`order\`, created_at) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+          [album_id, category || 'general', publicId, cloudinaryUrl, publicId, file.size || 0, file.mimetype || 'image/jpeg', title || '', description || '', is_recent !== undefined ? parseInt(is_recent) : 1, nextOrder++],
           (err, result) => {
             if (err) reject(err);
             else resolve(result);
@@ -1954,6 +2023,75 @@ app.delete("/api/gallery/images/delete/:id", (req, res) => {
 });
 
 // ============================================================
+// UPDATE - Update Gallery Image (Title, Description, Category, Recent)
+// ============================================================
+app.put("/api/gallery/images/update/:id", (req, res) => {
+  const { id } = req.params;
+  const { title, description, category, is_recent } = req.body;
+
+  db.query(
+    `UPDATE gallery_images 
+     SET title = ?, description = ?, category = ?, is_recent = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [title || '', description || '', category || 'general', is_recent !== undefined ? parseInt(is_recent) : 1, id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Update Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
+      }
+
+      res.json({ success: true, message: "✅ Image updated successfully!" });
+    }
+  );
+});
+
+// ============================================================
+// PUT - Toggle Recent Status (for collage)
+// ============================================================
+app.put("/api/gallery/images/toggle-recent/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    "SELECT is_recent FROM gallery_images WHERE id = ?",
+    [id],
+    (err, results) => {
+      if (err) {
+        console.error("❌ Fetch Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (!results || results.length === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
+      }
+
+      const current = results[0].is_recent;
+      const newStatus = current == 1 ? 0 : 1;
+
+      db.query(
+        "UPDATE gallery_images SET is_recent = ?, updated_at = NOW() WHERE id = ?",
+        [newStatus, id],
+        (updateErr) => {
+          if (updateErr) {
+            console.error("❌ Update Error:", updateErr);
+            return res.status(500).json({ success: false, error: updateErr.message });
+          }
+
+          res.json({
+            success: true,
+            message: newStatus == 1 ? "✅ Added to recent collage!" : "✅ Removed from recent collage!",
+            data: { is_recent: newStatus }
+          });
+        }
+      );
+    }
+  );
+});
+
+// ============================================================
 // DELETE - Delete Gallery Album
 // ============================================================
 app.delete("/api/gallery/albums/delete/:id", (req, res) => {
@@ -1980,7 +2118,7 @@ app.delete("/api/gallery/albums/delete/:id", (req, res) => {
 // ============================================================
 // PUT - Update Gallery Album
 // ============================================================
-app.put("/api/gallery/albums/update/:id", (req, res) => {
+app.put("/api/gallery/albums/update/:id", uploadSlider.single("cover"), (req, res) => {
   const { id } = req.params;
   const { title, description, category, event_date, venue, is_featured, is_active } = req.body;
 
@@ -1989,32 +2127,60 @@ app.put("/api/gallery/albums/update/:id", (req, res) => {
   }
 
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  
+  let cover_image = null;
+  let cover_public_id = null;
 
-  db.query(
-    `UPDATE gallery_albums 
-     SET title = ?, slug = ?, description = ?, category = ?, 
-         event_date = ?, venue = ?, is_featured = ?, is_active = ?, updated_at = NOW()
-     WHERE id = ?`,
-    [title, slug, description || '', category || 'general', event_date || null, venue || '', is_featured || 0, is_active !== undefined ? is_active : 1, id],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Update Album Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
+  if (req.file) {
+    cover_image = req.file.path;
+    cover_public_id = req.file.filename;
+  }
+
+  // If cover image is provided, update it
+  if (cover_image) {
+    db.query(
+      `UPDATE gallery_albums 
+       SET title = ?, slug = ?, description = ?, category = ?, 
+           event_date = ?, venue = ?, cover_image = ?, cover_public_id = ?,
+           is_featured = ?, is_active = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [title, slug, description || '', category || 'general', event_date || null, venue || '', cover_image, cover_public_id, is_featured || 0, is_active !== undefined ? is_active : 1, id],
+      (err, result) => {
+        if (err) {
+          console.error("❌ Update Album Error:", err);
+          return res.status(500).json({ success: false, error: err.message });
+        }
+        if (result.affectedRows === 0) {
+          return res.status(404).json({ success: false, message: "Album not found" });
+        }
+        res.json({ success: true, message: "✅ Album updated successfully!" });
       }
-
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ success: false, message: "Album not found" });
+    );
+  } else {
+    db.query(
+      `UPDATE gallery_albums 
+       SET title = ?, slug = ?, description = ?, category = ?, 
+           event_date = ?, venue = ?,
+           is_featured = ?, is_active = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [title, slug, description || '', category || 'general', event_date || null, venue || '', is_featured || 0, is_active !== undefined ? is_active : 1, id],
+      (err, result) => {
+        if (err) {
+          console.error("❌ Update Album Error:", err);
+          return res.status(500).json({ success: false, error: err.message });
+        }
+        if (result.affectedRows === 0) {
+          return res.status(404).json({ success: false, message: "Album not found" });
+        }
+        res.json({ success: true, message: "✅ Album updated successfully!" });
       }
-
-      res.json({ success: true, message: "✅ Album updated successfully!" });
-    }
-  );
+    );
+  }
 });
 
 // ============================================================
 // ANALYTICS ROUTES
 // ============================================================
-
 app.get("/analytics/track", (req, res) => {
   const ip = req.ip || req.connection.remoteAddress;
   const userAgent = req.headers['user-agent'] || '';
@@ -2112,6 +2278,9 @@ app.use((req, res) => {
       "/api/gallery/images",
       "/api/gallery/images/add",
       "/api/gallery/images/delete/:id",
+      "/api/gallery/images/update/:id",
+      "/api/gallery/images/toggle-recent/:id",
+      "/api/gallery/recent",
       "/api/gallery/categories",
       "/api/gallery/stats",
       "/analytics/track",
@@ -2195,6 +2364,9 @@ app.listen(PORT, () => {
   console.log("  GET    /api/gallery/images");
   console.log("  POST   /api/gallery/images/add");
   console.log("  DELETE /api/gallery/images/delete/:id");
+  console.log("  PUT    /api/gallery/images/update/:id");
+  console.log("  PUT    /api/gallery/images/toggle-recent/:id");
+  console.log("  GET    /api/gallery/recent");
   console.log("  GET    /api/gallery/categories");
   console.log("  GET    /api/gallery/stats");
   console.log("");
