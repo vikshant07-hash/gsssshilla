@@ -1436,7 +1436,7 @@ app.get("/admin/contact/stats", (req, res) => {
 });
 
 // ============================================================
-// GALLERY MODULE ROUTES
+// GALLERY MODULE ROUTES - COMPLETE
 // ============================================================
 
 // ============================================================
@@ -1462,6 +1462,26 @@ app.get("/api/gallery/slider", (req, res) => {
 });
 
 // ============================================================
+// GET - Admin Slider Images
+// ============================================================
+app.get("/api/gallery/slider/admin/all", (req, res) => {
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist,
+     DATE_FORMAT(CONVERT_TZ(updated_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as updated_at_ist
+     FROM gallery_slider 
+     ORDER BY \`order\` ASC, created_at DESC`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ success: true, data: results || [] });
+    }
+  );
+});
+
+// ============================================================
 // POST - Add Gallery Slider Image (Admin)
 // ============================================================
 app.post("/api/gallery/slider/add", uploadSlider.single("image"), (req, res) => {
@@ -1478,12 +1498,17 @@ app.post("/api/gallery/slider/add", uploadSlider.single("image"), (req, res) => 
   const filename = req.file.filename;
 
   db.query("SELECT MAX(`order`) as maxOrder FROM gallery_slider", (err, result) => {
+    if (err) {
+      console.error("❌ Order Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+
     const nextOrder = (result[0]?.maxOrder || 0) + 1;
 
     db.query(
       `INSERT INTO gallery_slider 
-       (filename, file_path, public_id, title, description, link, \`order\`, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+       (filename, file_path, public_id, title, description, link, \`order\`, is_active, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW())`,
       [filename, file_path, public_id, title || '', description || '', link || '', nextOrder],
       (insertErr, insertResult) => {
         if (insertErr) {
@@ -1499,6 +1524,33 @@ app.post("/api/gallery/slider/add", uploadSlider.single("image"), (req, res) => 
       }
     );
   });
+});
+
+// ============================================================
+// PUT - Update Gallery Slider Image (Admin)
+// ============================================================
+app.put("/api/gallery/slider/update/:id", (req, res) => {
+  const { id } = req.params;
+  const { title, description, link, is_active } = req.body;
+
+  db.query(
+    `UPDATE gallery_slider 
+     SET title = ?, description = ?, link = ?, is_active = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [title || '', description || '', link || '', is_active !== undefined ? parseInt(is_active) : 1, id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Update Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
+      }
+
+      res.json({ success: true, message: "✅ Slider image updated successfully!" });
+    }
+  );
 });
 
 // ============================================================
@@ -1557,34 +1609,7 @@ app.delete("/api/gallery/slider/delete/:id", (req, res) => {
 });
 
 // ============================================================
-// PUT - Update Gallery Slider Image (Admin)
-// ============================================================
-app.put("/api/gallery/slider/update/:id", (req, res) => {
-  const { id } = req.params;
-  const { title, description, link, is_active } = req.body;
-
-  db.query(
-    `UPDATE gallery_slider 
-     SET title = ?, description = ?, link = ?, is_active = ?, updated_at = NOW()
-     WHERE id = ?`,
-    [title || '', description || '', link || '', is_active !== undefined ? is_active : 1, id],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Update Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ success: false, message: "Image not found" });
-      }
-
-      res.json({ success: true, message: "✅ Slider image updated successfully!" });
-    }
-  );
-});
-
-// ============================================================
-// PUT - Gallery Slider Reorder (Admin)
+// PUT - Reorder Gallery Slider Images (Admin)
 // ============================================================
 app.put("/api/gallery/slider/reorder", (req, res) => {
   const { orders } = req.body;
@@ -1671,7 +1696,7 @@ app.get("/api/gallery/albums", (req, res) => {
   }
 
   const offset = (parseInt(page) - 1) * parseInt(limit);
-  query += ` ORDER BY a.created_at DESC LIMIT ? OFFSET ?`;
+  query += ` ORDER BY a.is_featured DESC, a.created_at DESC LIMIT ? OFFSET ?`;
   params.push(parseInt(limit), offset);
 
   db.query(countQuery, params.slice(0, params.length - 2), (countErr, countResult) => {
@@ -1728,7 +1753,9 @@ app.get("/api/gallery/albums/:id", (req, res) => {
   const { id } = req.params;
 
   db.query(
-    `SELECT * FROM gallery_albums WHERE id = ? AND is_active = 1`,
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+     FROM gallery_albums WHERE id = ? AND is_active = 1`,
     [id],
     (err, albumResults) => {
       if (err) {
@@ -1741,7 +1768,10 @@ app.get("/api/gallery/albums/:id", (req, res) => {
       }
 
       db.query(
-        `SELECT * FROM gallery_images WHERE album_id = ? ORDER BY \`order\` ASC, created_at DESC`,
+        `SELECT *, 
+         DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
+         FROM gallery_images WHERE album_id = ? 
+         ORDER BY \`order\` ASC, is_featured DESC, created_at DESC`,
         [id],
         (imgErr, imgResults) => {
           if (imgErr) {
@@ -1751,7 +1781,12 @@ app.get("/api/gallery/albums/:id", (req, res) => {
 
           db.query(
             `UPDATE gallery_albums SET view_count = view_count + 1 WHERE id = ?`,
-            [id]
+            [id],
+            (updateErr) => {
+              if (updateErr) {
+                console.warn("⚠️ View count update error:", updateErr.message);
+              }
+            }
           );
 
           res.json({
@@ -1768,17 +1803,132 @@ app.get("/api/gallery/albums/:id", (req, res) => {
 });
 
 // ============================================================
-// GET - All Gallery Images (with category & recent filter)
+// POST - Add Gallery Album (Admin)
+// ============================================================
+app.post("/api/gallery/albums/add", uploadSlider.single("cover"), (req, res) => {
+  const { title, description, category, event_date, venue, is_featured, is_active } = req.body;
+
+  if (!title) {
+    return res.status(400).json({ success: false, message: "Title is required" });
+  }
+
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const cover_image = req.file ? req.file.path : null;
+  const cover_public_id = req.file ? req.file.filename : null;
+
+  db.query(
+    `INSERT INTO gallery_albums 
+     (title, slug, description, cover_image, cover_public_id, category, event_date, venue, is_featured, is_active, created_at) 
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [
+      title, 
+      slug, 
+      description || '', 
+      cover_image, 
+      cover_public_id, 
+      category || 'general', 
+      event_date || null, 
+      venue || '', 
+      is_featured || 0, 
+      is_active !== undefined ? parseInt(is_active) : 1
+    ],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Add Album Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      res.json({
+        success: true,
+        message: "✅ Album created successfully!",
+        data: { id: result.insertId }
+      });
+    }
+  );
+});
+
+// ============================================================
+// PUT - Update Gallery Album (Admin)
+// ============================================================
+app.put("/api/gallery/albums/update/:id", uploadSlider.single("cover"), (req, res) => {
+  const { id } = req.params;
+  const { title, description, category, event_date, venue, is_featured, is_active } = req.body;
+
+  if (!title) {
+    return res.status(400).json({ success: false, message: "Title is required" });
+  }
+
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  
+  let cover_image = null;
+  let cover_public_id = null;
+
+  if (req.file) {
+    cover_image = req.file.path;
+    cover_public_id = req.file.filename;
+  }
+
+  db.query(
+    `UPDATE gallery_albums 
+     SET title = ?, slug = ?, description = ?, category = ?, 
+         event_date = ?, venue = ?, is_featured = ?, is_active = ?, updated_at = NOW()
+     ${cover_image ? ', cover_image = ?, cover_public_id = ?' : ''}
+     WHERE id = ?`,
+    cover_image 
+      ? [title, slug, description || '', category || 'general', event_date || null, venue || '', is_featured || 0, is_active !== undefined ? parseInt(is_active) : 1, cover_image, cover_public_id, id]
+      : [title, slug, description || '', category || 'general', event_date || null, venue || '', is_featured || 0, is_active !== undefined ? parseInt(is_active) : 1, id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Update Album Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Album not found" });
+      }
+
+      res.json({ success: true, message: "✅ Album updated successfully!" });
+    }
+  );
+});
+
+// ============================================================
+// DELETE - Delete Gallery Album (Admin)
+// ============================================================
+app.delete("/api/gallery/albums/delete/:id", (req, res) => {
+  const { id } = req.params;
+
+  db.query(
+    "DELETE FROM gallery_albums WHERE id = ?",
+    [id],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Delete Album Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Album not found" });
+      }
+
+      res.json({ success: true, message: "✅ Album deleted successfully!" });
+    }
+  );
+});
+
+// ============================================================
+// GET - All Gallery Images (with filters)
 // ============================================================
 app.get("/api/gallery/images", (req, res) => {
-  const { category, recent, album_id } = req.query;
-  let query = `SELECT gi.*, ga.title as album_title, ga.category as album_category
+  const { category, recent, album_id, featured } = req.query;
+  let query = `SELECT gi.*, ga.title as album_title, ga.category as album_category,
+     DATE_FORMAT(CONVERT_TZ(gi.created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
      FROM gallery_images gi
      LEFT JOIN gallery_albums ga ON gi.album_id = ga.id
      WHERE 1=1`;
   let params = [];
 
-  if (category && category !== 'all') {
+  if (category && category !== 'all' && category !== '') {
     query += ` AND gi.category = ?`;
     params.push(category);
   }
@@ -1787,12 +1937,16 @@ app.get("/api/gallery/images", (req, res) => {
     query += ` AND gi.is_recent = 1`;
   }
 
+  if (featured === '1') {
+    query += ` AND gi.is_featured = 1`;
+  }
+
   if (album_id) {
     query += ` AND gi.album_id = ?`;
     params.push(album_id);
   }
 
-  query += ` ORDER BY gi.created_at DESC LIMIT 50`;
+  query += ` ORDER BY gi.is_featured DESC, gi.created_at DESC LIMIT 50`;
 
   db.query(query, params, (err, results) => {
     if (err) {
@@ -1808,11 +1962,12 @@ app.get("/api/gallery/images", (req, res) => {
 // ============================================================
 app.get("/api/gallery/recent", (req, res) => {
   db.query(
-    `SELECT gi.*, ga.title as album_title
+    `SELECT gi.*, ga.title as album_title,
+     DATE_FORMAT(CONVERT_TZ(gi.created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
      FROM gallery_images gi
      LEFT JOIN gallery_albums ga ON gi.album_id = ga.id
      WHERE gi.is_recent = 1
-     ORDER BY gi.created_at DESC LIMIT 5`,
+     ORDER BY gi.sort_order ASC, gi.created_at DESC LIMIT 5`,
     (err, results) => {
       if (err) {
         console.error("❌ Recent Images Error:", err);
@@ -1846,7 +2001,9 @@ app.get("/api/gallery/stats", (req, res) => {
   const queries = {
     total_albums: "SELECT COUNT(*) as count FROM gallery_albums WHERE is_active = 1",
     total_images: "SELECT COUNT(*) as count FROM gallery_images",
-    total_views: "SELECT SUM(view_count) as count FROM gallery_albums"
+    total_recent: "SELECT COUNT(*) as count FROM gallery_images WHERE is_recent = 1",
+    total_views: "SELECT SUM(view_count) as count FROM gallery_albums",
+    total_slider: "SELECT COUNT(*) as count FROM gallery_slider WHERE is_active = 1"
   };
 
   const results = {};
@@ -1869,7 +2026,9 @@ app.get("/api/gallery/stats", (req, res) => {
           data: {
             total_albums: results.total_albums?.count || 0,
             total_images: results.total_images?.count || 0,
-            total_views: results.total_views?.count || 0
+            total_recent: results.total_recent?.count || 0,
+            total_views: results.total_views?.count || 0,
+            total_slider: results.total_slider?.count || 0
           }
         });
       }
@@ -1878,49 +2037,16 @@ app.get("/api/gallery/stats", (req, res) => {
 });
 
 // ============================================================
-// POST - Add Gallery Album (Admin)
-// ============================================================
-app.post("/api/gallery/albums/add", uploadSlider.single("cover"), (req, res) => {
-  const { title, description, category, event_date, venue, is_featured } = req.body;
-
-  if (!title) {
-    return res.status(400).json({ success: false, message: "Title is required" });
-  }
-
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const cover_image = req.file ? req.file.path : null;
-  const cover_public_id = req.file ? req.file.filename : null;
-
-  db.query(
-    `INSERT INTO gallery_albums 
-     (title, slug, description, cover_image, cover_public_id, category, event_date, venue, is_featured, created_at) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-    [title, slug, description || '', cover_image, cover_public_id, category || 'general', event_date || null, venue || '', is_featured || 0],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Add Album Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-
-      res.json({
-        success: true,
-        message: "✅ Album created successfully!",
-        data: { id: result.insertId }
-      });
-    }
-  );
-});
-
-// ============================================================
-// POST - Add Gallery Images (Admin) - WITH CATEGORY & RECENT
+// POST - Add Multiple Gallery Images (Admin)
 // ============================================================
 app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req, res) => {
-  const { album_id, category, title, description, is_recent } = req.body;
+  const { album_id, category, title, description, is_recent, is_featured } = req.body;
 
-  console.log("📸 Add Gallery Image Request");
+  console.log("📸 Add Gallery Images Request");
   console.log("📸 Album ID:", album_id);
   console.log("📸 Category:", category);
   console.log("📸 Recent:", is_recent);
+  console.log("📸 Files:", req.files ? req.files.length : 0);
 
   if (!album_id) {
     return res.status(400).json({ success: false, message: "Album ID is required" });
@@ -1933,7 +2059,6 @@ app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req
   const uploaded = [];
   const errors = [];
 
-  // Get current max order
   const orderResult = await new Promise((resolve, reject) => {
     db.query("SELECT MAX(`order`) as maxOrder FROM gallery_images WHERE album_id = ?", [album_id], (err, result) => {
       if (err) reject(err);
@@ -1951,9 +2076,23 @@ app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req
       await new Promise((resolve, reject) => {
         db.query(
           `INSERT INTO gallery_images 
-           (album_id, category, filename, file_path, public_id, file_size, mime_type, title, description, is_recent, \`order\`, created_at) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-          [album_id, category || 'general', publicId, cloudinaryUrl, publicId, file.size || 0, file.mimetype || 'image/jpeg', title || '', description || '', is_recent !== undefined ? parseInt(is_recent) : 1, nextOrder++],
+           (album_id, category, filename, file_path, public_id, file_size, mime_type, 
+            title, description, is_recent, is_featured, \`order\`, created_at) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+          [
+            album_id, 
+            category || 'general', 
+            publicId, 
+            cloudinaryUrl, 
+            publicId, 
+            file.size || 0, 
+            file.mimetype || 'image/jpeg', 
+            title || '', 
+            description || '', 
+            is_recent !== undefined ? parseInt(is_recent) : 1,
+            is_featured !== undefined ? parseInt(is_featured) : 0,
+            nextOrder++
+          ],
           (err, result) => {
             if (err) reject(err);
             else resolve(result);
@@ -1970,7 +2109,12 @@ app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req
 
   db.query(
     `UPDATE gallery_albums SET updated_at = NOW() WHERE id = ?`,
-    [album_id]
+    [album_id],
+    (updateErr) => {
+      if (updateErr) {
+        console.warn("⚠️ Album update error:", updateErr.message);
+      }
+    }
   );
 
   res.json({
@@ -1982,58 +2126,24 @@ app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req
 });
 
 // ============================================================
-// DELETE - Delete Gallery Image
-// ============================================================
-app.delete("/api/gallery/images/delete/:id", (req, res) => {
-  const { id } = req.params;
-
-  db.query(
-    "SELECT * FROM gallery_images WHERE id = ?",
-    [id],
-    (err, results) => {
-      if (err) {
-        console.error("❌ Delete Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-
-      if (!results || results.length === 0) {
-        return res.status(404).json({ success: false, message: "Image not found" });
-      }
-
-      const image = results[0];
-
-      if (image.public_id) {
-        cloudinary.uploader.destroy(image.public_id).catch(err => console.error("Cloudinary error:", err));
-      }
-
-      db.query(
-        "DELETE FROM gallery_images WHERE id = ?",
-        [id],
-        (deleteErr) => {
-          if (deleteErr) {
-            console.error("❌ Delete DB Error:", deleteErr);
-            return res.status(500).json({ success: false, error: deleteErr.message });
-          }
-
-          res.json({ success: true, message: "✅ Image deleted successfully!" });
-        }
-      );
-    }
-  );
-});
-
-// ============================================================
-// UPDATE - Update Gallery Image (Title, Description, Category, Recent)
+// PUT - Update Single Image (Admin)
 // ============================================================
 app.put("/api/gallery/images/update/:id", (req, res) => {
   const { id } = req.params;
-  const { title, description, category, is_recent } = req.body;
+  const { title, description, category, is_recent, is_featured } = req.body;
 
   db.query(
     `UPDATE gallery_images 
-     SET title = ?, description = ?, category = ?, is_recent = ?, updated_at = NOW()
+     SET title = ?, description = ?, category = ?, is_recent = ?, is_featured = ?, updated_at = NOW()
      WHERE id = ?`,
-    [title || '', description || '', category || 'general', is_recent !== undefined ? parseInt(is_recent) : 1, id],
+    [
+      title || '', 
+      description || '', 
+      category || 'general', 
+      is_recent !== undefined ? parseInt(is_recent) : 1,
+      is_featured !== undefined ? parseInt(is_featured) : 0,
+      id
+    ],
     (err, result) => {
       if (err) {
         console.error("❌ Update Error:", err);
@@ -2050,7 +2160,7 @@ app.put("/api/gallery/images/update/:id", (req, res) => {
 });
 
 // ============================================================
-// PUT - Toggle Recent Status (for collage)
+// PUT - Toggle Recent Status (Admin)
 // ============================================================
 app.put("/api/gallery/images/toggle-recent/:id", (req, res) => {
   const { id } = req.params;
@@ -2092,90 +2202,127 @@ app.put("/api/gallery/images/toggle-recent/:id", (req, res) => {
 });
 
 // ============================================================
-// DELETE - Delete Gallery Album
+// PUT - Toggle Featured Status (Admin)
 // ============================================================
-app.delete("/api/gallery/albums/delete/:id", (req, res) => {
+app.put("/api/gallery/images/toggle-featured/:id", (req, res) => {
   const { id } = req.params;
 
   db.query(
-    "DELETE FROM gallery_albums WHERE id = ?",
+    "SELECT is_featured FROM gallery_images WHERE id = ?",
     [id],
-    (err, result) => {
+    (err, results) => {
       if (err) {
-        console.error("❌ Delete Album Error:", err);
+        console.error("❌ Fetch Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
 
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ success: false, message: "Album not found" });
+      if (!results || results.length === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
       }
 
-      res.json({ success: true, message: "✅ Album deleted successfully!" });
+      const current = results[0].is_featured;
+      const newStatus = current == 1 ? 0 : 1;
+
+      db.query(
+        "UPDATE gallery_images SET is_featured = ?, updated_at = NOW() WHERE id = ?",
+        [newStatus, id],
+        (updateErr) => {
+          if (updateErr) {
+            console.error("❌ Update Error:", updateErr);
+            return res.status(500).json({ success: false, error: updateErr.message });
+          }
+
+          res.json({
+            success: true,
+            message: newStatus == 1 ? "⭐ Marked as featured!" : "⭐ Removed from featured!",
+            data: { is_featured: newStatus }
+          });
+        }
+      );
     }
   );
 });
 
 // ============================================================
-// PUT - Update Gallery Album
+// DELETE - Delete Gallery Image (Admin)
 // ============================================================
-app.put("/api/gallery/albums/update/:id", uploadSlider.single("cover"), (req, res) => {
+app.delete("/api/gallery/images/delete/:id", (req, res) => {
   const { id } = req.params;
-  const { title, description, category, event_date, venue, is_featured, is_active } = req.body;
 
-  if (!title) {
-    return res.status(400).json({ success: false, message: "Title is required" });
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ success: false, message: "Invalid ID" });
   }
 
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  db.query(
+    "SELECT * FROM gallery_images WHERE id = ?",
+    [id],
+    (err, results) => {
+      if (err) {
+        console.error("❌ DB Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+
+      if (!results || results.length === 0) {
+        return res.status(404).json({ success: false, message: "Image not found" });
+      }
+
+      const image = results[0];
+
+      if (image.public_id) {
+        cloudinary.uploader.destroy(image.public_id)
+          .then(result => console.log("✅ Cloudinary deleted:", result))
+          .catch(err => console.error("❌ Cloudinary error:", err));
+      }
+
+      db.query(
+        "DELETE FROM gallery_images WHERE id = ?",
+        [id],
+        (deleteErr) => {
+          if (deleteErr) {
+            console.error("❌ Delete DB Error:", deleteErr);
+            return res.status(500).json({ success: false, error: deleteErr.message });
+          }
+
+          res.json({ success: true, message: "✅ Image deleted successfully!" });
+        }
+      );
+    }
+  );
+});
+
+// ============================================================
+// DELETE - Bulk Delete Images (Admin)
+// ============================================================
+app.delete("/api/gallery/images/bulk-delete", (req, res) => {
+  const { ids } = req.body;
+
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ success: false, message: "No IDs provided" });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
   
-  let cover_image = null;
-  let cover_public_id = null;
+  db.query(`SELECT * FROM gallery_images WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
+    if (fetchErr) {
+      console.error("❌ Fetch Error:", fetchErr);
+      return res.status(500).json({ success: false, error: fetchErr.message });
+    }
 
-  if (req.file) {
-    cover_image = req.file.path;
-    cover_public_id = req.file.filename;
-  }
+    fetchResults.forEach(image => {
+      if (image.public_id) {
+        cloudinary.uploader.destroy(image.public_id)
+          .catch(err => console.error("Cloudinary error:", err));
+      }
+    });
 
-  // If cover image is provided, update it
-  if (cover_image) {
-    db.query(
-      `UPDATE gallery_albums 
-       SET title = ?, slug = ?, description = ?, category = ?, 
-           event_date = ?, venue = ?, cover_image = ?, cover_public_id = ?,
-           is_featured = ?, is_active = ?, updated_at = NOW()
-       WHERE id = ?`,
-      [title, slug, description || '', category || 'general', event_date || null, venue || '', cover_image, cover_public_id, is_featured || 0, is_active !== undefined ? is_active : 1, id],
-      (err, result) => {
-        if (err) {
-          console.error("❌ Update Album Error:", err);
-          return res.status(500).json({ success: false, error: err.message });
-        }
-        if (result.affectedRows === 0) {
-          return res.status(404).json({ success: false, message: "Album not found" });
-        }
-        res.json({ success: true, message: "✅ Album updated successfully!" });
+    db.query(`DELETE FROM gallery_images WHERE id IN (${placeholders})`, ids, (deleteErr) => {
+      if (deleteErr) {
+        console.error("❌ Delete Error:", deleteErr);
+        return res.status(500).json({ success: false, error: deleteErr.message });
       }
-    );
-  } else {
-    db.query(
-      `UPDATE gallery_albums 
-       SET title = ?, slug = ?, description = ?, category = ?, 
-           event_date = ?, venue = ?,
-           is_featured = ?, is_active = ?, updated_at = NOW()
-       WHERE id = ?`,
-      [title, slug, description || '', category || 'general', event_date || null, venue || '', is_featured || 0, is_active !== undefined ? is_active : 1, id],
-      (err, result) => {
-        if (err) {
-          console.error("❌ Update Album Error:", err);
-          return res.status(500).json({ success: false, error: err.message });
-        }
-        if (result.affectedRows === 0) {
-          return res.status(404).json({ success: false, message: "Album not found" });
-        }
-        res.json({ success: true, message: "✅ Album updated successfully!" });
-      }
-    );
-  }
+      res.json({ success: true, message: `${ids.length} images deleted successfully ✅` });
+    });
+  });
 });
 
 // ============================================================
@@ -2264,6 +2411,7 @@ app.use((req, res) => {
       "/admin/contact/stats",
       "/contact",
       "/api/gallery/slider",
+      "/api/gallery/slider/admin/all",
       "/api/gallery/slider/add",
       "/api/gallery/slider/update/:id",
       "/api/gallery/slider/delete/:id",
@@ -2277,9 +2425,11 @@ app.use((req, res) => {
       "/api/gallery/featured",
       "/api/gallery/images",
       "/api/gallery/images/add",
-      "/api/gallery/images/delete/:id",
       "/api/gallery/images/update/:id",
+      "/api/gallery/images/delete/:id",
+      "/api/gallery/images/bulk-delete",
       "/api/gallery/images/toggle-recent/:id",
+      "/api/gallery/images/toggle-featured/:id",
       "/api/gallery/recent",
       "/api/gallery/categories",
       "/api/gallery/stats",
@@ -2350,6 +2500,7 @@ app.listen(PORT, () => {
   console.log("");
   console.log("🖼️ GALLERY MODULE:");
   console.log("  GET    /api/gallery/slider");
+  console.log("  GET    /api/gallery/slider/admin/all");
   console.log("  POST   /api/gallery/slider/add");
   console.log("  PUT    /api/gallery/slider/update/:id");
   console.log("  DELETE /api/gallery/slider/delete/:id");
@@ -2363,9 +2514,11 @@ app.listen(PORT, () => {
   console.log("  GET    /api/gallery/featured");
   console.log("  GET    /api/gallery/images");
   console.log("  POST   /api/gallery/images/add");
-  console.log("  DELETE /api/gallery/images/delete/:id");
   console.log("  PUT    /api/gallery/images/update/:id");
+  console.log("  DELETE /api/gallery/images/delete/:id");
+  console.log("  DELETE /api/gallery/images/bulk-delete");
   console.log("  PUT    /api/gallery/images/toggle-recent/:id");
+  console.log("  PUT    /api/gallery/images/toggle-featured/:id");
   console.log("  GET    /api/gallery/recent");
   console.log("  GET    /api/gallery/categories");
   console.log("  GET    /api/gallery/stats");
