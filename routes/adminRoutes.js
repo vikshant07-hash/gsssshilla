@@ -5,18 +5,18 @@ const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
 // ============================================================
-// HARDCODED ADMIN CREDENTIALS
+// HARDCODED ADMIN CREDENTIALS (Yahan change karein)
 // ============================================================
 const ADMIN = {
   id: 1,
   username: 'admin',
-  password: '1234567',  // Plain password for reference
-  email: 'vikshant07@gmail.com',
+  password: '1234567',
+  email: 'admin@school.com',
   name: 'Admin User',
   role: 'Super Admin'
 };
 
-// Hashed password for '1234567'
+// Hashed password for '1234567' (Yahan bhi change karein agar password change karein)
 const HASHED_PASSWORD = '$2a$10$QjxQjxQjxQjxQjxQjxQjxOjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjx';
 
 // ============================================================
@@ -52,7 +52,7 @@ const verifyToken = (req, res, next) => {
 };
 
 // ============================================================
-// 1. LOGIN
+// 1. LOGIN ROUTE
 // ============================================================
 router.post('/login', async (req, res) => {
   console.log('📥 Login request received:', req.body);
@@ -126,7 +126,7 @@ router.post('/login', async (req, res) => {
 });
 
 // ============================================================
-// 2. VERIFY TOKEN
+// 2. VERIFY TOKEN ROUTE
 // ============================================================
 router.get('/verify', verifyToken, (req, res) => {
   res.json({
@@ -137,7 +137,7 @@ router.get('/verify', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 3. GET PROFILE
+// 3. GET PROFILE ROUTE
 // ============================================================
 router.get('/profile', verifyToken, (req, res) => {
   res.json({
@@ -155,7 +155,7 @@ router.get('/profile', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 4. LOGOUT
+// 4. LOGOUT ROUTE
 // ============================================================
 router.post('/logout', verifyToken, (req, res) => {
   console.log(`🔓 Admin logged out: ${req.admin?.username || 'Unknown'}`);
@@ -166,7 +166,7 @@ router.post('/logout', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 5. CHANGE PASSWORD (Optional)
+// 5. CHANGE PASSWORD ROUTE (Optional)
 // ============================================================
 router.post('/change-password', verifyToken, async (req, res) => {
   const { oldPassword, newPassword } = req.body;
