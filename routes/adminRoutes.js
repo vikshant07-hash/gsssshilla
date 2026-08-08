@@ -42,12 +42,36 @@ const verifyToken = (req, res, next) => {
 };
 
 // ============================================================
-// STORE OTP IN MEMORY (Temporary)
+// STORE OTP IN MEMORY
 // ============================================================
 let otpStore = {};
 
 // ============================================================
-// 1. LOGIN ROUTE - Send OTP
+// HELPER - Generate OTP
+// ============================================================
+function generateOTP() {
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const numbers = "0123456789";
+  let otp = "";
+  for (let i = 0; i < 2; i++) {
+    otp += letters[Math.floor(Math.random() * letters.length)];
+  }
+  for (let i = 0; i < 4; i++) {
+    otp += numbers[Math.floor(Math.random() * numbers.length)];
+  }
+  return otp;
+}
+
+// ============================================================
+// 1. TEST ROUTE - VERIFY ROUTER IS WORKING
+// ============================================================
+router.get('/test', (req, res) => {
+  console.log('📥 Test route hit!');
+  res.json({ success: true, message: 'Admin routes working!' });
+});
+
+// ============================================================
+// 2. LOGIN ROUTE - SEND OTP
 // ============================================================
 router.post('/login', async (req, res) => {
   console.log('🔥🔥🔥 LOGIN ROUTE HIT! 🔥🔥🔥');
@@ -56,6 +80,7 @@ router.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
+    console.log('❌ Missing fields');
     return res.status(400).json({
       success: false,
       message: 'Username and password are required'
@@ -82,22 +107,16 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Generate OTP
     const otp = generateOTP();
     const expiry = Date.now() + 5 * 60 * 1000;
     
-    // Store OTP in memory
     otpStore[username] = { otp, expiry };
     console.log(`📧 OTP for ${username}: ${otp}`);
-
-    // Send OTP via email (optional - for testing, just return success)
-    // For now, we'll just log it and return success
 
     res.json({
       success: true,
       message: 'OTP sent successfully!',
-      // For testing only - remove in production
-      test_otp: otp 
+      test_otp: otp
     });
 
   } catch (error) {
@@ -110,7 +129,7 @@ router.post('/login', async (req, res) => {
 });
 
 // ============================================================
-// 2. VERIFY OTP ROUTE
+// 3. VERIFY OTP ROUTE
 // ============================================================
 router.post('/verify-otp', async (req, res) => {
   console.log('🔥🔥🔥 VERIFY OTP ROUTE HIT! 🔥🔥🔥');
@@ -126,7 +145,6 @@ router.post('/verify-otp', async (req, res) => {
   }
 
   try {
-    // Verify username and password
     if (username !== ADMIN.username) {
       return res.status(401).json({
         success: false,
@@ -142,7 +160,6 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    // Check OTP
     const stored = otpStore[username];
     if (!stored) {
       return res.status(401).json({
@@ -166,10 +183,8 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    // Clear OTP after successful verification
     delete otpStore[username];
 
-    // Generate JWT Token
     const token = jwt.sign(
       {
         id: ADMIN.id,
@@ -207,11 +222,44 @@ router.post('/verify-otp', async (req, res) => {
 });
 
 // ============================================================
-// 3. SEND RESET OTP
+// 4. VERIFY ROUTE
+// ============================================================
+router.get('/verify', verifyToken, (req, res) => {
+  console.log('📥 Verify route hit!');
+  res.json({ success: true, admin: req.admin, message: 'Token is valid' });
+});
+
+// ============================================================
+// 5. PROFILE ROUTE
+// ============================================================
+router.get('/profile', verifyToken, (req, res) => {
+  console.log('📥 Profile route hit!');
+  res.json({
+    success: true,
+    data: {
+      id: req.admin.id,
+      username: req.admin.username,
+      email: req.admin.email,
+      name: req.admin.name,
+      role: req.admin.role,
+      last_login: new Date().toISOString()
+    }
+  });
+});
+
+// ============================================================
+// 6. LOGOUT ROUTE
+// ============================================================
+router.post('/logout', verifyToken, (req, res) => {
+  console.log('📥 Logout route hit!');
+  res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// ============================================================
+// 7. SEND RESET OTP
 // ============================================================
 router.post('/send-reset-otp', async (req, res) => {
   console.log('🔥🔥🔥 SEND RESET OTP ROUTE HIT! 🔥🔥🔥');
-  console.log('📥 Request body:', req.body);
   
   const { email } = req.body;
 
@@ -239,7 +287,7 @@ router.post('/send-reset-otp', async (req, res) => {
     res.json({
       success: true,
       message: 'Reset OTP sent successfully!',
-      test_otp: otp // For testing only
+      test_otp: otp
     });
 
   } catch (error) {
@@ -252,11 +300,10 @@ router.post('/send-reset-otp', async (req, res) => {
 });
 
 // ============================================================
-// 4. RESET PASSWORD
+// 8. RESET PASSWORD
 // ============================================================
 router.post('/reset-password', async (req, res) => {
   console.log('🔥🔥🔥 RESET PASSWORD ROUTE HIT! 🔥🔥🔥');
-  console.log('📥 Request body:', req.body);
   
   const { email, otp, newPassword, confirmPassword } = req.body;
 
@@ -314,7 +361,6 @@ router.post('/reset-password', async (req, res) => {
 
     delete otpStore[`reset_${email}`];
 
-    // Password reset successful
     console.log(`✅ Password reset for: ${email}`);
 
     res.json({
@@ -332,48 +378,6 @@ router.post('/reset-password', async (req, res) => {
 });
 
 // ============================================================
-// 5. VERIFY ROUTE
-// ============================================================
-router.get('/verify', verifyToken, (req, res) => {
-  console.log('📥 Verify route hit!');
-  res.json({ success: true, admin: req.admin, message: 'Token is valid' });
-});
-
-// ============================================================
-// 6. PROFILE ROUTE
-// ============================================================
-router.get('/profile', verifyToken, (req, res) => {
-  console.log('📥 Profile route hit!');
-  res.json({
-    success: true,
-    data: {
-      id: req.admin.id,
-      username: req.admin.username,
-      email: req.admin.email,
-      name: req.admin.name,
-      role: req.admin.role,
-      last_login: new Date().toISOString()
-    }
-  });
-});
-
-// ============================================================
-// 7. LOGOUT ROUTE
-// ============================================================
-router.post('/logout', verifyToken, (req, res) => {
-  console.log('📥 Logout route hit!');
-  res.json({ success: true, message: 'Logged out successfully' });
-});
-
-// ============================================================
-// 8. TEST ROUTE
-// ============================================================
-router.get('/test', (req, res) => {
-  console.log('📥 Test route hit!');
-  res.json({ success: true, message: 'Admin routes working!' });
-});
-
-// ============================================================
 // 9. DEBUG ROUTE
 // ============================================================
 router.get('/debug', (req, res) => {
@@ -385,26 +389,10 @@ router.get('/debug', (req, res) => {
   });
 });
 
-// ============================================================
-// HELPER FUNCTION - Generate OTP
-// ============================================================
-function generateOTP() {
-  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-  const numbers = "0123456789";
-  let otp = "";
-  for (let i = 0; i < 2; i++) {
-    otp += letters[Math.floor(Math.random() * letters.length)];
-  }
-  for (let i = 0; i < 4; i++) {
-    otp += numbers[Math.floor(Math.random() * numbers.length)];
-  }
-  return otp;
-}
-
 console.log('✅ All routes defined');
 
 // ============================================================
-// EXPORT
+// EXPORT - IMPORTANT!
 // ============================================================
 console.log('🔧 Exporting router...');
 module.exports = router;
