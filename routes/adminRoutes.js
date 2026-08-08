@@ -4,6 +4,9 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
+// DEBUG - Check if file is loading
+console.log('🔧 Loading adminRoutes.js...');
+
 // ============================================================
 // HARDCODED ADMIN CREDENTIALS
 // ============================================================
@@ -63,6 +66,7 @@ router.post('/login', async (req, res) => {
 
   try {
     if (username !== ADMIN.username) {
+      console.log('❌ Invalid username:', username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
@@ -72,6 +76,7 @@ router.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
     
     if (!isMatch) {
+      console.log('❌ Invalid password for user:', username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
@@ -155,6 +160,18 @@ router.post('/logout', verifyToken, (req, res) => {
 });
 
 // ============================================================
+// 5. TEST ROUTE - Check if router is working
+// ============================================================
+router.get('/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Admin routes are working!',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ============================================================
 // EXPORT
 // ============================================================
+console.log('✅ Admin routes exported successfully!');
 module.exports = router;
