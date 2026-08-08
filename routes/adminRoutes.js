@@ -422,6 +422,11 @@ router.get('/debug', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+// ⚠️ TEMPORARY — password hash generate karne ke liye, kaam hone ke baad HATA dena
+router.get('/generate-hash/:password', async (req, res) => {
+  const hash = await bcrypt.hash(req.params.password, 10);
+  res.json({ password: req.params.password, hash });
+});
 
 console.log('✅ All routes defined');
 
