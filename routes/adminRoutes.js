@@ -4,6 +4,8 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
+console.log('🔧 adminRoutes.js loaded!');
+
 // ============================================================
 // ADMIN CREDENTIALS
 // ============================================================
@@ -18,6 +20,8 @@ const ADMIN = {
 
 const HASHED_PASSWORD = '$2a$10$QjxQjxQjxQjxQjxQjxQjxOjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjx';
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
+
+console.log('✅ Admin credentials loaded');
 
 // ============================================================
 // VERIFY TOKEN
@@ -37,22 +41,27 @@ const verifyToken = (req, res, next) => {
   }
 };
 
+console.log('✅ verifyToken middleware created');
+
 // ============================================================
 // TEST ROUTE (WORKING)
 // ============================================================
 router.get('/test', (req, res) => {
+  console.log('📥 Test route hit!');
   res.json({ success: true, message: 'Admin routes working!' });
 });
 
 // ============================================================
-// 1. LOGIN ROUTE (FIX)
+// 1. LOGIN ROUTE - FIXED
 // ============================================================
 router.post('/login', async (req, res) => {
-  console.log('📥 Login request received:', req.body);
+  console.log('🔥🔥🔥 LOGIN ROUTE HIT! 🔥🔥🔥');
+  console.log('📥 Request body:', req.body);
   
   const { username, password } = req.body;
 
   if (!username || !password) {
+    console.log('❌ Missing fields');
     return res.status(400).json({
       success: false,
       message: 'Username and password are required'
@@ -60,7 +69,8 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    // Check username
+    console.log('🔍 Checking username:', username);
+    
     if (username !== ADMIN.username) {
       console.log('❌ Invalid username:', username);
       return res.status(401).json({
@@ -69,19 +79,19 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Check password
+    console.log('🔐 Checking password...');
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
     console.log('🔐 Password match:', isMatch);
     
     if (!isMatch) {
-      console.log('❌ Invalid password for user:', username);
+      console.log('❌ Invalid password');
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
       });
     }
 
-    // Generate JWT Token
+    console.log('✅ Generating token...');
     const token = jwt.sign(
       {
         id: ADMIN.id,
@@ -122,6 +132,7 @@ router.post('/login', async (req, res) => {
 // 2. VERIFY ROUTE
 // ============================================================
 router.get('/verify', verifyToken, (req, res) => {
+  console.log('📥 Verify route hit!');
   res.json({ success: true, admin: req.admin, message: 'Token is valid' });
 });
 
@@ -129,6 +140,7 @@ router.get('/verify', verifyToken, (req, res) => {
 // 3. PROFILE ROUTE
 // ============================================================
 router.get('/profile', verifyToken, (req, res) => {
+  console.log('📥 Profile route hit!');
   res.json({
     success: true,
     data: {
@@ -146,11 +158,27 @@ router.get('/profile', verifyToken, (req, res) => {
 // 4. LOGOUT ROUTE
 // ============================================================
 router.post('/logout', verifyToken, (req, res) => {
+  console.log('📥 Logout route hit!');
   res.json({ success: true, message: 'Logged out successfully' });
 });
 
 // ============================================================
-// EXPORT
+// 5. DEBUG ROUTE - Check all routes
 // ============================================================
-console.log('✅ Admin routes exported!');
+router.get('/debug', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Admin router is working!',
+    routes: ['/test', '/login', '/verify', '/profile', '/logout', '/debug'],
+    timestamp: new Date().toISOString()
+  });
+});
+
+console.log('✅ All routes defined');
+
+// ============================================================
+// EXPORT - IMPORTANT!
+// ============================================================
+console.log('🔧 Exporting router...');
 module.exports = router;
+console.log('✅ Router exported successfully!');
