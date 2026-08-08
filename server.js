@@ -10,28 +10,6 @@ const app = express();
 app.set("trust proxy", 1);
 
 
-// ============================================================
-// ADMIN ROUTES - DEBUG VERSION
-// ============================================================
-console.log('🔧 Loading admin routes...');
-
-try {
-  const adminRoutes = require('./routes/adminRoutes');
-  console.log('✅ Admin routes loaded successfully');
-  console.log('✅ Router type:', typeof adminRoutes);
-  
-  app.use('/api/admin', adminRoutes);
-  console.log('✅ Admin routes registered at /api/admin');
-  
-  // Test route - Check if router is working
-  app.get('/api/admin/direct-test', (req, res) => {
-    res.json({ success: true, message: 'Direct test working!' });
-  });
-  
-} catch (error) {
-  console.error('❌ Error loading admin routes:', error.message);
-}
-
 
 // ============================================================
 // CORS
@@ -1768,6 +1746,30 @@ app.get("/analytics/stats", (req, res) => {
     }
   );
 });
+
+// ============================================================
+// ADMIN ROUTES - DEBUG VERSION
+// ============================================================
+console.log('🔧 Loading admin routes...');
+
+try {
+  const adminRoutes = require('./routes/adminRoutes');
+  console.log('✅ Admin routes loaded successfully');
+  console.log('✅ Router type:', typeof adminRoutes);
+  
+  app.use('/api/admin', adminRoutes);
+  console.log('✅ Admin routes registered at /api/admin');
+  
+  // Test route - Check if router is working
+  app.get('/api/admin/direct-test', (req, res) => {
+    res.json({ success: true, message: 'Direct test working!' });
+  });
+  
+} catch (error) {
+  console.error('❌ Error loading admin routes:', error.message);
+}
+
+
 
 // ============================================================
 // 404 & ERROR HANDLER
