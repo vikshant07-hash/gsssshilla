@@ -16,7 +16,7 @@ const ADMIN = {
   role: 'Super Admin'
 };
 
-// Hashed password for '1234567' (Yahan bhi change karein agar password change karein)
+// Hashed password for '1234567'
 const HASHED_PASSWORD = '$2a$10$QjxQjxQjxQjxQjxQjxQjxOjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjx';
 
 // ============================================================
