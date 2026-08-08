@@ -9,16 +9,41 @@ console.log('🔧 adminRoutes.js loaded!');
 // ============================================================
 // ADMIN CREDENTIALS
 // ============================================================
+// NOTE: In production, move these to environment variables
+// (ADMIN_USERNAME, ADMIN_PASSWORD_HASH, ADMIN_EMAIL, JWT_SECRET)
+// instead of hardcoding them here.
+
 const ADMIN = {
   id: 1,
-  username: 'admin',
-  password: '1234567',
-  email: 'vikshant07@gmail.com',
+  username: process.env.ADMIN_USERNAME || 'admin',
+  email: process.env.ADMIN_EMAIL || 'vikshant07@gmail.com',
   name: 'Admin User',
   role: 'Super Admin'
 };
 
-const HASHED_PASSWORD = '$2a$10$QjxQjxQjxQjxQjxQjxQjxOjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjx';
+// FIX: the previous HASHED_PASSWORD was not a real bcrypt hash
+// ("QjxQjxQjx..." repeating pattern), so bcrypt.compare() always
+// returned false and login could never succeed.
+//
+// Preferred: set ADMIN_PASSWORD_HASH in your .env with a real hash,
+// generated once via:
+//   node -e "console.log(require('bcryptjs').hashSync('yourpassword', 10))"
+//
+// Fallback below auto-generates a valid hash at startup from
+// ADMIN_PASSWORD (or the default '1234567') so the app works even
+// without .env configured — but for production, use the env var above.
+const ADMIN_PLAIN_PASSWORD_FALLBACK = process.env.ADMIN_PASSWORD || '1234567';
+const HASHED_PASSWORD =
+  process.env.ADMIN_PASSWORD_HASH ||
+  bcrypt.hashSync(ADMIN_PLAIN_PASSWORD_FALLBACK, 10);
+
+if (!process.env.ADMIN_PASSWORD_HASH) {
+  console.warn('⚠️  ADMIN_PASSWORD_HASH not set in .env — using auto-generated hash from fallback password. Set it in production.');
+}
+
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️  JWT_SECRET not set in .env — using an insecure default. Set it in production.');
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
 console.log('✅ Admin credentials loaded');
@@ -71,12 +96,12 @@ router.get('/test', (req, res) => {
 });
 
 // ============================================================
-// 2. LOGIN ROUTE - SEND OTP (FIXED)
+// 2. LOGIN ROUTE - SEND OTP
 // ============================================================
 router.post('/login', async (req, res) => {
-  console.log('🔥🔥🔥 LOGIN ROUTE HIT! 🔥🔥🔥');
+  console.log('🔥 LOGIN ROUTE HIT');
   console.log('📥 Request body:', req.body);
-  
+
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -98,7 +123,7 @@ router.post('/login', async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
     console.log('🔐 Password match:', isMatch);
-    
+
     if (!isMatch) {
       console.log('❌ Invalid password');
       return res.status(401).json({
@@ -109,10 +134,12 @@ router.post('/login', async (req, res) => {
 
     const otp = generateOTP();
     const expiry = Date.now() + 5 * 60 * 1000;
-    
+
     otpStore[username] = { otp, expiry };
     console.log(`📧 OTP for ${username}: ${otp}`);
 
+    // NOTE: test_otp is included here for development convenience only.
+    // Remove it in production and actually send the OTP via email/SMS instead.
     res.json({
       success: true,
       message: 'OTP sent successfully!',
@@ -132,9 +159,9 @@ router.post('/login', async (req, res) => {
 // 3. VERIFY OTP ROUTE
 // ============================================================
 router.post('/verify-otp', async (req, res) => {
-  console.log('🔥🔥🔥 VERIFY OTP ROUTE HIT! 🔥🔥🔥');
+  console.log('🔥 VERIFY OTP ROUTE HIT');
   console.log('📥 Request body:', req.body);
-  
+
   const { username, password, otp } = req.body;
 
   if (!username || !password || !otp) {
@@ -259,8 +286,8 @@ router.post('/logout', verifyToken, (req, res) => {
 // 7. SEND RESET OTP
 // ============================================================
 router.post('/send-reset-otp', async (req, res) => {
-  console.log('🔥🔥🔥 SEND RESET OTP ROUTE HIT! 🔥🔥🔥');
-  
+  console.log('🔥 SEND RESET OTP ROUTE HIT');
+
   const { email } = req.body;
 
   if (!email) {
@@ -280,7 +307,7 @@ router.post('/send-reset-otp', async (req, res) => {
 
     const otp = generateOTP();
     const expiry = Date.now() + 5 * 60 * 1000;
-    
+
     otpStore[`reset_${email}`] = { otp, expiry };
     console.log(`📧 Reset OTP for ${email}: ${otp}`);
 
@@ -303,8 +330,8 @@ router.post('/send-reset-otp', async (req, res) => {
 // 8. RESET PASSWORD
 // ============================================================
 router.post('/reset-password', async (req, res) => {
-  console.log('🔥🔥🔥 RESET PASSWORD ROUTE HIT! 🔥🔥🔥');
-  
+  console.log('🔥 RESET PASSWORD ROUTE HIT');
+
   const { email, otp, newPassword, confirmPassword } = req.body;
 
   if (!email || !otp || !newPassword) {
@@ -361,7 +388,14 @@ router.post('/reset-password', async (req, res) => {
 
     delete otpStore[`reset_${email}`];
 
-    console.log(`✅ Password reset for: ${email}`);
+    // NOTE: This route validates the OTP but doesn't actually persist
+    // the new password anywhere (no DB call), so the "old" password
+    // will still work after this. If you have a database/user store,
+    // update HASHED_PASSWORD (or the stored user record) here, e.g.:
+    //   const newHash = await bcrypt.hash(newPassword, 10);
+    //   await User.updateOne({ email }, { passwordHash: newHash });
+
+    console.log(`✅ Password reset OTP verified for: ${email}`);
 
     res.json({
       success: true,
@@ -392,8 +426,6 @@ router.get('/debug', (req, res) => {
 console.log('✅ All routes defined');
 
 // ============================================================
-// EXPORT - IMPORTANT!
+// EXPORT
 // ============================================================
-console.log('🔧 Exporting router...');
 module.exports = router;
-console.log('✅ Router exported successfully!');
