@@ -63,7 +63,7 @@ function generateOTP() {
 }
 
 // ============================================================
-// 1. TEST ROUTE - VERIFY ROUTER IS WORKING
+// 1. TEST ROUTE
 // ============================================================
 router.get('/test', (req, res) => {
   console.log('📥 Test route hit!');
@@ -71,7 +71,7 @@ router.get('/test', (req, res) => {
 });
 
 // ============================================================
-// 2. LOGIN ROUTE - SEND OTP
+// 2. LOGIN ROUTE - SEND OTP (FIXED)
 // ============================================================
 router.post('/login', async (req, res) => {
   console.log('🔥🔥🔥 LOGIN ROUTE HIT! 🔥🔥🔥');
