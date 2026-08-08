@@ -41,18 +41,13 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-console.log('✅ verifyToken middleware created');
+// ============================================================
+// STORE OTP IN MEMORY (Temporary)
+// ============================================================
+let otpStore = {};
 
 // ============================================================
-// TEST ROUTE (WORKING)
-// ============================================================
-router.get('/test', (req, res) => {
-  console.log('📥 Test route hit!');
-  res.json({ success: true, message: 'Admin routes working!' });
-});
-
-// ============================================================
-// 1. LOGIN ROUTE - FIXED
+// 1. LOGIN ROUTE - Send OTP
 // ============================================================
 router.post('/login', async (req, res) => {
   console.log('🔥🔥🔥 LOGIN ROUTE HIT! 🔥🔥🔥');
@@ -61,7 +56,6 @@ router.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
-    console.log('❌ Missing fields');
     return res.status(400).json({
       success: false,
       message: 'Username and password are required'
@@ -69,8 +63,6 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    console.log('🔍 Checking username:', username);
-    
     if (username !== ADMIN.username) {
       console.log('❌ Invalid username:', username);
       return res.status(401).json({
@@ -79,7 +71,6 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    console.log('🔐 Checking password...');
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
     console.log('🔐 Password match:', isMatch);
     
@@ -91,7 +82,94 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    console.log('✅ Generating token...');
+    // Generate OTP
+    const otp = generateOTP();
+    const expiry = Date.now() + 5 * 60 * 1000;
+    
+    // Store OTP in memory
+    otpStore[username] = { otp, expiry };
+    console.log(`📧 OTP for ${username}: ${otp}`);
+
+    // Send OTP via email (optional - for testing, just return success)
+    // For now, we'll just log it and return success
+
+    res.json({
+      success: true,
+      message: 'OTP sent successfully!',
+      // For testing only - remove in production
+      test_otp: otp 
+    });
+
+  } catch (error) {
+    console.error('❌ Login Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error: ' + error.message
+    });
+  }
+});
+
+// ============================================================
+// 2. VERIFY OTP ROUTE
+// ============================================================
+router.post('/verify-otp', async (req, res) => {
+  console.log('🔥🔥🔥 VERIFY OTP ROUTE HIT! 🔥🔥🔥');
+  console.log('📥 Request body:', req.body);
+  
+  const { username, password, otp } = req.body;
+
+  if (!username || !password || !otp) {
+    return res.status(400).json({
+      success: false,
+      message: 'Username, password and OTP are required'
+    });
+  }
+
+  try {
+    // Verify username and password
+    if (username !== ADMIN.username) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // Check OTP
+    const stored = otpStore[username];
+    if (!stored) {
+      return res.status(401).json({
+        success: false,
+        message: 'No OTP found. Please request a new one.'
+      });
+    }
+
+    if (stored.otp !== otp.toUpperCase()) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid OTP'
+      });
+    }
+
+    if (Date.now() > stored.expiry) {
+      delete otpStore[username];
+      return res.status(401).json({
+        success: false,
+        message: 'OTP expired. Please request a new one.'
+      });
+    }
+
+    // Clear OTP after successful verification
+    delete otpStore[username];
+
+    // Generate JWT Token
     const token = jwt.sign(
       {
         id: ADMIN.id,
@@ -120,7 +198,7 @@ router.post('/login', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Login Error:', error);
+    console.error('❌ Verify OTP Error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error: ' + error.message
@@ -129,7 +207,132 @@ router.post('/login', async (req, res) => {
 });
 
 // ============================================================
-// 2. VERIFY ROUTE
+// 3. SEND RESET OTP
+// ============================================================
+router.post('/send-reset-otp', async (req, res) => {
+  console.log('🔥🔥🔥 SEND RESET OTP ROUTE HIT! 🔥🔥🔥');
+  console.log('📥 Request body:', req.body);
+  
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email is required'
+    });
+  }
+
+  try {
+    if (email !== ADMIN.email) {
+      return res.status(404).json({
+        success: false,
+        message: 'Email not found in our system'
+      });
+    }
+
+    const otp = generateOTP();
+    const expiry = Date.now() + 5 * 60 * 1000;
+    
+    otpStore[`reset_${email}`] = { otp, expiry };
+    console.log(`📧 Reset OTP for ${email}: ${otp}`);
+
+    res.json({
+      success: true,
+      message: 'Reset OTP sent successfully!',
+      test_otp: otp // For testing only
+    });
+
+  } catch (error) {
+    console.error('❌ Send Reset OTP Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error: ' + error.message
+    });
+  }
+});
+
+// ============================================================
+// 4. RESET PASSWORD
+// ============================================================
+router.post('/reset-password', async (req, res) => {
+  console.log('🔥🔥🔥 RESET PASSWORD ROUTE HIT! 🔥🔥🔥');
+  console.log('📥 Request body:', req.body);
+  
+  const { email, otp, newPassword, confirmPassword } = req.body;
+
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email, OTP and new password are required'
+    });
+  }
+
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({
+      success: false,
+      message: 'Passwords do not match'
+    });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: 'Password must be at least 6 characters'
+    });
+  }
+
+  try {
+    if (email !== ADMIN.email) {
+      return res.status(404).json({
+        success: false,
+        message: 'Email not found'
+      });
+    }
+
+    const stored = otpStore[`reset_${email}`];
+    if (!stored) {
+      return res.status(401).json({
+        success: false,
+        message: 'No OTP found. Please request a new one.'
+      });
+    }
+
+    if (stored.otp !== otp.toUpperCase()) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid OTP'
+      });
+    }
+
+    if (Date.now() > stored.expiry) {
+      delete otpStore[`reset_${email}`];
+      return res.status(401).json({
+        success: false,
+        message: 'OTP expired. Please request a new one.'
+      });
+    }
+
+    delete otpStore[`reset_${email}`];
+
+    // Password reset successful
+    console.log(`✅ Password reset for: ${email}`);
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully!'
+    });
+
+  } catch (error) {
+    console.error('❌ Reset Password Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error: ' + error.message
+    });
+  }
+});
+
+// ============================================================
+// 5. VERIFY ROUTE
 // ============================================================
 router.get('/verify', verifyToken, (req, res) => {
   console.log('📥 Verify route hit!');
@@ -137,7 +340,7 @@ router.get('/verify', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 3. PROFILE ROUTE
+// 6. PROFILE ROUTE
 // ============================================================
 router.get('/profile', verifyToken, (req, res) => {
   console.log('📥 Profile route hit!');
@@ -155,7 +358,7 @@ router.get('/profile', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 4. LOGOUT ROUTE
+// 7. LOGOUT ROUTE
 // ============================================================
 router.post('/logout', verifyToken, (req, res) => {
   console.log('📥 Logout route hit!');
@@ -163,21 +366,45 @@ router.post('/logout', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 5. DEBUG ROUTE - Check all routes
+// 8. TEST ROUTE
+// ============================================================
+router.get('/test', (req, res) => {
+  console.log('📥 Test route hit!');
+  res.json({ success: true, message: 'Admin routes working!' });
+});
+
+// ============================================================
+// 9. DEBUG ROUTE
 // ============================================================
 router.get('/debug', (req, res) => {
   res.json({
     success: true,
     message: 'Admin router is working!',
-    routes: ['/test', '/login', '/verify', '/profile', '/logout', '/debug'],
+    routes: ['/test', '/login', '/verify-otp', '/verify', '/profile', '/logout', '/send-reset-otp', '/reset-password', '/debug'],
     timestamp: new Date().toISOString()
   });
 });
 
+// ============================================================
+// HELPER FUNCTION - Generate OTP
+// ============================================================
+function generateOTP() {
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const numbers = "0123456789";
+  let otp = "";
+  for (let i = 0; i < 2; i++) {
+    otp += letters[Math.floor(Math.random() * letters.length)];
+  }
+  for (let i = 0; i < 4; i++) {
+    otp += numbers[Math.floor(Math.random() * numbers.length)];
+  }
+  return otp;
+}
+
 console.log('✅ All routes defined');
 
 // ============================================================
-// EXPORT - IMPORTANT!
+// EXPORT
 // ============================================================
 console.log('🔧 Exporting router...');
 module.exports = router;
