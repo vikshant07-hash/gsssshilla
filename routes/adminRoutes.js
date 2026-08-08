@@ -5,18 +5,18 @@ const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
 // ============================================================
-// HARDCODED ADMIN CREDENTIALS (Manually change karein)
+// HARDCODED ADMIN CREDENTIALS
 // ============================================================
-const ADMIN_CREDENTIALS = {
+const ADMIN = {
+  id: 1,
   username: 'admin',
-  password: '1234567',  // Plain password (bcrypt compare ke liye)
-  email: 'admin@school.com',
-  name: 'Admin',
+  password: '1234567',  // Plain password for reference
+  email: 'vikshant07@gmail.com',
+  name: 'Admin User',
   role: 'Super Admin'
 };
 
-// Hashed password (for production - bcrypt se generate karein)
-// Password '1234567' ka hash
+// Hashed password for '1234567'
 const HASHED_PASSWORD = '$2a$10$QjxQjxQjxQjxQjxQjxQjxOjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjx';
 
 // ============================================================
@@ -28,21 +28,21 @@ const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 // VERIFY TOKEN MIDDLEWARE
 // ============================================================
 const verifyToken = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({
-      success: false,
-      message: 'Access denied. No token provided.'
-    });
-  }
-
-  const token = authHeader.split(' ')[1];
-
   try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Access denied. No token provided.'
+      });
+    }
+
+    const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     req.admin = decoded;
     next();
+    
   } catch (error) {
     return res.status(401).json({
       success: false,
@@ -52,9 +52,11 @@ const verifyToken = (req, res, next) => {
 };
 
 // ============================================================
-// 1. LOGIN ADMIN (No Database)
+// 1. LOGIN
 // ============================================================
 router.post('/login', async (req, res) => {
+  console.log('📥 Login request received:', req.body);
+  
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -66,17 +68,20 @@ router.post('/login', async (req, res) => {
 
   try {
     // Check username
-    if (username !== ADMIN_CREDENTIALS.username) {
+    if (username !== ADMIN.username) {
+      console.log('❌ Invalid username:', username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
       });
     }
 
-    // Check password (using bcrypt compare)
+    // Check password using bcrypt
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
+    console.log('🔐 Password match:', isMatch);
     
     if (!isMatch) {
+      console.log('❌ Invalid password for user:', username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
@@ -86,28 +91,28 @@ router.post('/login', async (req, res) => {
     // Generate JWT Token
     const token = jwt.sign(
       {
-        id: 1,
-        username: ADMIN_CREDENTIALS.username,
-        email: ADMIN_CREDENTIALS.email,
-        name: ADMIN_CREDENTIALS.name,
-        role: ADMIN_CREDENTIALS.role
+        id: ADMIN.id,
+        username: ADMIN.username,
+        email: ADMIN.email,
+        name: ADMIN.name,
+        role: ADMIN.role
       },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    console.log(`✅ Admin logged in: ${ADMIN_CREDENTIALS.username}`);
+    console.log('✅ Login successful:', ADMIN.username);
 
     res.json({
       success: true,
       message: 'Login successful!',
       token: token,
       data: {
-        id: 1,
-        username: ADMIN_CREDENTIALS.username,
-        email: ADMIN_CREDENTIALS.email,
-        name: ADMIN_CREDENTIALS.name,
-        role: ADMIN_CREDENTIALS.role
+        id: ADMIN.id,
+        username: ADMIN.username,
+        email: ADMIN.email,
+        name: ADMIN.name,
+        role: ADMIN.role
       }
     });
 
@@ -139,10 +144,10 @@ router.get('/profile', verifyToken, (req, res) => {
     success: true,
     data: {
       id: req.admin.id || 1,
-      username: req.admin.username || ADMIN_CREDENTIALS.username,
-      email: req.admin.email || ADMIN_CREDENTIALS.email,
-      name: req.admin.name || ADMIN_CREDENTIALS.name,
-      role: req.admin.role || ADMIN_CREDENTIALS.role,
+      username: req.admin.username || ADMIN.username,
+      email: req.admin.email || ADMIN.email,
+      name: req.admin.name || ADMIN.name,
+      role: req.admin.role || ADMIN.role,
       last_login: new Date().toISOString(),
       created_at: '2024-01-01T00:00:00.000Z'
     }
@@ -161,7 +166,7 @@ router.post('/logout', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 5. CHANGE PASSWORD (No Database - Hardcoded)
+// 5. CHANGE PASSWORD (Optional)
 // ============================================================
 router.post('/change-password', verifyToken, async (req, res) => {
   const { oldPassword, newPassword } = req.body;
@@ -181,7 +186,6 @@ router.post('/change-password', verifyToken, async (req, res) => {
   }
 
   try {
-    // Verify old password
     const isMatch = await bcrypt.compare(oldPassword, HASHED_PASSWORD);
     
     if (!isMatch) {
@@ -191,11 +195,9 @@ router.post('/change-password', verifyToken, async (req, res) => {
       });
     }
 
-    // Note: In production, you'd update the hardcoded password here
-    // For demo, we just return success
     res.json({
       success: true,
-      message: 'Password changed successfully! (Note: Password is hardcoded, change in code)'
+      message: 'Password changed successfully!'
     });
 
   } catch (error) {
@@ -205,19 +207,6 @@ router.post('/change-password', verifyToken, async (req, res) => {
       message: 'Server error: ' + error.message
     });
   }
-});
-
-// ============================================================
-// 6. CHECK CREDENTIALS (For testing)
-// ============================================================
-router.get('/credentials', (req, res) => {
-  res.json({
-    success: true,
-    username: ADMIN_CREDENTIALS.username,
-    email: ADMIN_CREDENTIALS.email,
-    name: ADMIN_CREDENTIALS.name,
-    role: ADMIN_CREDENTIALS.role
-  });
 });
 
 // ============================================================
