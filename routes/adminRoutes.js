@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
 // ============================================================
-// HARDCODED ADMIN CREDENTIALS (Yahan change karein)
+// HARDCODED ADMIN CREDENTIALS
 // ============================================================
 const ADMIN = {
   id: 1,
@@ -16,12 +16,7 @@ const ADMIN = {
   role: 'Super Admin'
 };
 
-// Hashed password for '1234567'
 const HASHED_PASSWORD = '$2a$10$QjxQjxQjxQjxQjxQjxQjxOjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjxQjx';
-
-// ============================================================
-// JWT SECRET
-// ============================================================
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
 // ============================================================
@@ -67,28 +62,22 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    // Check username
     if (username !== ADMIN.username) {
-      console.log('❌ Invalid username:', username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
       });
     }
 
-    // Check password using bcrypt
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
-    console.log('🔐 Password match:', isMatch);
     
     if (!isMatch) {
-      console.log('❌ Invalid password for user:', username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
       });
     }
 
-    // Generate JWT Token
     const token = jwt.sign(
       {
         id: ADMIN.id,
@@ -163,50 +152,6 @@ router.post('/logout', verifyToken, (req, res) => {
     success: true,
     message: 'Logged out successfully'
   });
-});
-
-// ============================================================
-// 5. CHANGE PASSWORD ROUTE (Optional)
-// ============================================================
-router.post('/change-password', verifyToken, async (req, res) => {
-  const { oldPassword, newPassword } = req.body;
-
-  if (!oldPassword || !newPassword) {
-    return res.status(400).json({
-      success: false,
-      message: 'Old password and new password are required'
-    });
-  }
-
-  if (newPassword.length < 6) {
-    return res.status(400).json({
-      success: false,
-      message: 'New password must be at least 6 characters'
-    });
-  }
-
-  try {
-    const isMatch = await bcrypt.compare(oldPassword, HASHED_PASSWORD);
-    
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Current password is incorrect'
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Password changed successfully!'
-    });
-
-  } catch (error) {
-    console.error('❌ Change Password Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message
-    });
-  }
 });
 
 // ============================================================
