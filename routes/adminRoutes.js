@@ -9,10 +9,6 @@ console.log('🔧 adminRoutes.js loaded!');
 // ============================================================
 // ADMIN CREDENTIALS
 // ============================================================
-// NOTE: In production, move these to environment variables
-// (ADMIN_USERNAME, ADMIN_PASSWORD_HASH, ADMIN_EMAIL, JWT_SECRET)
-// instead of hardcoding them here.
-
 const ADMIN = {
   id: 1,
   username: process.env.ADMIN_USERNAME || 'admin',
@@ -21,25 +17,10 @@ const ADMIN = {
   role: 'Super Admin'
 };
 
-// FIX: the previous HASHED_PASSWORD was not a real bcrypt hash
-// ("QjxQjxQjx..." repeating pattern), so bcrypt.compare() always
-// returned false and login could never succeed.
-//
-// Preferred: set ADMIN_PASSWORD_HASH in your .env with a real hash,
-// generated once via:
-//   node -e "console.log(require('bcryptjs').hashSync('yourpassword', 10))"
-//
-// Fallback below auto-generates a valid hash at startup from
-// ADMIN_PASSWORD (or the default '1234567') so the app works even
-// without .env configured — but for production, use the env var above.
-const ADMIN_PLAIN_PASSWORD_FALLBACK = process.env.ADMIN_PASSWORD || '1234567';
-const HASHED_PASSWORD =
-  process.env.ADMIN_PASSWORD_HASH ||
-  bcrypt.hashSync(ADMIN_PLAIN_PASSWORD_FALLBACK, 10);
-
 if (!process.env.ADMIN_PASSWORD_HASH) {
-  console.warn('⚠️  ADMIN_PASSWORD_HASH not set in .env — using auto-generated hash from fallback password. Set it in production.');
+  console.warn('⚠️  ADMIN_PASSWORD_HASH not set in .env — set it in Render Environment Variables.');
 }
+const HASHED_PASSWORD = process.env.ADMIN_PASSWORD_HASH;
 
 if (!process.env.JWT_SECRET) {
   console.warn('⚠️  JWT_SECRET not set in .env — using an insecure default. Set it in production.');
@@ -47,6 +28,68 @@ if (!process.env.JWT_SECRET) {
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
 console.log('✅ Admin credentials loaded');
+
+// ============================================================
+// EMAIL SENDING (Brevo Transactional Email API)
+// ============================================================
+// Requires this Render Environment Variable:
+//   BREVO_API_KEY = <your Brevo API key (starts with xkeysib-...)>
+//
+// IMPORTANT: magicalmathsquiz@gmail.com must be a VERIFIED sender
+// in your Brevo account (Senders, Domains & Dedicated IPs → Senders)
+// or Brevo will reject the send.
+const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'magicalmathsquiz@gmail.com';
+const BREVO_SENDER_NAME = 'GSSS SHILLA';
+
+if (!process.env.BREVO_API_KEY) {
+  console.warn('⚠️  BREVO_API_KEY not set — OTP emails will fail to send.');
+}
+
+async function sendOTPEmail(toEmail, otp, purpose = 'login') {
+  const subjectText = purpose === 'reset'
+    ? 'Password Reset OTP — GSSS SHILLA'
+    : 'Admin Login OTP — GSSS SHILLA';
+
+  const headingText = purpose === 'reset'
+    ? 'Password Reset Request'
+    : 'Admin Login Verification';
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px;">
+      <h2 style="color: #1f2937; margin-bottom: 4px;">GSSS SHILLA</h2>
+      <p style="color: #6b7280; margin-top: 0;">${headingText}</p>
+      <p style="font-size: 15px; color: #374151;">Your One-Time Password (OTP) is:</p>
+      <div style="font-size: 28px; font-weight: bold; letter-spacing: 4px; background: #f3f4f6; padding: 14px; text-align: center; border-radius: 8px; color: #111827;">
+        ${otp}
+      </div>
+      <p style="font-size: 13px; color: #9ca3af; margin-top: 18px;">
+        This OTP is valid for 5 minutes. If you did not request this, please ignore this email.
+      </p>
+    </div>
+  `;
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'api-key': process.env.BREVO_API_KEY
+    },
+    body: JSON.stringify({
+      sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+      to: [{ email: toEmail }],
+      subject: subjectText,
+      htmlContent: htmlContent
+    })
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Brevo API error (${response.status}): ${errorBody}`);
+  }
+
+  return response.json();
+}
 
 // ============================================================
 // VERIFY TOKEN
@@ -100,12 +143,10 @@ router.get('/test', (req, res) => {
 // ============================================================
 router.post('/login', async (req, res) => {
   console.log('🔥 LOGIN ROUTE HIT');
-  console.log('📥 Request body:', req.body);
 
   const { username, password } = req.body;
 
   if (!username || !password) {
-    console.log('❌ Missing fields');
     return res.status(400).json({
       success: false,
       message: 'Username and password are required'
@@ -114,7 +155,6 @@ router.post('/login', async (req, res) => {
 
   try {
     if (username !== ADMIN.username) {
-      console.log('❌ Invalid username:', username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
@@ -122,10 +162,7 @@ router.post('/login', async (req, res) => {
     }
 
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
-    console.log('🔐 Password match:', isMatch);
-
     if (!isMatch) {
-      console.log('❌ Invalid password');
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
@@ -134,16 +171,24 @@ router.post('/login', async (req, res) => {
 
     const otp = generateOTP();
     const expiry = Date.now() + 5 * 60 * 1000;
-
     otpStore[username] = { otp, expiry };
+
     console.log(`📧 OTP for ${username}: ${otp}`);
 
-    // NOTE: test_otp is included here for development convenience only.
-    // Remove it in production and actually send the OTP via email/SMS instead.
+    try {
+      await sendOTPEmail(ADMIN.email, otp, 'login');
+      console.log('✅ OTP email sent to', ADMIN.email);
+    } catch (emailErr) {
+      console.error('❌ Failed to send OTP email:', emailErr.message);
+      return res.status(500).json({
+        success: false,
+        message: 'OTP generated but failed to send email. Check email configuration.'
+      });
+    }
+
     res.json({
       success: true,
-      message: 'OTP sent successfully!',
-      test_otp: otp
+      message: 'OTP sent successfully to your email!'
     });
 
   } catch (error) {
@@ -160,7 +205,6 @@ router.post('/login', async (req, res) => {
 // ============================================================
 router.post('/verify-otp', async (req, res) => {
   console.log('🔥 VERIFY OTP ROUTE HIT');
-  console.log('📥 Request body:', req.body);
 
   const { username, password, otp } = req.body;
 
@@ -173,41 +217,26 @@ router.post('/verify-otp', async (req, res) => {
 
   try {
     if (username !== ADMIN.username) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
     if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     const stored = otpStore[username];
     if (!stored) {
-      return res.status(401).json({
-        success: false,
-        message: 'No OTP found. Please request a new one.'
-      });
+      return res.status(401).json({ success: false, message: 'No OTP found. Please request a new one.' });
     }
 
     if (stored.otp !== otp.toUpperCase()) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid OTP'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid OTP' });
     }
 
     if (Date.now() > stored.expiry) {
       delete otpStore[username];
-      return res.status(401).json({
-        success: false,
-        message: 'OTP expired. Please request a new one.'
-      });
+      return res.status(401).json({ success: false, message: 'OTP expired. Please request a new one.' });
     }
 
     delete otpStore[username];
@@ -241,10 +270,7 @@ router.post('/verify-otp', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Verify OTP Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
 
@@ -252,7 +278,6 @@ router.post('/verify-otp', async (req, res) => {
 // 4. VERIFY ROUTE
 // ============================================================
 router.get('/verify', verifyToken, (req, res) => {
-  console.log('📥 Verify route hit!');
   res.json({ success: true, admin: req.admin, message: 'Token is valid' });
 });
 
@@ -260,7 +285,6 @@ router.get('/verify', verifyToken, (req, res) => {
 // 5. PROFILE ROUTE
 // ============================================================
 router.get('/profile', verifyToken, (req, res) => {
-  console.log('📥 Profile route hit!');
   res.json({
     success: true,
     data: {
@@ -278,7 +302,6 @@ router.get('/profile', verifyToken, (req, res) => {
 // 6. LOGOUT ROUTE
 // ============================================================
 router.post('/logout', verifyToken, (req, res) => {
-  console.log('📥 Logout route hit!');
   res.json({ success: true, message: 'Logged out successfully' });
 });
 
@@ -291,38 +314,39 @@ router.post('/send-reset-otp', async (req, res) => {
   const { email } = req.body;
 
   if (!email) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email is required'
-    });
+    return res.status(400).json({ success: false, message: 'Email is required' });
   }
 
   try {
     if (email !== ADMIN.email) {
-      return res.status(404).json({
-        success: false,
-        message: 'Email not found in our system'
-      });
+      return res.status(404).json({ success: false, message: 'Email not found in our system' });
     }
 
     const otp = generateOTP();
     const expiry = Date.now() + 5 * 60 * 1000;
-
     otpStore[`reset_${email}`] = { otp, expiry };
+
     console.log(`📧 Reset OTP for ${email}: ${otp}`);
+
+    try {
+      await sendOTPEmail(email, otp, 'reset');
+      console.log('✅ Reset OTP email sent to', email);
+    } catch (emailErr) {
+      console.error('❌ Failed to send reset OTP email:', emailErr.message);
+      return res.status(500).json({
+        success: false,
+        message: 'OTP generated but failed to send email. Check email configuration.'
+      });
+    }
 
     res.json({
       success: true,
-      message: 'Reset OTP sent successfully!',
-      test_otp: otp
+      message: 'Reset OTP sent successfully to your email!'
     });
 
   } catch (error) {
     console.error('❌ Send Reset OTP Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
 
@@ -335,79 +359,45 @@ router.post('/reset-password', async (req, res) => {
   const { email, otp, newPassword, confirmPassword } = req.body;
 
   if (!email || !otp || !newPassword) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email, OTP and new password are required'
-    });
+    return res.status(400).json({ success: false, message: 'Email, OTP and new password are required' });
   }
 
   if (newPassword !== confirmPassword) {
-    return res.status(400).json({
-      success: false,
-      message: 'Passwords do not match'
-    });
+    return res.status(400).json({ success: false, message: 'Passwords do not match' });
   }
 
   if (newPassword.length < 6) {
-    return res.status(400).json({
-      success: false,
-      message: 'Password must be at least 6 characters'
-    });
+    return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
   }
 
   try {
     if (email !== ADMIN.email) {
-      return res.status(404).json({
-        success: false,
-        message: 'Email not found'
-      });
+      return res.status(404).json({ success: false, message: 'Email not found' });
     }
 
     const stored = otpStore[`reset_${email}`];
     if (!stored) {
-      return res.status(401).json({
-        success: false,
-        message: 'No OTP found. Please request a new one.'
-      });
+      return res.status(401).json({ success: false, message: 'No OTP found. Please request a new one.' });
     }
 
     if (stored.otp !== otp.toUpperCase()) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid OTP'
-      });
+      return res.status(401).json({ success: false, message: 'Invalid OTP' });
     }
 
     if (Date.now() > stored.expiry) {
       delete otpStore[`reset_${email}`];
-      return res.status(401).json({
-        success: false,
-        message: 'OTP expired. Please request a new one.'
-      });
+      return res.status(401).json({ success: false, message: 'OTP expired. Please request a new one.' });
     }
 
     delete otpStore[`reset_${email}`];
 
-    // NOTE: This route validates the OTP but doesn't actually persist
-    // the new password anywhere (no DB call), so the "old" password
-    // will still work after this. If you have a database/user store,
-    // update HASHED_PASSWORD (or the stored user record) here, e.g.:
-    //   const newHash = await bcrypt.hash(newPassword, 10);
-    //   await User.updateOne({ email }, { passwordHash: newHash });
-
     console.log(`✅ Password reset OTP verified for: ${email}`);
 
-    res.json({
-      success: true,
-      message: 'Password reset successfully!'
-    });
+    res.json({ success: true, message: 'Password reset successfully!' });
 
   } catch (error) {
     console.error('❌ Reset Password Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
 
@@ -421,11 +411,6 @@ router.get('/debug', (req, res) => {
     routes: ['/test', '/login', '/verify-otp', '/verify', '/profile', '/logout', '/send-reset-otp', '/reset-password', '/debug'],
     timestamp: new Date().toISOString()
   });
-});
-// ⚠️ TEMPORARY — password hash generate karne ke liye, kaam hone ke baad HATA dena
-router.get('/generate-hash/:password', async (req, res) => {
-  const hash = await bcrypt.hash(req.params.password, 10);
-  res.json({ password: req.params.password, hash });
 });
 
 console.log('✅ All routes defined');
