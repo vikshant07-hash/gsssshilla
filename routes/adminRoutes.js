@@ -4,17 +4,14 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
-// DEBUG - Check if file is loading
-console.log('🔧 Loading adminRoutes.js...');
-
 // ============================================================
-// HARDCODED ADMIN CREDENTIALS
+// ADMIN CREDENTIALS
 // ============================================================
 const ADMIN = {
   id: 1,
   username: 'admin',
   password: '1234567',
-  email: 'admin@school.com',
+  email: 'vikshant07@gmail.com',
   name: 'Admin User',
   role: 'Super Admin'
 };
@@ -23,34 +20,32 @@ const HASHED_PASSWORD = '$2a$10$QjxQjxQjxQjxQjxQjxQjxOjxQjxQjxQjxQjxQjxQjxQjxQjx
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
 // ============================================================
-// VERIFY TOKEN MIDDLEWARE
+// VERIFY TOKEN
 // ============================================================
 const verifyToken = (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: 'Access denied. No token provided.'
-      });
+      return res.status(401).json({ success: false, message: 'No token provided' });
     }
-
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     req.admin = decoded;
     next();
-    
   } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid or expired token.'
-    });
+    return res.status(401).json({ success: false, message: 'Invalid token' });
   }
 };
 
 // ============================================================
-// 1. LOGIN ROUTE
+// TEST ROUTE (WORKING)
+// ============================================================
+router.get('/test', (req, res) => {
+  res.json({ success: true, message: 'Admin routes working!' });
+});
+
+// ============================================================
+// 1. LOGIN ROUTE (FIX)
 // ============================================================
 router.post('/login', async (req, res) => {
   console.log('📥 Login request received:', req.body);
@@ -65,6 +60,7 @@ router.post('/login', async (req, res) => {
   }
 
   try {
+    // Check username
     if (username !== ADMIN.username) {
       console.log('❌ Invalid username:', username);
       return res.status(401).json({
@@ -73,7 +69,9 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    // Check password
     const isMatch = await bcrypt.compare(password, HASHED_PASSWORD);
+    console.log('🔐 Password match:', isMatch);
     
     if (!isMatch) {
       console.log('❌ Invalid password for user:', username);
@@ -83,6 +81,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    // Generate JWT Token
     const token = jwt.sign(
       {
         id: ADMIN.id,
@@ -120,30 +119,25 @@ router.post('/login', async (req, res) => {
 });
 
 // ============================================================
-// 2. VERIFY TOKEN ROUTE
+// 2. VERIFY ROUTE
 // ============================================================
 router.get('/verify', verifyToken, (req, res) => {
-  res.json({
-    success: true,
-    admin: req.admin,
-    message: 'Token is valid'
-  });
+  res.json({ success: true, admin: req.admin, message: 'Token is valid' });
 });
 
 // ============================================================
-// 3. GET PROFILE ROUTE
+// 3. PROFILE ROUTE
 // ============================================================
 router.get('/profile', verifyToken, (req, res) => {
   res.json({
     success: true,
     data: {
-      id: req.admin.id || 1,
-      username: req.admin.username || ADMIN.username,
-      email: req.admin.email || ADMIN.email,
-      name: req.admin.name || ADMIN.name,
-      role: req.admin.role || ADMIN.role,
-      last_login: new Date().toISOString(),
-      created_at: '2024-01-01T00:00:00.000Z'
+      id: req.admin.id,
+      username: req.admin.username,
+      email: req.admin.email,
+      name: req.admin.name,
+      role: req.admin.role,
+      last_login: new Date().toISOString()
     }
   });
 });
@@ -152,26 +146,11 @@ router.get('/profile', verifyToken, (req, res) => {
 // 4. LOGOUT ROUTE
 // ============================================================
 router.post('/logout', verifyToken, (req, res) => {
-  console.log(`🔓 Admin logged out: ${req.admin?.username || 'Unknown'}`);
-  res.json({
-    success: true,
-    message: 'Logged out successfully'
-  });
-});
-
-// ============================================================
-// 5. TEST ROUTE - Check if router is working
-// ============================================================
-router.get('/test', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Admin routes are working!',
-    timestamp: new Date().toISOString()
-  });
+  res.json({ success: true, message: 'Logged out successfully' });
 });
 
 // ============================================================
 // EXPORT
 // ============================================================
-console.log('✅ Admin routes exported successfully!');
+console.log('✅ Admin routes exported!');
 module.exports = router;
