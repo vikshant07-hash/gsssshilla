@@ -51,13 +51,18 @@ const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'magicalmathsquiz@gmail.com';
 const BREVO_SENDER_NAME = 'GSSS SHILLA';
 
-// Replace this with your school logo URL once hosted (e.g. on your website or an image CDN)
-const SCHOOL_LOGO_URL = process.env.SCHOOL_LOGO_URL || 'https://via.placeholder.com/90x90.png?text=Logo';
+// ============================================================
+// SCHOOL LOGO URL - FIXED: Environment variable se le rahe hain
+// ============================================================
+const SCHOOL_LOGO_URL = process.env.SCHOOL_LOGO_URL || 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png';
 
 if (!process.env.BREVO_API_KEY) {
   console.warn('⚠️  BREVO_API_KEY not set — OTP emails will fail to send.');
 }
 
+// ============================================================
+// EMAIL SENDING FUNCTION - COMPLETE UPDATED VERSION
+// ============================================================
 async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Admin') {
   const subjectText = purpose === 'reset'
     ? 'Password Reset OTP — GSSS SHILLA'
@@ -71,6 +76,9 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
     ? 'We received a request to reset your admin password. Use the OTP below to proceed.'
     : 'Use the One-Time Password below to securely log in to your admin account.';
 
+  // ============================================================
+  // UPDATED EMAIL TEMPLATE - SCHOOL LOGO NOW WORKING
+  // ============================================================
   const htmlContent = `
   <!DOCTYPE html>
   <html>
@@ -84,12 +92,13 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
         <td align="center">
           <table role="presentation" width="100%" style="max-width:520px; background:#ffffff; border-radius:16px; overflow:hidden; box-shadow: 0 4px 18px rgba(0,0,0,0.08);">
             
-            <!-- Header with gradient + logo -->
+            <!-- Header with gradient + logo - UPDATED -->
             <tr>
               <td style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #0ea5e9 100%); padding: 32px 24px; text-align:center;">
-                <img src="https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png" alt="GSSS SHILLA Logo" width="72" height="72" style="border-radius:50%; background:#ffffff; padding:6px; margin-bottom:12px; display:inline-block;" />
+                <!-- SCHOOL LOGO - NOW USING ENVIRONMENT VARIABLE -->
+                <img src="${SCHOOL_LOGO_URL}" alt="GSSS SHILLA Logo" width="72" height="72" style="border-radius:50%; background:#ffffff; padding:6px; margin-bottom:12px; display:inline-block;" />
                 <h1 style="color:#ffffff; font-size:22px; margin:8px 0 2px 0; letter-spacing:0.5px;">GSSS SHILLA</h1>
-                <p style="color:#e0e7ff; font-size:13px; margin:0;">Government Senior Secondary School</p>
+                <p style="color:#e0e7ff; font-size:13px; margin:0;">Government Senior Secondary School Shilla</p>
               </td>
             </tr>
 
@@ -98,7 +107,7 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
               <td style="padding: 32px 28px;">
                 <h2 style="color:#1e293b; font-size:19px; margin:0 0 6px 0;">${headingText}</h2>
                 <p style="color:#64748b; font-size:14px; line-height:1.6; margin:0 0 20px 0;">
-                  Hi ${recipientName }  ${introText}
+                  Hi ${recipientName}, ${introText}
                 </p>
 
                 <!-- OTP Box -->
@@ -514,6 +523,7 @@ router.get('/debug', (req, res) => {
     message: 'Admin router is working!',
     admins_configured: ADMINS.length,
     routes: ['/test', '/login', '/verify-otp', '/verify', '/profile', '/logout', '/send-reset-otp', '/reset-password', '/generate-hash/:password', '/debug'],
+    school_logo_url: SCHOOL_LOGO_URL, // Debug mein logo URL bhi show karega
     timestamp: new Date().toISOString()
   });
 });
