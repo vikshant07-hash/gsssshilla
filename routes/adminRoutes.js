@@ -98,7 +98,7 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
               <td style="padding: 32px 28px;">
                 <h2 style="color:#1e293b; font-size:19px; margin:0 0 6px 0;">${headingText}</h2>
                 <p style="color:#64748b; font-size:14px; line-height:1.6; margin:0 0 20px 0;">
-                  Hi ${recipientName }  ${  introText}
+                  Hi ${recipientName}  ${introText}
                 </p>
 
                 <!-- OTP Box -->
