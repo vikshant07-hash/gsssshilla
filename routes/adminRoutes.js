@@ -87,7 +87,7 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
             <!-- Header with gradient + logo -->
             <tr>
               <td style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #0ea5e9 100%); padding: 32px 24px; text-align:center;">
-                <img src="${https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png"} alt="GSSS SHILLA Logo" width="72" height="72" style="border-radius:50%; background:#ffffff; padding:6px; margin-bottom:12px; display:inline-block;" />
+                <img src="https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png" alt="GSSS SHILLA Logo" width="72" height="72" style="border-radius:50%; background:#ffffff; padding:6px; margin-bottom:12px; display:inline-block;" />
                 <h1 style="color:#ffffff; font-size:22px; margin:8px 0 2px 0; letter-spacing:0.5px;">GSSS SHILLA</h1>
                 <p style="color:#e0e7ff; font-size:13px; margin:0;">Government Senior Secondary School</p>
               </td>
@@ -98,7 +98,7 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
               <td style="padding: 32px 28px;">
                 <h2 style="color:#1e293b; font-size:19px; margin:0 0 6px 0;">${headingText}</h2>
                 <p style="color:#64748b; font-size:14px; line-height:1.6; margin:0 0 20px 0;">
-                  Hi ${recipientName}  ${introText}
+                  Hi ${recipientName }  ${introText}
                 </p>
 
                 <!-- OTP Box -->
