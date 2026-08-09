@@ -402,12 +402,10 @@ router.post('/reset-password', async (req, res) => {
 });
 
 // TEMPORARY - remove before deploying / after use
-router.post('/generate-hash', async (req, res) => {
-  const { password } = req.body;
-  if (!password) {
-    return res.status(400).json({ success: false, message: 'Password required' });
-  }
-  const hash = await bcrypt.hash(password, 10);
+// TEMPORARY ROUTE - password hash generate karne ke liye
+// Kaam hote hi ise turant hata dein
+router.get('/generate-hash/:password', async (req, res) => {
+  const hash = await bcrypt.hash(req.params.password, 10);
   res.json({ success: true, hash });
 });
 
