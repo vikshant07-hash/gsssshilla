@@ -53,6 +53,61 @@ const recentStorage = new CloudinaryStorage({
 });
 
 // ============================================================
+// STORAGE FOR GALLERY - IMAGES & VIDEOS
+// ============================================================
+const galleryStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: process.env.CLOUDINARY_GALLERY_FOLDER || "school/gallery",
+    resource_type: "auto",
+    allowed_formats: ["jpg", "jpeg", "png", "gif", "webp", "mp4", "mov", "avi", "webm", "mkv"],
+    public_id: (req, file) => {
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
+      return `gallery-${originalName}-${uniqueSuffix}`;
+    }
+  }
+});
+
+// ============================================================
+// STORAGE FOR DOWNLOADS (PDF, Images)
+// ============================================================
+const downloadStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: process.env.CLOUDINARY_DOWNLOAD_FOLDER || "school/downloads",
+    resource_type: "auto",
+    allowed_formats: ["jpg", "jpeg", "png", "gif", "webp", "pdf", "doc", "docx"],
+    public_id: (req, file) => {
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
+      return `download-${originalName}-${uniqueSuffix}`;
+    }
+  }
+});
+
+// ============================================================
+// STORAGE FOR FACULTY PHOTOS
+// ============================================================
+const facultyStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: process.env.CLOUDINARY_FACULTY_FOLDER || "school/faculty",
+    resource_type: "auto",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    transformation: [
+      { width: 400, height: 400, crop: "thumb", gravity: "face" },
+      { quality: "auto:good" }
+    ],
+    public_id: (req, file) => {
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
+      return `faculty-${originalName}-${uniqueSuffix}`;
+    }
+  }
+});
+
+// ============================================================
 // MULTER UPLOAD: SLIDER IMAGES
 // ============================================================
 const uploadSlider = multer({
@@ -95,22 +150,22 @@ const uploadRecent = multer({
   }
 });
 
-
-
-
 // ============================================================
-// STORAGE FOR DOWNLOADS (PDF, Images)
+// MULTER UPLOAD: GALLERY (Images & Videos)
 // ============================================================
-const downloadStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: process.env.CLOUDINARY_DOWNLOAD_FOLDER || "school/downloads",
-    resource_type: "auto",
-    allowed_formats: ["jpg", "jpeg", "png", "gif", "webp", "pdf", "doc", "docx"],
-    public_id: (req, file) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
-      return `download-${originalName}-${uniqueSuffix}`;
+const uploadGallery = multer({
+  storage: galleryStorage,
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB for videos
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
+      "video/mp4", "video/avi", "video/mpeg", "video/quicktime", "video/webm", "video/x-matroska"
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only images and video files are allowed for gallery!"), false);
     }
   }
 });
@@ -137,28 +192,6 @@ const uploadDownload = multer({
   }
 });
 
-
-// ============================================================
-// STORAGE FOR FACULTY PHOTOS
-// ============================================================
-const facultyStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: process.env.CLOUDINARY_FACULTY_FOLDER || "school/faculty",
-    resource_type: "auto",
-    allowed_formats: ["jpg", "jpeg", "png", "webp"],
-    transformation: [
-      { width: 400, height: 400, crop: "thumb", gravity: "face" },
-      { quality: "auto:good" }
-    ],
-    public_id: (req, file) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
-      return `faculty-${originalName}-${uniqueSuffix}`;
-    }
-  }
-});
-
 // ============================================================
 // MULTER UPLOAD: FACULTY PHOTOS
 // ============================================================
@@ -176,17 +209,13 @@ const uploadFaculty = multer({
 });
 
 // ============================================================
-// EXPORTS (update)
+// EXPORTS
 // ============================================================
 module.exports = {
   cloudinary,
   uploadSlider,
   uploadRecent,
+  uploadGallery,   // <-- NEW
   uploadDownload,
-  uploadFaculty    // <-- Add this
+  uploadFaculty
 };
-
-// ============================================================
-// EXPORTS (update existing exports)
-// ============================================================
-
