@@ -53,7 +53,7 @@ const recentStorage = new CloudinaryStorage({
 });
 
 // ============================================================
-// STORAGE FOR GALLERY - IMAGES & VIDEOS
+// STORAGE FOR GALLERY - IMAGES & VIDEOS (NEW)
 // ============================================================
 const galleryStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
@@ -70,7 +70,7 @@ const galleryStorage = new CloudinaryStorage({
 });
 
 // ============================================================
-// STORAGE FOR DOWNLOADS (PDF, Images)
+// STORAGE FOR DOWNLOADS
 // ============================================================
 const downloadStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
@@ -151,7 +151,7 @@ const uploadRecent = multer({
 });
 
 // ============================================================
-// MULTER UPLOAD: GALLERY (Images & Videos)
+// MULTER UPLOAD: GALLERY (Images & Videos) - NEW
 // ============================================================
 const uploadGallery = multer({
   storage: galleryStorage,
@@ -171,7 +171,7 @@ const uploadGallery = multer({
 });
 
 // ============================================================
-// MULTER UPLOAD: DOWNLOADS (15MB limit)
+// MULTER UPLOAD: DOWNLOADS
 // ============================================================
 const uploadDownload = multer({
   storage: downloadStorage,
@@ -215,7 +215,7 @@ module.exports = {
   cloudinary,
   uploadSlider,
   uploadRecent,
-  uploadGallery,   // <-- NEW
+  uploadGallery,   // <-- ADD THIS
   uploadDownload,
   uploadFaculty
 };
