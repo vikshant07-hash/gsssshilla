@@ -1079,9 +1079,28 @@ app.put("/api/gallery/slider/reorder", (req, res) => {
 // ============================================================
 
 // GET - Gallery Images by Year (Public)
+
+// ============================================================
+// GALLERY MODULE ROUTES - WITH VIDEO SUPPORT
+// ============================================================
+
+// GET - Gallery Images by Year (Public)
 app.get("/api/gallery/images/public", (req, res) => {
   const year = req.query.year || new Date().getFullYear();
-  db.query(`SELECT * FROM gallery_images WHERE is_active = 1 AND YEAR(image_date) = ? ORDER BY image_date DESC, created_at DESC`,
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist,
+     CASE 
+       WHEN media_type = 'video' THEN CONCAT(SUBSTRING_INDEX(file_path, '.', 1), '.jpg')
+       ELSE file_path 
+     END as thumbnail_url,
+     CASE 
+       WHEN media_type = 'video' THEN CONCAT(file_path, '.jpg')
+       ELSE NULL 
+     END as video_poster
+     FROM gallery_images 
+     WHERE is_active = 1 AND YEAR(image_date) = ? 
+     ORDER BY image_date DESC, created_at DESC`,
     [year],
     (err, results) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
@@ -1092,7 +1111,8 @@ app.get("/api/gallery/images/public", (req, res) => {
 
 // GET - Available Years
 app.get("/api/gallery/years", (req, res) => {
-  db.query(`SELECT DISTINCT YEAR(image_date) as year FROM gallery_images WHERE is_active = 1 ORDER BY year DESC`,
+  db.query(
+    `SELECT DISTINCT YEAR(image_date) as year FROM gallery_images WHERE is_active = 1 ORDER BY year DESC`,
     (err, results) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
       const years = results.map(r => r.year);
@@ -1101,10 +1121,15 @@ app.get("/api/gallery/years", (req, res) => {
   );
 });
 
-// GET - Admin Recent Images
+// GET - Admin Recent Gallery Items
 app.get("/api/gallery/images/admin/recent", (req, res) => {
   const limit = parseInt(req.query.limit) || 20;
-  db.query(`SELECT * FROM gallery_images ORDER BY created_at DESC LIMIT ?`, [limit],
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist 
+     FROM gallery_images 
+     ORDER BY created_at DESC LIMIT ?`,
+    [limit],
     (err, results) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
       res.json({ success: true, data: results || [] });
@@ -1112,9 +1137,13 @@ app.get("/api/gallery/images/admin/recent", (req, res) => {
   );
 });
 
-// GET - All Gallery Images
+// GET - All Gallery Items (Admin)
 app.get("/api/gallery/images", (req, res) => {
-  db.query(`SELECT * FROM gallery_images ORDER BY created_at DESC LIMIT 50`,
+  db.query(
+    `SELECT *, 
+     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist 
+     FROM gallery_images 
+     ORDER BY created_at DESC LIMIT 50`,
     (err, results) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
       res.json({ success: true, data: results || [] });
@@ -1122,17 +1151,17 @@ app.get("/api/gallery/images", (req, res) => {
   );
 });
 
-// POST - Add Gallery Images (NO album_id required)
-app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req, res) => {
+// POST - Add Gallery Items (Images & Videos)
+app.post("/api/gallery/images/add", uploadGallery.array('media', 30), async (req, res) => {
   const { title, description, image_date } = req.body;
 
-  console.log("📸 Add Gallery Images Request");
+  console.log("📸 Add Gallery Media Request");
   console.log("📸 Title:", title);
   console.log("📸 Date:", image_date);
   console.log("📸 Files:", req.files ? req.files.length : 0);
 
   if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ success: false, message: "No images uploaded" });
+    return res.status(400).json({ success: false, message: "No media uploaded" });
   }
 
   const uploaded = [];
@@ -1141,17 +1170,43 @@ app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req
 
   for (const file of req.files) {
     try {
+      const isVideo = file.mimetype?.startsWith('video/') || false;
+      const filePath = file.path;
+      const publicId = file.filename;
+      
+      // For videos, Cloudinary automatically generates thumbnail
+      // We'll store the video thumbnail URL separately
+      let videoThumbnail = null;
+      if (isVideo) {
+        // Cloudinary video thumbnail URL (add .jpg extension)
+        videoThumbnail = filePath.replace(/\.[^.]+$/, '.jpg');
+      }
+
       await new Promise((resolve, reject) => {
         db.query(
-          `INSERT INTO gallery_images (filename, file_path, public_id, file_size, mime_type, title, description, image_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-          [file.filename, file.path, file.filename, file.size || 0, file.mimetype || 'image/jpeg', title || '', description || '', uploadDate],
+          `INSERT INTO gallery_images 
+           (filename, file_path, public_id, file_size, mime_type, media_type, 
+            video_thumbnail, title, description, image_date, created_at) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+          [
+            publicId, 
+            filePath, 
+            publicId, 
+            file.size || 0, 
+            file.mimetype || (isVideo ? 'video/mp4' : 'image/jpeg'),
+            isVideo ? 'video' : 'image',
+            videoThumbnail,
+            title || '', 
+            description || '', 
+            uploadDate
+          ],
           (err, result) => {
             if (err) reject(err);
             else resolve(result);
           }
         );
       });
-      uploaded.push(file.filename);
+      uploaded.push({ filename: publicId, type: isVideo ? 'video' : 'image' });
     } catch (err) {
       console.error("❌ Upload error:", err);
       errors.push({ file: file.originalname, error: err.message });
@@ -1160,70 +1215,83 @@ app.post("/api/gallery/images/add", uploadSlider.array('images', 30), async (req
 
   res.json({
     success: true,
-    message: `${uploaded.length} images uploaded successfully!`,
+    message: `${uploaded.length} media items uploaded successfully!`,
     uploaded: uploaded,
     errors: errors.length > 0 ? errors : undefined
   });
 });
 
-// PUT - Update Single Image
+// PUT - Update Single Gallery Item
 app.put("/api/gallery/images/update/:id", (req, res) => {
   const { id } = req.params;
   const { title, description, image_date, is_active } = req.body;
 
-  db.query(`UPDATE gallery_images SET title=?, description=?, image_date=?, is_active=?, updated_at=NOW() WHERE id=?`,
+  db.query(
+    `UPDATE gallery_images SET title=?, description=?, image_date=?, is_active=?, updated_at=NOW() WHERE id=?`,
     [title || '', description || '', image_date || null, is_active !== undefined ? parseInt(is_active) : 1, id],
     (err, result) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
-      if (result.affectedRows === 0) return res.status(404).json({ success: false, message: "Image not found" });
-      res.json({ success: true, message: "✅ Image updated!" });
+      if (result.affectedRows === 0) return res.status(404).json({ success: false, message: "Item not found" });
+      res.json({ success: true, message: "✅ Gallery item updated!" });
     }
   );
 });
 
-// DELETE - Delete Gallery Image
+// DELETE - Delete Gallery Item
 app.delete("/api/gallery/images/delete/:id", (req, res) => {
   const { id } = req.params;
   if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
 
   db.query("SELECT * FROM gallery_images WHERE id = ?", [id], (err, results) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
-    if (!results || results.length === 0) return res.status(404).json({ success: false, message: "Image not found" });
+    if (!results || results.length === 0) return res.status(404).json({ success: false, message: "Item not found" });
 
-    const image = results[0];
-    if (image.public_id) cloudinary.uploader.destroy(image.public_id).catch(err => console.error("Cloudinary error:", err));
+    const item = results[0];
+    // Delete from Cloudinary
+    if (item.public_id) {
+      cloudinary.uploader.destroy(item.public_id, { 
+        resource_type: item.media_type === 'video' ? 'video' : 'image' 
+      }).catch(err => console.error("Cloudinary error:", err));
+    }
 
     db.query("DELETE FROM gallery_images WHERE id = ?", [id], (deleteErr) => {
       if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      res.json({ success: true, message: "✅ Image deleted!" });
+      res.json({ success: true, message: "✅ Gallery item deleted!" });
     });
   });
 });
 
-// DELETE - Bulk Delete Images
+// DELETE - Bulk Delete Gallery Items
 app.delete("/api/gallery/images/bulk-delete", (req, res) => {
   const { ids } = req.body;
-  if (!ids || !Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, message: "No IDs provided" });
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ success: false, message: "No IDs provided" });
+  }
 
   const placeholders = ids.map(() => '?').join(',');
   db.query(`SELECT * FROM gallery_images WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
     if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
-    fetchResults.forEach(image => {
-      if (image.public_id) cloudinary.uploader.destroy(image.public_id).catch(err => console.error("Cloudinary error:", err));
+    
+    fetchResults.forEach(item => {
+      if (item.public_id) {
+        cloudinary.uploader.destroy(item.public_id, { 
+          resource_type: item.media_type === 'video' ? 'video' : 'image' 
+        }).catch(err => console.error("Cloudinary error:", err));
+      }
     });
+
     db.query(`DELETE FROM gallery_images WHERE id IN (${placeholders})`, ids, (deleteErr) => {
       if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      res.json({ success: true, message: `${ids.length} images deleted ✅` });
+      res.json({ success: true, message: `${ids.length} items deleted ✅` });
     });
   });
 });
 
-// ============================================================
-// GALLERY STATS
-// ============================================================
+// GET - Gallery Stats
 app.get("/api/gallery/stats", (req, res) => {
   const queries = {
-    total_images: "SELECT COUNT(*) as count FROM gallery_images WHERE is_active = 1",
+    total_images: "SELECT COUNT(*) as count FROM gallery_images WHERE is_active = 1 AND media_type = 'image'",
+    total_videos: "SELECT COUNT(*) as count FROM gallery_images WHERE is_active = 1 AND media_type = 'video'",
     total_slider: "SELECT COUNT(*) as count FROM gallery_slider WHERE is_active = 1",
     total_years: "SELECT COUNT(DISTINCT YEAR(image_date)) as count FROM gallery_images WHERE is_active = 1"
   };
@@ -1242,6 +1310,7 @@ app.get("/api/gallery/stats", (req, res) => {
           success: true,
           data: {
             total_images: results.total_images?.count || 0,
+            total_videos: results.total_videos?.count || 0,
             total_slider: results.total_slider?.count || 0,
             total_years: results.total_years?.count || 0
           }
@@ -1250,9 +1319,6 @@ app.get("/api/gallery/stats", (req, res) => {
     });
   });
 });
-
-
-
 
 // ============================================================
 // DOWNLOAD MODULE ROUTES
