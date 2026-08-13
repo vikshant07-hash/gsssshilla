@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const path = require("path");
+const session = require('express-session'); 
 const fs = require("fs-extra");
 const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, uploadDownload } = require("./config/cloudinary");
 const { db } = require("./config/db");
