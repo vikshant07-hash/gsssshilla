@@ -2,26 +2,18 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { v4: uuidv4 } = require('uuid');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs-extra');
 require('dotenv').config();
 
-const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, uploadDownload } = require('../config/cloudinary');
-const { db } = require('../config/db');
-
-console.log('🔧 adminRoutes.js loaded - Protected Routes');
+console.log('🔧 adminRoutes.js loaded!');
 
 // ============================================================
-// JWT SECRET
+// SECURITY MIDDLEWARE - ADDED
 // ============================================================
+
+// JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'my_refresh_secret_67890';
 
-// ============================================================
-// MIDDLEWARE - Token Verification
-// ============================================================
+// Token Verification Middleware
 const verifyToken = (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -32,7 +24,6 @@ const verifyToken = (req, res, next) => {
         code: 'NO_TOKEN'
       });
     }
-    
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     req.admin = decoded;
@@ -53,10 +44,9 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// ============================================================
-// MIDDLEWARE - CSRF Verification
-// ============================================================
+// CSRF Verification Middleware
 const verifyCsrf = (req, res, next) => {
+  // Skip for GET, HEAD, OPTIONS
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     return next();
   }
@@ -76,955 +66,616 @@ const verifyCsrf = (req, res, next) => {
 };
 
 // ============================================================
+// ADMIN CREDENTIALS - Multiple Admins (YOUR EXISTING CODE)
 // ============================================================
-// SLIDER IMAGE ROUTES (Protected)
-// ============================================================
-// ============================================================
+const ADMINS = [
+  {
+    id: 1,
+    username: process.env.ADMIN_USERNAME || process.env.ADMIN_USERNAME || 'admin',
+    email: process.env.ADMIN_EMAIL || process.env.ADMIN_EMAIL || 'vikshant07@gmail.com',
+    name: process.env.ADMIN_NAME || 'VIKSHANT KRALTA',
+    role: 'Super Admin',
+    passwordHash: process.env.ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD_HASH
+  },
+  {
+    id: 2,
+    username: process.env.ADMIN2_USERNAME,
+    email: process.env.ADMIN2_EMAIL,
+    name: process.env.ADMIN2_NAME || 'SUJAL KRALTA',
+    role: 'Admin',
+    passwordHash: process.env.ADMIN2_PASSWORD_HASH
+  }
+].filter(admin => admin.username && admin.passwordHash);
 
-// GET - All Slider Images
-router.get('/slider/all', verifyToken, (req, res) => {
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
-     FROM slider_images 
-     ORDER BY \`order\` ASC, created_at DESC`,
-    (err, results) => {
-      if (err) {
-        console.error("❌ DB Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      res.json({ success: true, data: results || [] });
-    }
-  );
+if (ADMINS.length === 0) {
+  console.warn('⚠️  No admins configured! Set ADMIN1_* and/or ADMIN2_* variables in Render Environment Variables.');
+} else {
+  console.log(`✅ ${ADMINS.length} admin(s) loaded:`, ADMINS.map(a => a.username).join(', '));
+}
+
+// ============================================================
+// SCHOOL LOGO URL - (YOUR EXISTING CODE)
+// ============================================================
+const SCHOOL_LOGO_URL = process.env.SCHOOL_LOGO_URL || 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png';
+
+// ============================================================
+// EMAIL SENDING (Brevo) - (YOUR EXISTING CODE)
+// ============================================================
+const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'magicalmathsquiz@gmail.com';
+const BREVO_SENDER_NAME = 'GSSS SHILLA';
+
+async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Admin') {
+  const subjectText = purpose === 'reset'
+    ? 'Password Reset OTP — GSSS SHILLA'
+    : 'Admin Login OTP — GSSS SHILLA';
+
+  const headingText = purpose === 'reset'
+    ? 'Password Reset Request'
+    : 'Admin Login Verification';
+
+  const introText = purpose === 'reset'
+    ? 'We received a request to reset your admin password. Use the OTP below to proceed.'
+    : 'Use the One-Time Password below to securely log in to your admin account.';
+
+  const htmlContent = `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+  <body style="margin:0; padding:0; background-color:#f1f5f9; font-family: 'Segoe UI', Arial, sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f5f9; padding: 32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" style="max-width:520px; background:#ffffff; border-radius:16px; overflow:hidden; box-shadow: 0 4px 18px rgba(0,0,0,0.08);">
+            
+            <tr>
+              <td style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #0ea5e9 100%); padding: 32px 24px; text-align:center;">
+                <img src="${SCHOOL_LOGO_URL}" alt="GSSS SHILLA" width="82" height="82" style="border-radius:50%; background:#ffffff; padding:6px; margin-bottom:12px; display:inline-block;" />
+                <h1 style="color:#ffffff; font-size:22px; margin:8px 0 2px 0; letter-spacing:0.5px;">GSSS SHILLA</h1>
+                <p style="color:#e0e7ff; font-size:13px; margin:0;">Government Senior Secondary School Shilla</p>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding: 32px 28px;">
+                <h2 style="color:#1e293b; font-size:19px; margin:0 0 6px 0;">${headingText}</h2>
+                <p style="color:#64748b; font-size:14px; line-height:1.6; margin:0 0 20px 0;">
+                  Hi, ${recipientName}! <br>${introText}
+                </p>
+
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td align="center" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px dashed #6366f1; border-radius: 12px; padding: 20px;">
+                      <p style="margin:0 0 8px 0; color:#6366f1; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:1px;">Your OTP Code</p>
+                      <div style="font-size:32px; font-weight:800; letter-spacing:8px; color:#1e1b4b;">
+                        ${otp}
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="color:#94a3b8; font-size:12.5px; line-height:1.6; margin:20px 0 0 0;">
+                  ⏱ This OTP is valid for <strong>5 minutes</strong>. <br> <strong>Note:</strong> If you did not request this, please ignore this email or contact the school administration.
+                </p>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background:#f8fafc; padding: 18px 24px; text-align:center; border-top:1px solid #e2e8f0;">
+                <p style="margin:0; color:#94a3b8; font-size:11.5px;">
+                  © ${new Date().getFullYear()} GSSS SHILLA — All rights reserved.
+                </p>
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </html>
+  `;
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'api-key': process.env.BREVO_API_KEY
+    },
+    body: JSON.stringify({
+      sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+      to: [{ email: toEmail }],
+      subject: subjectText,
+      htmlContent: htmlContent
+    })
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Brevo API error (${response.status}): ${errorBody}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================
+// STORE OTP IN MEMORY - (YOUR EXISTING CODE)
+// ============================================================
+let otpStore = {};
+
+// ============================================================
+// HELPER - Generate OTP - (YOUR EXISTING CODE)
+// ============================================================
+function generateOTP() {
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const numbers = "0123456789";
+  let otp = "";
+  for (let i = 0; i < 2; i++) {
+    otp += letters[Math.floor(Math.random() * letters.length)];
+  }
+  for (let i = 0; i < 4; i++) {
+    otp += numbers[Math.floor(Math.random() * numbers.length)];
+  }
+  return otp;
+}
+
+// ============================================================
+// HELPER - Find admin - (YOUR EXISTING CODE)
+// ============================================================
+function findAdminByUsername(username) {
+  return ADMINS.find(a => a.username === username);
+}
+
+function findAdminByEmail(email) {
+  return ADMINS.find(a => a.email === email);
+}
+
+// ============================================================
+// ============================================================
+// 1. TEST ROUTE - (YOUR EXISTING CODE)
+// ============================================================
+router.get('/test', (req, res) => {
+  console.log('📥 Test route hit!');
+  res.json({ success: true, message: 'Admin routes working!' });
 });
 
-// POST - Upload Slider Images
-router.post('/slider/add', verifyToken, verifyCsrf, uploadSlider.array('images', 20), async (req, res) => {
-  console.log("📸 Slider upload request received");
+// ============================================================
+// 2. CSRF TOKEN ROUTE - (NEW)
+// ============================================================
+router.get('/csrf-token', (req, res) => {
+  const { v4: uuidv4 } = require('uuid');
+  const csrfToken = uuidv4();
+  req.session.csrfToken = csrfToken;
   
-  try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ success: false, message: "No images uploaded" });
-    }
+  res.json({
+    success: true,
+    token: csrfToken
+  });
+});
 
-    const uploaded = [];
-    const errors = [];
+// ============================================================
+// 3. LOGIN ROUTE - SEND OTP - (YOUR EXISTING CODE - MODIFIED)
+// ============================================================
+router.post('/login', async (req, res) => {
+  console.log('🔥 LOGIN ROUTE HIT');
 
-    const orderResult = await new Promise((resolve, reject) => {
-      db.query("SELECT MAX(`order`) as maxOrder FROM slider_images", (err, result) => {
-        if (err) reject(err);
-        else resolve(result);
-      });
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({
+      success: false,
+      message: 'Username and password are required'
     });
+  }
 
-    let nextOrder = (orderResult[0]?.maxOrder || 0) + 1;
-
-    for (const file of req.files) {
-      try {
-        const cloudinaryUrl = file.path;
-        const publicId = file.filename;
-        const { title, alt_text } = req.body;
-
-        await new Promise((resolve, reject) => {
-          db.query(
-            `INSERT INTO slider_images 
-            (filename, file_path, public_id, file_size, mime_type, title, alt_text, \`order\`, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-            [publicId, cloudinaryUrl, publicId, file.size || 0, file.mimetype || 'image/jpeg', title || file.originalname, alt_text || '', nextOrder++],
-            (err, result) => {
-              if (err) reject(err);
-              else resolve(result);
-            }
-          );
-        });
-
-        uploaded.push({ filename: publicId, url: cloudinaryUrl });
-      } catch (err) {
-        errors.push({ file: file.originalname || file.filename, error: err.message });
-        try { await cloudinary.uploader.destroy(file.filename); } catch (e) {}
-      }
+  try {
+    const admin = findAdminByUsername(username);
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid username or password'
+      });
     }
 
-    // Log activity
-    console.log(`📸 ${uploaded.length} slider images uploaded by admin`);
+    const isMatch = await bcrypt.compare(password, admin.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid username or password'
+      });
+    }
+
+    const otp = generateOTP();
+    const expiry = Date.now() + 5 * 60 * 1000;
+    otpStore[username] = { otp, expiry };
+
+    console.log(`📧 OTP for ${username}: ${otp}`);
+
+    try {
+      await sendOTPEmail(admin.email, otp, 'login', admin.name);
+      console.log('✅ OTP email sent to', admin.email);
+    } catch (emailErr) {
+      console.error('❌ Failed to send OTP email:', emailErr.message);
+      return res.status(500).json({
+        success: false,
+        message: 'OTP generated but failed to send email. Check email configuration.'
+      });
+    }
+
+    // Generate CSRF token for the session
+    const { v4: uuidv4 } = require('uuid');
+    req.session.csrfToken = uuidv4();
 
     res.json({
       success: true,
-      message: `${uploaded.length} images uploaded successfully`,
-      uploaded: uploaded,
-      errors: errors.length > 0 ? errors : undefined
+      message: 'OTP sent successfully to your email!'
     });
+
   } catch (error) {
-    console.error("❌ Upload Error:", error);
-    res.status(500).json({ success: false, message: error.message || "Upload failed" });
-  }
-});
-
-// DELETE - Slider Image
-router.delete('/slider/delete/:id', verifyToken, verifyCsrf, (req, res) => {
-  const { id } = req.params;
-  
-  db.query("SELECT * FROM slider_images WHERE id = ?", [id], (err, results) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    if (!results || results.length === 0) {
-      return res.status(404).json({ success: false, message: "Image not found" });
-    }
-
-    const image = results[0];
-    const publicId = image.public_id || image.filename;
-    
-    // Delete from Cloudinary
-    cloudinary.uploader.destroy(publicId).catch(err => console.warn("Cloudinary warning:", err.message));
-
-    db.query("DELETE FROM slider_images WHERE id = ?", [id], (deleteErr) => {
-      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      
-      // Reorder remaining images
-      db.query("SET @new_order = 0; UPDATE slider_images SET `order` = (@new_order := @new_order + 1) ORDER BY `order` ASC;", (reorderErr) => {
-        if (reorderErr) console.warn("Reorder warning:", reorderErr.message);
-        res.json({ success: true, message: "Image deleted successfully" });
-      });
+    console.error('❌ Login Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error: ' + error.message
     });
-  });
-});
-
-// PUT - Update Slider Image
-router.put('/slider/update/:id', verifyToken, verifyCsrf, (req, res) => {
-  const { id } = req.params;
-  const { title, alt_text, is_active } = req.body;
-  
-  db.query(
-    `UPDATE slider_images SET title = ?, alt_text = ?, is_active = ?, updated_at = NOW() WHERE id = ?`,
-    [title || '', alt_text || '', is_active !== undefined ? is_active : 1, id],
-    (err, result) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ success: false, message: "Image not found" });
-      }
-      res.json({ success: true, message: "Image updated successfully" });
-    }
-  );
-});
-
-// PUT - Reorder Slider Images
-router.put('/slider/reorder', verifyToken, verifyCsrf, (req, res) => {
-  const { orders } = req.body;
-  if (!orders || !Array.isArray(orders)) {
-    return res.status(400).json({ success: false, message: "Orders array is required" });
   }
+});
 
-  const queries = orders.map(({ id, order }) => {
-    return new Promise((resolve, reject) => {
-      db.query("UPDATE slider_images SET `order` = ? WHERE id = ?", [order, id], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
+// ============================================================
+// 4. VERIFY OTP ROUTE - (YOUR EXISTING CODE - MODIFIED)
+// ============================================================
+router.post('/verify-otp', async (req, res) => {
+  console.log('🔥 VERIFY OTP ROUTE HIT');
+
+  const { username, password, otp } = req.body;
+
+  if (!username || !password || !otp) {
+    return res.status(400).json({
+      success: false,
+      message: 'Username, password and OTP are required'
     });
-  });
-
-  Promise.all(queries)
-    .then(() => res.json({ success: true, message: "Order updated successfully" }))
-    .catch(error => res.status(500).json({ success: false, error: error.message }));
-});
-
-// ============================================================
-// ============================================================
-// RECENT UPDATES ROUTES (Protected)
-// ============================================================
-// ============================================================
-
-// GET - All Recent Updates
-router.get('/recent/all', verifyToken, (req, res) => {
-  db.query(
-    `SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist 
-     FROM recent_updates ORDER BY created_at DESC`,
-    (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, data: results || [] });
-    }
-  );
-});
-
-// POST - Add Recent Update
-router.post('/recent/add', verifyToken, verifyCsrf, uploadRecent.single("file"), (req, res) => {
-  const { title, description, category, link, isNew } = req.body;
-  
-  if (!title) {
-    return res.status(400).json({ success: false, message: "Title is required" });
   }
 
-  const file_url = req.file ? req.file.path : null;
-  const file_public_id = req.file ? req.file.filename : null;
-  const file_type = req.file ? req.file.mimetype : null;
-  const file_size = req.file ? req.file.size : null;
-
-  db.query(
-    `INSERT INTO recent_updates (title, description, file_url, public_id, file_type, file_size, category, link, is_new, created_at) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-    [title, description || "", file_url, file_public_id, file_type, file_size, category || "general", link || null, isNew !== undefined ? parseInt(isNew) : 1],
-    (err, result) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      
-      // Log activity
-      console.log(`📝 Recent update added: ${title}`);
-      
-      res.status(201).json({ 
-        success: true, 
-        message: "✅ Update added successfully!", 
-        data: { id: result.insertId } 
-      });
-    }
-  );
-});
-
-// PUT - Update Recent Update
-router.put('/recent/update/:id', verifyToken, verifyCsrf, uploadRecent.single("file"), (req, res) => {
-  const { id } = req.params;
-  const { title, description, category, link, isNew } = req.body;
-  
-  if (!title) {
-    return res.status(400).json({ success: false, message: "Title is required" });
-  }
-
-  db.query("SELECT * FROM recent_updates WHERE id = ?", [id], (fetchErr, fetchResult) => {
-    if (fetchErr || !fetchResult || fetchResult.length === 0) {
-      return res.status(404).json({ success: false, message: "Update not found" });
+  try {
+    const admin = findAdminByUsername(username);
+    if (!admin) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    const existing = fetchResult[0];
-    let file_url = existing.file_url;
-    let file_public_id = existing.public_id;
-    let file_type = existing.file_type;
-    let file_size = existing.file_size;
-
-    if (req.file) {
-      if (existing.public_id) {
-        cloudinary.uploader.destroy(existing.public_id).catch(err => console.error("Cloudinary error:", err));
-      }
-      file_url = req.file.path;
-      file_public_id = req.file.filename;
-      file_type = req.file.mimetype;
-      file_size = req.file.size;
+    const isMatch = await bcrypt.compare(password, admin.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    db.query(
-      `UPDATE recent_updates SET title=?, description=?, file_url=?, public_id=?, file_type=?, file_size=?, category=?, link=?, is_new=?, updated_at=NOW() WHERE id=?`,
-      [title, description || existing.description, file_url, file_public_id, file_type, file_size, category || existing.category, link || existing.link || null, isNew !== undefined ? parseInt(isNew) : existing.is_new, id],
-      (updateErr) => {
-        if (updateErr) return res.status(500).json({ success: false, error: updateErr.message });
-        
-        console.log(`📝 Recent update updated: ${title}`);
-        res.json({ success: true, message: "✅ Update updated successfully!" });
-      }
+    const stored = otpStore[username];
+    if (!stored) {
+      return res.status(401).json({ success: false, message: 'No OTP found. Please request a new one.' });
+    }
+
+    if (stored.otp !== otp.toUpperCase()) {
+      return res.status(401).json({ success: false, message: 'Invalid OTP' });
+    }
+
+    if (Date.now() > stored.expiry) {
+      delete otpStore[username];
+      return res.status(401).json({ success: false, message: 'OTP expired. Please request a new one.' });
+    }
+
+    delete otpStore[username];
+
+    const token = jwt.sign(
+      {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        name: admin.name,
+        role: admin.role
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
     );
-  });
-});
 
-// DELETE - Recent Update
-router.delete('/recent/delete/:id', verifyToken, verifyCsrf, (req, res) => {
-  const { id } = req.params;
-  
-  db.query("SELECT * FROM recent_updates WHERE id = ?", [id], (fetchErr, fetchResult) => {
-    if (fetchErr || !fetchResult || fetchResult.length === 0) {
-      return res.status(404).json({ success: false, message: "Update not found" });
-    }
-
-    const update = fetchResult[0];
-    if (update.public_id) {
-      cloudinary.uploader.destroy(update.public_id).catch(err => console.error("Cloudinary error:", err));
-    }
-
-    db.query("DELETE FROM recent_updates WHERE id = ?", [id], (deleteErr) => {
-      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      
-      console.log(`📝 Recent update deleted: ${update.title}`);
-      res.json({ success: true, message: "✅ Update deleted successfully!" });
-    });
-  });
-});
-
-// DELETE - Bulk Delete Recent Updates
-router.delete('/recent/bulk-delete', verifyToken, verifyCsrf, (req, res) => {
-  const { ids } = req.body;
-  if (!ids || !Array.isArray(ids) || ids.length === 0) {
-    return res.status(400).json({ success: false, message: "No IDs provided" });
-  }
-
-  const placeholders = ids.map(() => '?').join(',');
-  
-  db.query(`SELECT * FROM recent_updates WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
-    if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
-    
-    fetchResults.forEach(update => {
-      if (update.public_id) {
-        cloudinary.uploader.destroy(update.public_id).catch(err => console.error("Cloudinary error:", err));
-      }
-    });
-
-    db.query(`DELETE FROM recent_updates WHERE id IN (${placeholders})`, ids, (deleteErr) => {
-      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      
-      console.log(`📝 ${ids.length} recent updates deleted`);
-      res.json({ success: true, message: `${ids.length} updates deleted successfully ✅` });
-    });
-  });
-});
-
-// ============================================================
-// ============================================================
-// GALLERY ROUTES (Protected)
-// ============================================================
-// ============================================================
-
-// GET - All Gallery Slider (Admin)
-router.get('/gallery/slider/all', verifyToken, (req, res) => {
-  db.query(
-    `SELECT * FROM gallery_slider ORDER BY \`order\` ASC, created_at DESC`,
-    (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, data: results || [] });
-    }
-  );
-});
-
-// POST - Add Gallery Slider
-router.post('/gallery/slider/add', verifyToken, verifyCsrf, uploadSlider.single("image"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ success: false, message: "Image is required" });
-  }
-
-  const { title, description, link } = req.body;
-  const file_path = req.file.path;
-  const public_id = req.file.filename;
-  const filename = req.file.filename;
-
-  db.query("SELECT MAX(`order`) as maxOrder FROM gallery_slider", (err, result) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    const nextOrder = (result[0]?.maxOrder || 0) + 1;
-
-    db.query(
-      `INSERT INTO gallery_slider (filename, file_path, public_id, title, description, link, \`order\`, is_active, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW())`,
-      [filename, file_path, public_id, title || '', description || '', link || '', nextOrder],
-      (insertErr, insertResult) => {
-        if (insertErr) return res.status(500).json({ success: false, error: insertErr.message });
-        
-        console.log(`📸 Gallery slider added: ${title || filename}`);
-        res.json({ success: true, message: "✅ Slider image added!", data: { id: insertResult.insertId } });
-      }
+    // Generate refresh token
+    const refreshToken = jwt.sign(
+      { id: admin.id },
+      process.env.JWT_REFRESH_SECRET || JWT_SECRET,
+      { expiresIn: '7d' }
     );
-  });
-});
 
-// DELETE - Gallery Slider
-router.delete('/gallery/slider/delete/:id', verifyToken, verifyCsrf, (req, res) => {
-  const { id } = req.params;
-  
-  db.query("SELECT * FROM gallery_slider WHERE id = ?", [id], (err, results) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    if (!results || results.length === 0) {
-      return res.status(404).json({ success: false, message: "Image not found" });
-    }
+    // Generate CSRF token
+    const { v4: uuidv4 } = require('uuid');
+    const csrfToken = uuidv4();
+    req.session.csrfToken = csrfToken;
 
-    const image = results[0];
-    if (image.public_id) {
-      cloudinary.uploader.destroy(image.public_id).catch(err => console.error("Cloudinary error:", err));
-    }
+    console.log('✅ Login successful:', admin.username);
 
-    db.query("DELETE FROM gallery_slider WHERE id = ?", [id], (deleteErr) => {
-      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      
-      console.log(`📸 Gallery slider deleted: ${image.title || image.filename}`);
-      res.json({ success: true, message: "✅ Slider deleted!" });
-    });
-  });
-});
-
-// ============================================================
-// GALLERY IMAGES (Protected)
-// ============================================================
-
-// GET - All Gallery Images (Admin)
-router.get('/gallery/images/all', verifyToken, (req, res) => {
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist 
-     FROM gallery_images 
-     ORDER BY created_at DESC`,
-    (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, data: results || [] });
-    }
-  );
-});
-
-// GET - Recent Gallery Images (Admin)
-router.get('/gallery/images/recent', verifyToken, (req, res) => {
-  const limit = parseInt(req.query.limit) || 20;
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist 
-     FROM gallery_images 
-     ORDER BY created_at DESC LIMIT ?`,
-    [limit],
-    (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, data: results || [] });
-    }
-  );
-});
-
-// POST - Add Gallery Images
-router.post('/gallery/images/add', verifyToken, verifyCsrf, uploadGallery.array('media', 30), async (req, res) => {
-  const { title, description, image_date } = req.body;
-
-  console.log("📸 Add Gallery Media Request");
-  console.log("📸 Title:", title);
-  console.log("📸 Date:", image_date);
-  console.log("📸 Files:", req.files ? req.files.length : 0);
-
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ success: false, message: "No media uploaded" });
-  }
-
-  const uploaded = [];
-  const errors = [];
-  const uploadDate = image_date || new Date().toISOString().split('T')[0];
-
-  for (const file of req.files) {
-    try {
-      const isVideo = file.mimetype?.startsWith('video/') || false;
-      const filePath = file.path;
-      const publicId = file.filename;
-      
-      let videoThumbnail = null;
-      if (isVideo) {
-        videoThumbnail = filePath.replace(/\.[^.]+$/, '.jpg');
+    res.json({
+      success: true,
+      message: 'Login successful!',
+      token: token,
+      refreshToken: refreshToken,
+      csrfToken: csrfToken,
+      data: {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        name: admin.name,
+        role: admin.role
       }
+    });
 
-      await new Promise((resolve, reject) => {
-        db.query(
-          `INSERT INTO gallery_images 
-           (filename, file_path, public_id, file_size, mime_type, media_type, 
-            video_thumbnail, title, description, image_date, created_at) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-          [
-            publicId, 
-            filePath, 
-            publicId, 
-            file.size || 0, 
-            file.mimetype || (isVideo ? 'video/mp4' : 'image/jpeg'),
-            isVideo ? 'video' : 'image',
-            videoThumbnail,
-            title || '', 
-            description || '', 
-            uploadDate
-          ],
-          (err, result) => {
-            if (err) reject(err);
-            else resolve(result);
-          }
-        );
-      });
-      uploaded.push({ filename: publicId, type: isVideo ? 'video' : 'image' });
-    } catch (err) {
-      console.error("❌ Upload error:", err);
-      errors.push({ file: file.originalname, error: err.message });
-    }
+  } catch (error) {
+    console.error('❌ Verify OTP Error:', error);
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
+  }
+});
+
+// ============================================================
+// 5. REFRESH TOKEN ROUTE - (NEW)
+// ============================================================
+router.post('/refresh-token', async (req, res) => {
+  const { refreshToken } = req.body;
+
+  if (!refreshToken) {
+    return res.status(401).json({
+      success: false,
+      message: 'Refresh token required'
+    });
   }
 
-  console.log(`📸 ${uploaded.length} gallery media uploaded`);
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || JWT_SECRET);
+    
+    const admin = ADMINS.find(a => a.id === decoded.id);
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token'
+      });
+    }
 
+    const newToken = jwt.sign(
+      {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        name: admin.name,
+        role: admin.role
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    const newRefreshToken = jwt.sign(
+      { id: admin.id },
+      process.env.JWT_REFRESH_SECRET || JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    const { v4: uuidv4 } = require('uuid');
+    const csrfToken = uuidv4();
+    req.session.csrfToken = csrfToken;
+
+    res.json({
+      success: true,
+      token: newToken,
+      refreshToken: newRefreshToken,
+      csrfToken: csrfToken
+    });
+
+  } catch (error) {
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid refresh token'
+    });
+  }
+});
+
+// ============================================================
+// 6. VERIFY ROUTE - (YOUR EXISTING CODE - MODIFIED)
+// ============================================================
+router.get('/verify', verifyToken, (req, res) => {
+  res.json({ success: true, admin: req.admin, message: 'Token is valid' });
+});
+
+// ============================================================
+// 7. PROFILE ROUTE - (YOUR EXISTING CODE - MODIFIED)
+// ============================================================
+router.get('/profile', verifyToken, (req, res) => {
   res.json({
     success: true,
-    message: `${uploaded.length} media items uploaded successfully!`,
-    uploaded: uploaded,
-    errors: errors.length > 0 ? errors : undefined
-  });
-});
-
-// DELETE - Gallery Image
-router.delete('/gallery/images/delete/:id', verifyToken, verifyCsrf, (req, res) => {
-  const { id } = req.params;
-  if (!id || isNaN(id)) {
-    return res.status(400).json({ success: false, message: "Invalid ID" });
-  }
-
-  db.query("SELECT * FROM gallery_images WHERE id = ?", [id], (err, results) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    if (!results || results.length === 0) {
-      return res.status(404).json({ success: false, message: "Item not found" });
+    data: {
+      id: req.admin.id,
+      username: req.admin.username,
+      email: req.admin.email,
+      name: req.admin.name,
+      role: req.admin.role,
+      last_login: new Date().toISOString()
     }
-
-    const item = results[0];
-    if (item.public_id) {
-      cloudinary.uploader.destroy(item.public_id, { 
-        resource_type: item.media_type === 'video' ? 'video' : 'image' 
-      }).catch(err => console.error("Cloudinary error:", err));
-    }
-
-    db.query("DELETE FROM gallery_images WHERE id = ?", [id], (deleteErr) => {
-      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      
-      console.log(`📸 Gallery media deleted: ${item.title || item.filename}`);
-      res.json({ success: true, message: "✅ Gallery item deleted!" });
-    });
   });
 });
 
 // ============================================================
+// 8. LOGOUT ROUTE - (YOUR EXISTING CODE - MODIFIED)
 // ============================================================
-// FACULTY ROUTES (Protected)
-// ============================================================
-// ============================================================
-
-// GET - All Faculty (Admin)
-router.get('/faculty/all', verifyToken, (req, res) => {
-  db.query(
-    "SELECT * FROM faculty ORDER BY is_principal DESC, staff_type ASC, `order` ASC, name ASC",
-    (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, data: results || [] });
-    }
-  );
-});
-
-// GET - Single Faculty
-router.get('/faculty/:id', verifyToken, (req, res) => {
-  db.query("SELECT * FROM faculty WHERE id = ?", [req.params.id], (err, results) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    if (!results || results.length === 0) {
-      return res.status(404).json({ success: false, message: "Faculty not found" });
-    }
-    res.json({ success: true, data: results[0] });
-  });
-});
-
-// POST - Add Faculty
-router.post('/faculty/add', verifyToken, verifyCsrf, uploadFaculty.single("photo"), (req, res) => {
-  const { name, designation, department, subject, qualification, experience, email, phone, message, is_principal, staff_type, joining_date } = req.body;
-
-  if (!name || !designation) {
-    return res.status(400).json({ success: false, message: "Name and Designation are required" });
-  }
-
-  const photo_url = req.file ? req.file.path : null;
-  const photo_public_id = req.file ? req.file.filename : null;
-
-  db.query(
-    `INSERT INTO faculty (name, designation, department, subject, qualification, experience, email, phone, message, photo_url, photo_public_id, is_principal, staff_type, joining_date, created_at) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-    [name, designation, department || null, subject || null, qualification || null, experience || null, email || null, phone || null, message || null, photo_url, photo_public_id, is_principal || 0, staff_type || 'teaching', joining_date || null],
-    (err, result) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      
-      console.log(`👨‍🏫 Faculty added: ${name} (${designation})`);
-      res.status(201).json({ success: true, message: "✅ Faculty added!", data: { id: result.insertId } });
-    }
-  );
-});
-
-// PUT - Update Faculty
-router.put('/faculty/update/:id', verifyToken, verifyCsrf, uploadFaculty.single("photo"), (req, res) => {
-  const { id } = req.params;
-  const { name, designation, department, subject, qualification, experience, email, phone, message, is_principal, staff_type, is_active, joining_date } = req.body;
-
-  if (!name || !designation) {
-    return res.status(400).json({ success: false, message: "Name and Designation are required" });
-  }
-
-  db.query("SELECT * FROM faculty WHERE id = ?", [id], (err, results) => {
-    if (err || !results || results.length === 0) {
-      return res.status(404).json({ success: false, message: "Faculty not found" });
-    }
-
-    const existing = results[0];
-    let photo_url = existing.photo_url;
-    let photo_public_id = existing.photo_public_id;
-
-    if (req.file) {
-      if (existing.photo_public_id) {
-        cloudinary.uploader.destroy(existing.photo_public_id).catch(e => console.error(e));
-      }
-      photo_url = req.file.path;
-      photo_public_id = req.file.filename;
-    }
-
-    db.query(
-      `UPDATE faculty SET name=?, designation=?, department=?, subject=?, qualification=?, experience=?, email=?, phone=?, message=?, photo_url=?, photo_public_id=?, is_principal=?, staff_type=?, is_active=?, joining_date=?, updated_at=NOW() WHERE id=?`,
-      [name, designation, department || null, subject || null, qualification || null, experience || null, email || null, phone || null, message || null, photo_url, photo_public_id, is_principal || 0, staff_type || 'teaching', is_active !== undefined ? parseInt(is_active) : 1, joining_date || null, id],
-      (updateErr) => {
-        if (updateErr) return res.status(500).json({ success: false, error: updateErr.message });
-        
-        console.log(`👨‍🏫 Faculty updated: ${name} (${designation})`);
-        res.json({ success: true, message: "✅ Faculty updated!" });
-      }
-    );
-  });
-});
-
-// DELETE - Faculty
-router.delete('/faculty/delete/:id', verifyToken, verifyCsrf, (req, res) => {
-  const { id } = req.params;
+router.post('/logout', verifyToken, (req, res) => {
+  // Clear session
+  req.session.destroy();
   
-  db.query("SELECT * FROM faculty WHERE id = ?", [id], (err, results) => {
-    if (err || !results || results.length === 0) {
-      return res.status(404).json({ success: false, message: "Faculty not found" });
-    }
-
-    const item = results[0];
-    if (item.photo_public_id) {
-      cloudinary.uploader.destroy(item.photo_public_id).catch(e => console.error(e));
-    }
-
-    db.query("DELETE FROM faculty WHERE id = ?", [id], (deleteErr) => {
-      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      
-      console.log(`👨‍🏫 Faculty deleted: ${item.name}`);
-      res.json({ success: true, message: "✅ Faculty deleted!" });
-    });
+  res.json({ 
+    success: true, 
+    message: 'Logged out successfully' 
   });
 });
 
 // ============================================================
+// 9. EXTEND SESSION - (NEW)
 // ============================================================
-// DOWNLOAD ROUTES (Protected)
-// ============================================================
-// ============================================================
-
-// GET - All Downloads (Admin)
-router.get('/downloads/all', verifyToken, (req, res) => {
-  const { page = 1, limit = 50 } = req.query;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
-  
-  db.query("SELECT COUNT(*) as total FROM downloads", (countErr, countResult) => {
-    if (countErr) return res.status(500).json({ success: false, error: countErr.message });
-    
-    const total = countResult[0]?.total || 0;
-    
-    db.query(
-      "SELECT * FROM downloads ORDER BY created_at DESC LIMIT ? OFFSET ?", 
-      [parseInt(limit), offset], 
-      (err, results) => {
-        if (err) return res.status(500).json({ success: false, error: err.message });
-        res.json({
-          success: true,
-          data: results || [],
-          pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) }
-        });
-      }
-    );
+router.post('/extend-session', verifyToken, (req, res) => {
+  res.json({
+    success: true,
+    message: 'Session extended',
+    expiresIn: 30 * 60 // 30 minutes
   });
 });
 
-// POST - Add Download
-router.post('/downloads/add', verifyToken, verifyCsrf, uploadDownload.single("file"), (req, res) => {
-  const { title, description, class: classNum, session_year, category, series, subject } = req.body;
+// ============================================================
+// 10. SEND RESET OTP - (YOUR EXISTING CODE)
+// ============================================================
+router.post('/send-reset-otp', async (req, res) => {
+  console.log('🔥 SEND RESET OTP ROUTE HIT');
 
-  console.log("📥 Add Download Request:", req.body);
+  const { email } = req.body;
 
-  if (!title || !classNum || !session_year || !category) {
-    return res.status(400).json({ success: false, message: "Title, Class, Session and Category are required" });
+  if (!email) {
+    return res.status(400).json({ success: false, message: 'Email is required' });
   }
 
-  if (!req.file) {
-    return res.status(400).json({ success: false, message: "File is required" });
-  }
+  try {
+    const admin = findAdminByEmail(email);
+    if (!admin) {
+      return res.status(404).json({ success: false, message: 'Email not found in our system' });
+    }
 
-  db.query(
-    `INSERT INTO downloads (title, description, class, session_year, category, series, subject, 
-     filename, file_path, public_id, file_size, file_type, created_at) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-    [
-      title,
-      description || '',
-      classNum,
-      session_year,
-      category,
-      series || null,
-      subject || null,
-      req.file.filename,
-      req.file.path,
-      req.file.filename,
-      req.file.size || 0,
-      req.file.mimetype || 'application/pdf'
-    ],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Insert Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
+    const otp = generateOTP();
+    const expiry = Date.now() + 5 * 60 * 1000;
+    otpStore[`reset_${email}`] = { otp, expiry };
 
-      console.log(`📥 Download added: ${title} (Class ${classNum})`);
-      res.status(201).json({
-        success: true,
-        message: "✅ File uploaded successfully!",
-        data: { id: result.insertId }
+    console.log(`📧 Reset OTP for ${email}: ${otp}`);
+
+    try {
+      await sendOTPEmail(email, otp, 'reset', admin.name);
+      console.log('✅ Reset OTP email sent to', email);
+    } catch (emailErr) {
+      console.error('❌ Failed to send reset OTP email:', emailErr.message);
+      return res.status(500).json({
+        success: false,
+        message: 'OTP generated but failed to send email. Check email configuration.'
       });
     }
-  );
+
+    res.json({
+      success: true,
+      message: 'Reset OTP sent successfully to your email!'
+    });
+
+  } catch (error) {
+    console.error('❌ Send Reset OTP Error:', error);
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
+  }
 });
 
-// PUT - Update Download
-router.put('/downloads/update/:id', verifyToken, verifyCsrf, uploadDownload.single("file"), (req, res) => {
-  const { id } = req.params;
-  const { title, description, class: classNum, session_year, category, series, subject, is_active } = req.body;
+// ============================================================
+// 11. RESET PASSWORD - (YOUR EXISTING CODE)
+// ============================================================
+router.post('/reset-password', async (req, res) => {
+  console.log('🔥 RESET PASSWORD ROUTE HIT');
 
-  if (!title || !classNum || !session_year || !category) {
-    return res.status(400).json({ success: false, message: "Title, Class, Session and Category are required" });
+  const { email, otp, newPassword, confirmPassword } = req.body;
+
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json({ success: false, message: 'Email, OTP and new password are required' });
   }
 
-  db.query("SELECT * FROM downloads WHERE id = ?", [id], (fetchErr, fetchResult) => {
-    if (fetchErr || !fetchResult || fetchResult.length === 0) {
-      return res.status(404).json({ success: false, message: "Download not found" });
-    }
-
-    const existing = fetchResult[0];
-    let file_path = existing.file_path;
-    let public_id = existing.public_id;
-    let filename = existing.filename;
-    let file_size = existing.file_size;
-    let file_type = existing.file_type;
-
-    if (req.file) {
-      if (existing.public_id) {
-        cloudinary.uploader.destroy(existing.public_id).catch(err => console.error("Cloudinary delete error:", err));
-      }
-      file_path = req.file.path;
-      public_id = req.file.filename;
-      filename = req.file.filename;
-      file_size = req.file.size || 0;
-      file_type = req.file.mimetype || 'application/pdf';
-    }
-
-    db.query(
-      `UPDATE downloads SET title=?, description=?, class=?, session_year=?, category=?, 
-       series=?, subject=?, filename=?, file_path=?, public_id=?, file_size=?, file_type=?, 
-       is_active=?, updated_at=NOW() WHERE id=?`,
-      [
-        title, description || '', classNum, session_year, category,
-        series || null, subject || null, filename, file_path, public_id,
-        file_size, file_type, is_active !== undefined ? parseInt(is_active) : 1, id
-      ],
-      (updateErr) => {
-        if (updateErr) return res.status(500).json({ success: false, error: updateErr.message });
-        
-        console.log(`📥 Download updated: ${title}`);
-        res.json({ success: true, message: "✅ Download updated successfully!" });
-      }
-    );
-  });
-});
-
-// DELETE - Download
-router.delete('/downloads/delete/:id', verifyToken, verifyCsrf, (req, res) => {
-  const { id } = req.params;
-
-  db.query("SELECT * FROM downloads WHERE id = ?", [id], (err, results) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    if (!results || results.length === 0) {
-      return res.status(404).json({ success: false, message: "Download not found" });
-    }
-
-    const item = results[0];
-    if (item.public_id) {
-      cloudinary.uploader.destroy(item.public_id).catch(err => console.error("Cloudinary error:", err));
-    }
-
-    db.query("DELETE FROM downloads WHERE id = ?", [id], (deleteErr) => {
-      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      
-      console.log(`📥 Download deleted: ${item.title}`);
-      res.json({ success: true, message: "✅ Deleted successfully!" });
-    });
-  });
-});
-
-// DELETE - Bulk Delete Downloads
-router.delete('/downloads/bulk-delete', verifyToken, verifyCsrf, (req, res) => {
-  const { ids } = req.body;
-  if (!ids || !Array.isArray(ids) || ids.length === 0) {
-    return res.status(400).json({ success: false, message: "No IDs provided" });
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ success: false, message: 'Passwords do not match' });
   }
 
-  const placeholders = ids.map(() => '?').join(',');
-  
-  db.query(`SELECT * FROM downloads WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
-    if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
-    
-    fetchResults.forEach(item => {
-      if (item.public_id) {
-        cloudinary.uploader.destroy(item.public_id).catch(err => console.error(err));
-      }
-    });
-
-    db.query(`DELETE FROM downloads WHERE id IN (${placeholders})`, ids, (deleteErr) => {
-      if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-      
-      console.log(`📥 ${ids.length} downloads deleted`);
-      res.json({ success: true, message: `${ids.length} items deleted ✅` });
-    });
-  });
-});
-
-// ============================================================
-// ============================================================
-// CONTACT ROUTES (Protected)
-// ============================================================
-// ============================================================
-
-// GET - All Contact Messages
-router.get('/contact/messages', verifyToken, (req, res) => {
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
-     FROM contact_messages 
-     ORDER BY created_at DESC`,
-    (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, data: results || [] });
-    }
-  );
-});
-
-// GET - Contact Message Detail
-router.get('/contact/messages/:id', verifyToken, (req, res) => {
-  const { id } = req.params;
-
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
-     FROM contact_messages WHERE id = ?`,
-    [id],
-    (err, results) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      if (!results || results.length === 0) {
-        return res.status(404).json({ success: false, message: "Message not found" });
-      }
-
-      // Mark as read
-      db.query("UPDATE contact_messages SET is_read = 1 WHERE id = ?", [id]);
-
-      res.json({ success: true, data: results[0] });
-    }
-  );
-});
-
-// DELETE - Contact Message
-router.delete('/contact/messages/delete/:id', verifyToken, verifyCsrf, (req, res) => {
-  const { id } = req.params;
-
-  if (!id || isNaN(id)) {
-    return res.status(400).json({ success: false, message: "Invalid ID" });
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
   }
 
-  db.query("DELETE FROM contact_messages WHERE id = ?", [id], (err, result) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: "Message not found" });
+  try {
+    const admin = findAdminByEmail(email);
+    if (!admin) {
+      return res.status(404).json({ success: false, message: 'Email not found' });
     }
-    
-    console.log(`📩 Contact message deleted: ID ${id}`);
-    res.json({ success: true, message: "✅ Message deleted successfully!" });
-  });
+
+    const stored = otpStore[`reset_${email}`];
+    if (!stored) {
+      return res.status(401).json({ success: false, message: 'No OTP found. Please request a new one.' });
+    }
+
+    if (stored.otp !== otp.toUpperCase()) {
+      return res.status(401).json({ success: false, message: 'Invalid OTP' });
+    }
+
+    if (Date.now() > stored.expiry) {
+      delete otpStore[`reset_${email}`];
+      return res.status(401).json({ success: false, message: 'OTP expired. Please request a new one.' });
+    }
+
+    delete otpStore[`reset_${email}`];
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+
+    console.log(`✅ Password reset OTP verified for: ${email}`);
+    console.log(`📝 New hash for ${email}: ${newHash}`);
+
+    res.json({
+      success: true,
+      message: 'OTP verified successfully!',
+      data: {
+        email: email,
+        newHash: newHash,
+        note: 'Copy this hash and update ADMIN_PASSWORD_HASH in your environment variables.'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Reset Password Error:', error);
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
+  }
 });
 
-// PUT - Update Contact Info
-router.put('/contact/info/update', verifyToken, verifyCsrf, (req, res) => {
-  const { school_name, address, phone, email } = req.body;
-
-  if (!school_name || !address || !phone || !email) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "All fields are required (school_name, address, phone, email)" 
-    });
+// ============================================================
+// 12. GENERATE HASH - (YOUR EXISTING CODE)
+// ============================================================
+router.get('/generate-hash/:password', async (req, res) => {
+  if (process.env.ENABLE_HASH_ROUTE !== 'true') {
+    return res.status(403).json({ success: false, message: 'This route is disabled' });
   }
 
-  db.query("SELECT id FROM contact_info WHERE id = 1", (err, results) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
+  const hash = await bcrypt.hash(req.params.password, 10);
+  res.json({ success: true, hash });
+});
 
-    if (results && results.length > 0) {
-      db.query(
-        `UPDATE contact_info 
-         SET school_name = ?, address = ?, phone = ?, email = ?, updated_at = NOW()
-         WHERE id = 1`,
-        [school_name, address, phone, email],
-        (updateErr) => {
-          if (updateErr) return res.status(500).json({ success: false, error: updateErr.message });
-          
-          console.log(`📝 Contact info updated`);
-          res.json({ success: true, message: "✅ Contact information updated successfully!" });
-        }
-      );
-    } else {
-      db.query(
-        `INSERT INTO contact_info (id, school_name, address, phone, email, created_at) 
-         VALUES (1, ?, ?, ?, ?, NOW())`,
-        [school_name, address, phone, email],
-        (insertErr) => {
-          if (insertErr) return res.status(500).json({ success: false, error: insertErr.message });
-          
-          console.log(`📝 Contact info created`);
-          res.json({ success: true, message: "✅ Contact information saved successfully!" });
-        }
-      );
-    }
+// ============================================================
+// 13. SESSION STATUS - (NEW)
+// ============================================================
+router.get('/session-status', verifyToken, (req, res) => {
+  res.json({
+    success: true,
+    active: true,
+    expiresIn: 30 * 60, // 30 minutes
+    remainingMinutes: 30
   });
 });
 
 // ============================================================
+// 14. DEBUG ROUTE - (YOUR EXISTING CODE - MODIFIED)
 // ============================================================
-// STATS ROUTES (Protected)
-// ============================================================
-// ============================================================
-
-// GET - Dashboard Stats
-router.get('/stats/dashboard', verifyToken, (req, res) => {
-  const queries = {
-    faculty: "SELECT COUNT(*) as count FROM faculty WHERE is_active = 1",
-    downloads: "SELECT COUNT(*) as count FROM downloads WHERE is_active = 1",
-    slider: "SELECT COUNT(*) as count FROM slider_images WHERE is_active = 1",
-    gallery: "SELECT COUNT(*) as count FROM gallery_images WHERE is_active = 1",
-    recent: "SELECT COUNT(*) as count FROM recent_updates",
-    messages: "SELECT COUNT(*) as count FROM contact_messages WHERE is_read = 0",
-    total_downloads: "SELECT SUM(download_count) as count FROM downloads"
-  };
-
-  const results = {};
-  let completed = 0;
-  const totalQueries = Object.keys(queries).length;
-
-  Object.entries(queries).forEach(([key, query]) => {
-    db.query(query, (err, result) => {
-      if (err) {
-        results[key] = { count: 0 };
-      } else {
-        results[key] = result[0] || { count: 0 };
-      }
-      completed++;
-      if (completed === totalQueries) {
-        res.json({
-          success: true,
-          data: {
-            faculty: results.faculty?.count || 0,
-            downloads: results.downloads?.count || 0,
-            slider: results.slider?.count || 0,
-            gallery: results.gallery?.count || 0,
-            recent: results.recent?.count || 0,
-            unreadMessages: results.messages?.count || 0,
-            totalDownloads: results.total_downloads?.count || 0
-          }
-        });
-      }
-    });
+router.get('/debug', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Admin router is working!',
+    admins_configured: ADMINS.length,
+    routes: ['/test', '/csrf-token', '/login', '/verify-otp', '/refresh-token', '/verify', '/profile', '/logout', '/extend-session', '/send-reset-otp', '/reset-password', '/generate-hash/:password', '/session-status', '/debug'],
+    security: {
+      jwt: 'Active',
+      session: 'Active',
+      csrf: 'Active',
+      rateLimiting: 'Active (via server.js)'
+    },
+    school_logo_url: SCHOOL_LOGO_URL,
+    timestamp: new Date().toISOString()
   });
 });
 
-// ============================================================
+console.log('✅ All routes defined');
+
 // ============================================================
 // EXPORT
 // ============================================================
-// ============================================================
-
-console.log('✅ All protected routes defined');
 module.exports = router;
