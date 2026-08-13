@@ -10,16 +10,30 @@ const { db } = require("./config/db");
 const app = express();
 app.set("trust proxy", 1);
 
-
+// ============================================================
+// SESSION MIDDLEWARE - ADDED (Fixes CSRF error)
+// ============================================================
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'fallback-secret-change-this-in-production',
+    resave: false,
+    saveUninitialized: true,  // Important: Set to true
+    cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        httpOnly: true,
+        maxAge: 30 * 60 * 1000, // 30 minutes
+        sameSite: 'strict'
+    },
+    name: 'gsss_session' // Custom session cookie name
+}));
 
 // ============================================================
-// CORS
+// CORS - UPDATED with credentials
 // ============================================================
 app.use(cors({
   origin: "*",
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token']
 }));
 app.options('*', cors());
 
@@ -90,6 +104,40 @@ function runMigration() {
       });
     } else {
       console.log("✅ image_date column already exists in gallery_images");
+    }
+  });
+
+  // Check for downloads - public_id column
+  db.query("SHOW COLUMNS FROM downloads LIKE 'public_id'", (err, results) => {
+    if (err) {
+      console.error("❌ Error checking columns:", err.message);
+      return;
+    }
+    if (!results || results.length === 0) {
+      console.log("📌 Adding public_id column to downloads...");
+      db.query("ALTER TABLE downloads ADD COLUMN public_id VARCHAR(255) AFTER file_path", (err) => {
+        if (err) console.error("❌ Error adding public_id to downloads:", err.message);
+        else console.log("✅ public_id column added to downloads");
+      });
+    } else {
+      console.log("✅ public_id column already exists in downloads");
+    }
+  });
+
+  // Check for faculty - photo_public_id column
+  db.query("SHOW COLUMNS FROM faculty LIKE 'photo_public_id'", (err, results) => {
+    if (err) {
+      console.error("❌ Error checking columns:", err.message);
+      return;
+    }
+    if (!results || results.length === 0) {
+      console.log("📌 Adding photo_public_id column to faculty...");
+      db.query("ALTER TABLE faculty ADD COLUMN photo_public_id VARCHAR(255) AFTER photo_url", (err) => {
+        if (err) console.error("❌ Error adding photo_public_id to faculty:", err.message);
+        else console.log("✅ photo_public_id column added to faculty");
+      });
+    } else {
+      console.log("✅ photo_public_id column already exists in faculty");
     }
   });
 }
