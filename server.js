@@ -35,12 +35,12 @@ app.use('/api/', limiter);
 app.use(session({
     secret: process.env.SESSION_SECRET || 'fallback-secret-change-this-in-production',
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: false,  // ✅ Changed to false
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
-        maxAge: 30 * 60 * 1000,
-        sameSite: 'strict'
+        maxAge: 30 * 60 * 1000, // 30 minutes
+        sameSite: 'lax'  // ✅ Changed from 'strict' to 'lax' for better compatibility
     },
     name: 'gsss_session'
 }));
@@ -65,9 +65,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token']
 }));
 
-// FIX #3: bare '*' wildcard route can throw at startup on newer path-to-regexp
-// (used internally by Express 5 / recent Express 4 patch releases).
-// A regex that matches everything is safe across versions.
 app.options(/.*/, cors());
 
 // ============================================================
@@ -78,10 +75,22 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ============================================================
-// 🔐 AUTHENTICATION MIDDLEWARE - PROTECT ALL ROUTES
+// 🔐 SESSION CHECK HELPER - For routes that need session only
 // ============================================================
+const checkSession = (req, res, next) => {
+    if (!req.session || !req.session.admin_id) {
+        return res.status(401).json({
+            success: false,
+            message: 'Session expired. Please login again.',
+            code: 'SESSION_EXPIRED'
+        });
+    }
+    next();
+};
 
-// 🟢 PUBLIC ROUTES - No token required (Define BEFORE auth middleware)
+// ============================================================
+// PUBLIC ROUTES - No authentication required
+// ============================================================
 app.get("/", (req, res) => {
     res.json({
         success: true,
@@ -143,21 +152,13 @@ app.get("/analytics/track", (req, res) => {
 });
 
 // ============================================================
-// ADMIN ROUTES - registered BEFORE the global authMiddleware
+// ADMIN ROUTES - Registered BEFORE auth middleware
 // ============================================================
-// FIX #1 (CRITICAL): adminRoutes has its OWN public/protected split
-// internally (login, verify-otp, refresh-token etc. must be reachable
-// WITHOUT a token, otherwise no admin can ever log in). It was previously
-// mounted after `app.use(authMiddleware)`, which forced a token check on
-// the login route itself — a chicken-and-egg deadlock. Mounting it here,
-// before the global auth middleware, restores the intended flow.
 console.log('🔧 Loading admin routes...');
 
 try {
     const adminRoutes = require('./routes/adminRoutes');
     console.log('✅ Admin routes loaded successfully');
-    console.log('✅ Router type:', typeof adminRoutes);
-
     app.use('/api/admin', adminRoutes);
     console.log('✅ Admin routes registered at /api/admin');
 
@@ -169,7 +170,9 @@ try {
     console.error('❌ Error loading admin routes:', error.message);
 }
 
-// 🛡️ ALL ROUTES BELOW THIS LINE ARE PROTECTED
+// ============================================================
+// 🛡️ PROTECTED ROUTES - All routes below require authentication
+// ============================================================
 app.use(authMiddleware);
 
 // ============================================================
@@ -232,11 +235,6 @@ function runMigration() {
         }
     });
 
-    // FIX #2: gallery_images was missing `media_type` and `video_thumbnail`
-    // columns even though the /api/gallery/images/add insert query and the
-    // /api/gallery/images/public SELECT both reference them. Without this
-    // migration, every video/image gallery upload (and the public listing
-    // query) would fail with an "unknown column" DB error.
     db.query("SHOW COLUMNS FROM gallery_images LIKE 'media_type'", (err, results) => {
         if (err) {
             console.error("❌ Error checking columns:", err.message);
@@ -400,9 +398,6 @@ function createTables() {
             INDEX idx_active (is_active)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-        // FIX #2: added media_type + video_thumbnail so inserts/selects
-        // elsewhere in this file (which already reference these columns)
-        // actually succeed on a fresh database.
         `CREATE TABLE IF NOT EXISTS gallery_images (
             id INT PRIMARY KEY AUTO_INCREMENT,
             filename VARCHAR(255) NOT NULL,
@@ -597,13 +592,6 @@ app.delete("/delete", (req, res) => {
         db.query("DELETE FROM slider_images WHERE id = ?", [image.id], (deleteErr) => {
             if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
 
-            // FIX #4: the original single query
-            // "SET @new_order = 0; UPDATE slider_images SET `order` = (@new_order := @new_order + 1) ..."
-            // packs two statements into one db.query() call. Unless the mysql
-            // connection was created with `multipleStatements: true`, the
-            // driver rejects this outright (and if it *is* enabled globally,
-            // it's a SQL-injection risk best avoided). Rewritten as two
-            // separate, safe queries that don't require that flag.
             db.query("SELECT id FROM slider_images ORDER BY `order` ASC", (fetchErr, rows) => {
                 if (fetchErr || !rows || rows.length === 0) {
                     if (fetchErr) console.warn("Reorder warning:", fetchErr.message);
@@ -1802,7 +1790,7 @@ app.listen(PORT, () => {
     console.log("=".repeat(60));
     console.log(`📡 Port: ${PORT}`);
     console.log(`☁️ Cloudinary: Connected`);
-    console.log(`🔐 Authentication: ENABLED`);
+    console.log(`🔐 Authentication: ENABLED (Session + JWT)`);
     console.log("=".repeat(60));
     console.log("✅ GALLERY MODULE: Month/Year Organized (No album_id)");
     console.log("=".repeat(60));
