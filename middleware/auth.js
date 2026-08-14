@@ -1,64 +1,59 @@
 const jwt = require('jsonwebtoken');
+require('dotenv').config();
 
-/**
- * Authentication Middleware
- * Protects all routes except public ones
- */
-const authMiddleware = (req, res, next) => {
-    // 🔓 Public Routes - Inhe token ki zaroorat nahi
-    const publicPaths = [
-        '/',
-        '/test',
-        '/login',
-        '/register',
-        '/api/admin/login',
-        '/api/admin/register',
-        '/contact',
-        '/analytics/track'
-    ];
+const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
-    // Check if current path is public
-    if (publicPaths.includes(req.path) || req.path.startsWith('/api/public/')) {
+module.exports = (req, res, next) => {
+    console.log('🛡️ Auth middleware called for:', req.method, req.path);
+    
+    // ✅ STEP 1: Check Session First (For Dashboard)
+    if (req.session && req.session.admin_id) {
+        console.log('✅ Session valid for admin ID:', req.session.admin_id);
+        console.log('✅ Admin Name:', req.session.admin_name || 'Unknown');
         return next();
     }
-
-    // 🔑 Get token from Authorization header
+    
+    // ✅ STEP 2: Check JWT Token (For Mobile/API)
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        console.log('❌ No session or token found for:', req.path);
         return res.status(401).json({
             success: false,
-            message: '❌ Access Denied! No token provided.',
-            error: 'UNAUTHORIZED'
+            message: 'Session expired. Please login again.',
+            code: 'SESSION_EXPIRED'
         });
     }
-
-    const token = authHeader.split(' ')[1];
-
+    
     try {
-        // Verify token
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
-        
-        // Attach user data to request
-        req.user = decoded;
-        req.userId = decoded.id || decoded.userId;
-        
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.admin = decoded;
+        console.log('✅ Token verified for:', decoded.username);
         next();
     } catch (error) {
+        console.log('❌ Token verification failed:', error.message);
+        
         if (error.name === 'TokenExpiredError') {
             return res.status(401).json({
                 success: false,
-                message: '❌ Token expired! Please login again.',
-                error: 'TOKEN_EXPIRED'
+                message: 'Token expired. Please login again.',
+                code: 'TOKEN_EXPIRED'
             });
         }
         
-        return res.status(403).json({
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid token. Please login again.',
+                code: 'INVALID_TOKEN'
+            });
+        }
+        
+        return res.status(401).json({
             success: false,
-            message: '❌ Invalid token!',
-            error: 'INVALID_TOKEN'
+            message: 'Authentication failed. Please login again.',
+            code: 'AUTH_FAILED'
         });
     }
 };
-
-module.exports = authMiddleware;
