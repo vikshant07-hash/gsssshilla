@@ -1,33 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const mysql = require('mysql2/promise');
 const multer = require('multer');
-const { v2: cloudinary } = require('cloudinary');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const { v2: cloudinary } = require('cloudinary');
+const { db } = require('../config/db');
 const path = require('path');
 require('dotenv').config();
-
-// =============================================
-// CLOUDINARY CONFIGURATION
-// =============================================
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET
-});
-
-// =============================================
-// DATABASE CONNECTION
-// =============================================
-const pool = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'school_db',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-});
 
 // =============================================
 // CLOUDINARY STORAGE CONFIGURATION
@@ -39,7 +17,7 @@ const storage = new CloudinaryStorage({
         resource_type: 'raw',
         public_id: (req, file) => {
             const { studentId, class: studentClass, session } = req.body;
-            return `${studentId}_${studentClass}_${session}_${Date.now()}`;
+            return `result_${studentId}_${studentClass}_${session}_${Date.now()}`;
         },
         format: 'pdf',
         access_mode: 'public'
@@ -62,19 +40,7 @@ const upload = multer({
 // HELPER FUNCTIONS
 // =============================================
 
-// Get Cloudinary public ID from URL
-const getPublicIdFromUrl = (url) => {
-    if (!url) return null;
-    try {
-        const parts = url.split('/');
-        const filename = parts[parts.length - 1];
-        return filename.split('.')[0];
-    } catch (error) {
-        return null;
-    }
-};
-
-// Delete from Cloudinary
+// Delete file from Cloudinary
 const deleteFromCloudinary = async (publicId) => {
     try {
         if (publicId) {
@@ -88,6 +54,16 @@ const deleteFromCloudinary = async (publicId) => {
     }
 };
 
+// Execute query with promise
+const query = (sql, params) => {
+    return new Promise((resolve, reject) => {
+        db.query(sql, params, (err, results) => {
+            if (err) reject(err);
+            else resolve(results);
+        });
+    });
+};
+
 // =============================================
 // 1. STUDENT ROUTES
 // =============================================
@@ -97,7 +73,6 @@ router.post('/students', async (req, res) => {
     try {
         const { studentId, studentName, fatherName, apaarId, dob, class: studentClass, session } = req.body;
 
-        // Validation
         if (!studentId || !studentName || !fatherName || !apaarId || !dob || !studentClass || !session) {
             return res.status(400).json({
                 success: false,
@@ -105,7 +80,7 @@ router.post('/students', async (req, res) => {
             });
         }
 
-        const [result] = await pool.execute(
+        await query(
             `INSERT INTO students 
             (student_id, student_name, father_name, apaar_id, date_of_birth, class, session_year) 
             VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -134,27 +109,27 @@ router.post('/students', async (req, res) => {
     }
 });
 
-// Get All Students with Filters
+// Get All Students
 router.get('/students', async (req, res) => {
     try {
         const { class: studentClass, session } = req.query;
-        let query = 'SELECT * FROM students';
+        let sql = 'SELECT * FROM students';
         let params = [];
 
         if (studentClass && session) {
-            query += ' WHERE class = ? AND session_year = ? ORDER BY student_name';
+            sql += ' WHERE class = ? AND session_year = ? ORDER BY student_name';
             params = [studentClass, session];
         } else if (studentClass) {
-            query += ' WHERE class = ? ORDER BY student_name';
+            sql += ' WHERE class = ? ORDER BY student_name';
             params = [studentClass];
         } else if (session) {
-            query += ' WHERE session_year = ? ORDER BY student_name';
+            sql += ' WHERE session_year = ? ORDER BY student_name';
             params = [session];
         } else {
-            query += ' ORDER BY session_year DESC, class ASC, student_name';
+            sql += ' ORDER BY session_year DESC, class ASC, student_name';
         }
 
-        const [students] = await pool.execute(query, params);
+        const students = await query(sql, params);
         res.json({
             success: true,
             data: students
@@ -173,10 +148,7 @@ router.get('/students', async (req, res) => {
 router.get('/students/:studentId', async (req, res) => {
     try {
         const { studentId } = req.params;
-        const [students] = await pool.execute(
-            'SELECT * FROM students WHERE student_id = ?',
-            [studentId]
-        );
+        const students = await query('SELECT * FROM students WHERE student_id = ?', [studentId]);
 
         if (students.length === 0) {
             return res.status(404).json({
@@ -205,7 +177,7 @@ router.put('/students/:studentId', async (req, res) => {
         const { studentId } = req.params;
         const { studentName, fatherName, apaarId, dob, class: studentClass, session } = req.body;
 
-        const [result] = await pool.execute(
+        const result = await query(
             `UPDATE students 
             SET student_name = ?, father_name = ?, apaar_id = ?, 
                 date_of_birth = ?, class = ?, session_year = ?
@@ -239,9 +211,9 @@ router.delete('/students/:studentId', async (req, res) => {
     try {
         const { studentId } = req.params;
 
-        // First get all results for this student
-        const [results] = await pool.execute(
-            'SELECT marksheet_file, marksheet_public_id FROM results WHERE student_id = ?',
+        // Get all results for this student
+        const results = await query(
+            'SELECT marksheet_public_id FROM results WHERE student_id = ?',
             [studentId]
         );
 
@@ -252,11 +224,7 @@ router.delete('/students/:studentId', async (req, res) => {
             }
         }
 
-        // Delete from database (cascade will delete results)
-        const [result] = await pool.execute(
-            'DELETE FROM students WHERE student_id = ?',
-            [studentId]
-        );
+        const result = await query('DELETE FROM students WHERE student_id = ?', [studentId]);
 
         if (result.affectedRows === 0) {
             return res.status(404).json({
@@ -283,7 +251,7 @@ router.delete('/students/:studentId', async (req, res) => {
 // 2. RESULT ROUTES
 // =============================================
 
-// Upload Single Result (with Cloudinary)
+// Upload Single Result
 router.post('/results/upload', upload.single('marksheet'), async (req, res) => {
     try {
         const { studentId, class: studentClass, session } = req.body;
@@ -303,10 +271,7 @@ router.post('/results/upload', upload.single('marksheet'), async (req, res) => {
         }
 
         // Check if student exists
-        const [students] = await pool.execute(
-            'SELECT * FROM students WHERE student_id = ?',
-            [studentId]
-        );
+        const students = await query('SELECT * FROM students WHERE student_id = ?', [studentId]);
 
         if (students.length === 0) {
             return res.status(404).json({
@@ -315,12 +280,11 @@ router.post('/results/upload', upload.single('marksheet'), async (req, res) => {
             });
         }
 
-        // Get Cloudinary file URL and public ID
         const fileUrl = req.file.path;
         const publicId = req.file.filename;
 
         // Check if result already exists
-        const [existing] = await pool.execute(
+        const existing = await query(
             'SELECT * FROM results WHERE student_id = ? AND class = ? AND session_year = ?',
             [studentId, studentClass, session]
         );
@@ -332,10 +296,10 @@ router.post('/results/upload', upload.single('marksheet'), async (req, res) => {
             }
 
             // Update existing result
-            await pool.execute(
+            await query(
                 `UPDATE results 
                 SET marksheet_file = ?, marksheet_public_id = ?, 
-                    status = 'unpublished', updated_at = CURRENT_TIMESTAMP 
+                    status = 'unpublished', updated_at = NOW() 
                 WHERE id = ?`,
                 [fileUrl, publicId, existing[0].id]
             );
@@ -343,14 +307,11 @@ router.post('/results/upload', upload.single('marksheet'), async (req, res) => {
             res.json({
                 success: true,
                 message: 'Result updated successfully',
-                data: {
-                    fileUrl,
-                    publicId
-                }
+                data: { fileUrl, publicId }
             });
         } else {
             // Insert new result
-            await pool.execute(
+            await query(
                 `INSERT INTO results 
                 (student_id, class, session_year, marksheet_file, marksheet_public_id, status) 
                 VALUES (?, ?, ?, ?, ?, 'unpublished')`,
@@ -360,15 +321,11 @@ router.post('/results/upload', upload.single('marksheet'), async (req, res) => {
             res.status(201).json({
                 success: true,
                 message: 'Result uploaded successfully',
-                data: {
-                    fileUrl,
-                    publicId
-                }
+                data: { fileUrl, publicId }
             });
         }
     } catch (error) {
         console.error('Upload result error:', error);
-        // Delete from Cloudinary if error occurs
         if (req.file && req.file.filename) {
             await deleteFromCloudinary(req.file.filename);
         }
@@ -390,11 +347,7 @@ router.post('/results/bulk-upload', upload.array('marksheets', 50), async (req, 
             const { studentId, class: studentClass, session } = req.body;
             
             try {
-                // Check if student exists
-                const [students] = await pool.execute(
-                    'SELECT * FROM students WHERE student_id = ?',
-                    [studentId]
-                );
+                const students = await query('SELECT * FROM students WHERE student_id = ?', [studentId]);
 
                 if (students.length === 0) {
                     errors.push({ studentId, error: 'Student not found' });
@@ -402,30 +355,26 @@ router.post('/results/bulk-upload', upload.array('marksheets', 50), async (req, 
                     continue;
                 }
 
-                // Check if result exists
-                const [existing] = await pool.execute(
+                const existing = await query(
                     'SELECT * FROM results WHERE student_id = ? AND class = ? AND session_year = ?',
                     [studentId, studentClass, session]
                 );
 
                 if (existing.length > 0) {
-                    // Delete old file
                     if (existing[0].marksheet_public_id) {
                         await deleteFromCloudinary(existing[0].marksheet_public_id);
                     }
 
-                    // Update
-                    await pool.execute(
+                    await query(
                         `UPDATE results 
                         SET marksheet_file = ?, marksheet_public_id = ?, 
-                            status = 'unpublished', updated_at = CURRENT_TIMESTAMP 
+                            status = 'unpublished', updated_at = NOW() 
                         WHERE id = ?`,
                         [file.path, file.filename, existing[0].id]
                     );
                     results.push({ studentId, status: 'updated' });
                 } else {
-                    // Insert
-                    await pool.execute(
+                    await query(
                         `INSERT INTO results 
                         (student_id, class, session_year, marksheet_file, marksheet_public_id, status) 
                         VALUES (?, ?, ?, ?, ?, 'unpublished')`,
@@ -458,13 +407,15 @@ router.post('/results/bulk-upload', upload.array('marksheets', 50), async (req, 
 router.get('/results', async (req, res) => {
     try {
         const { class: studentClass, session, status } = req.query;
-        let query = `
+        let sql = `
             SELECT 
                 r.*,
                 s.student_name,
                 s.father_name,
                 s.apaar_id,
-                s.date_of_birth
+                s.date_of_birth,
+                DATE_FORMAT(CONVERT_TZ(r.created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist,
+                DATE_FORMAT(CONVERT_TZ(r.published_date, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as published_date_ist
             FROM results r
             JOIN students s ON r.student_id = s.student_id
             WHERE 1=1
@@ -472,21 +423,21 @@ router.get('/results', async (req, res) => {
         let params = [];
 
         if (studentClass) {
-            query += ' AND r.class = ?';
+            sql += ' AND r.class = ?';
             params.push(studentClass);
         }
         if (session) {
-            query += ' AND r.session_year = ?';
+            sql += ' AND r.session_year = ?';
             params.push(session);
         }
         if (status) {
-            query += ' AND r.status = ?';
+            sql += ' AND r.status = ?';
             params.push(status);
         }
 
-        query += ' ORDER BY r.session_year DESC, r.class ASC, s.student_name';
+        sql += ' ORDER BY r.session_year DESC, r.class ASC, s.student_name';
 
-        const [results] = await pool.execute(query, params);
+        const results = await query(sql, params);
         res.json({
             success: true,
             data: results
@@ -505,7 +456,7 @@ router.get('/results', async (req, res) => {
 router.get('/results/:resultId', async (req, res) => {
     try {
         const { resultId } = req.params;
-        const [results] = await pool.execute(
+        const results = await query(
             `SELECT 
                 r.*,
                 s.student_name,
@@ -545,7 +496,7 @@ router.get('/results/student/:studentId', async (req, res) => {
         const { studentId } = req.params;
         const { class: studentClass, session } = req.query;
         
-        let query = `
+        let sql = `
             SELECT 
                 r.*,
                 s.student_name,
@@ -559,15 +510,15 @@ router.get('/results/student/:studentId', async (req, res) => {
         let params = [studentId];
 
         if (studentClass) {
-            query += ' AND r.class = ?';
+            sql += ' AND r.class = ?';
             params.push(studentClass);
         }
         if (session) {
-            query += ' AND r.session_year = ?';
+            sql += ' AND r.session_year = ?';
             params.push(session);
         }
 
-        const [results] = await pool.execute(query, params);
+        const results = await query(sql, params);
 
         if (results.length === 0) {
             return res.status(404).json({
@@ -599,7 +550,7 @@ router.put('/results/:resultId/publish', async (req, res) => {
     try {
         const { resultId } = req.params;
         
-        const [result] = await pool.execute(
+        const result = await query(
             'UPDATE results SET status = "published", published_date = NOW() WHERE id = ?',
             [resultId]
         );
@@ -630,7 +581,7 @@ router.put('/results/:resultId/unpublish', async (req, res) => {
     try {
         const { resultId } = req.params;
         
-        const [result] = await pool.execute(
+        const result = await query(
             'UPDATE results SET status = "unpublished", published_date = NULL WHERE id = ?',
             [resultId]
         );
@@ -668,7 +619,7 @@ router.put('/results/publish-all', async (req, res) => {
             });
         }
 
-        const [result] = await pool.execute(
+        const result = await query(
             'UPDATE results SET status = "published", published_date = NOW() WHERE class = ? AND session_year = ?',
             [studentClass, session]
         );
@@ -699,7 +650,7 @@ router.put('/results/unpublish-all', async (req, res) => {
             });
         }
 
-        const [result] = await pool.execute(
+        const result = await query(
             'UPDATE results SET status = "unpublished", published_date = NULL WHERE class = ? AND session_year = ?',
             [studentClass, session]
         );
@@ -723,21 +674,16 @@ router.delete('/results/:resultId', async (req, res) => {
     try {
         const { resultId } = req.params;
 
-        // Get file public ID
-        const [results] = await pool.execute(
+        const results = await query(
             'SELECT marksheet_public_id FROM results WHERE id = ?',
             [resultId]
         );
 
         if (results.length > 0 && results[0].marksheet_public_id) {
-            // Delete from Cloudinary
             await deleteFromCloudinary(results[0].marksheet_public_id);
         }
 
-        const [result] = await pool.execute(
-            'DELETE FROM results WHERE id = ?',
-            [resultId]
-        );
+        const result = await query('DELETE FROM results WHERE id = ?', [resultId]);
 
         if (result.affectedRows === 0) {
             return res.status(404).json({
@@ -772,21 +718,18 @@ router.delete('/results/delete-all', async (req, res) => {
             });
         }
 
-        // Get all file public IDs
-        const [results] = await pool.execute(
+        const results = await query(
             'SELECT marksheet_public_id FROM results WHERE class = ? AND session_year = ?',
             [studentClass, session]
         );
 
-        // Delete all files from Cloudinary
         for (const result of results) {
             if (result.marksheet_public_id) {
                 await deleteFromCloudinary(result.marksheet_public_id);
             }
         }
 
-        // Delete from database
-        const [result] = await pool.execute(
+        const result = await query(
             'DELETE FROM results WHERE class = ? AND session_year = ?',
             [studentClass, session]
         );
@@ -812,11 +755,12 @@ router.delete('/results/delete-all', async (req, res) => {
 // Get Available Classes with Published Results
 router.get('/public/classes', async (req, res) => {
     try {
-        const [classes] = await pool.execute(
+        const classes = await query(
             `SELECT DISTINCT 
                 class, 
                 session_year,
-                COUNT(*) as total_students
+                COUNT(*) as total_students,
+                DATE_FORMAT(CONVERT_TZ(MAX(published_date), '+00:00', '+05:30'), '%d/%m/%y') as published_date_ist
             FROM results 
             WHERE status = 'published' 
             GROUP BY class, session_year 
@@ -837,7 +781,7 @@ router.get('/public/classes', async (req, res) => {
     }
 });
 
-// Verify Student and Get Result (Public)
+// Verify Student and Get Result
 router.post('/public/verify', async (req, res) => {
     try {
         const { studentId, apaarId, dob, class: studentClass, session } = req.body;
@@ -856,18 +800,18 @@ router.post('/public/verify', async (req, res) => {
             });
         }
 
-        let query = `
+        let sql = `
             SELECT 
                 s.student_id,
                 s.student_name,
                 s.father_name,
                 s.apaar_id,
-                s.date_of_birth,
+                DATE_FORMAT(s.date_of_birth, '%Y-%m-%d') as date_of_birth,
                 r.class,
                 r.session_year,
                 r.marksheet_file,
                 r.status,
-                r.published_date
+                DATE_FORMAT(CONVERT_TZ(r.published_date, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as published_date_ist
             FROM students s
             JOIN results r ON s.student_id = r.student_id
             WHERE s.date_of_birth = ? 
@@ -880,14 +824,14 @@ router.post('/public/verify', async (req, res) => {
         let params = [dob, studentClass, session, studentClass, session];
 
         if (studentId) {
-            query += ' AND s.student_id = ?';
+            sql += ' AND s.student_id = ?';
             params.push(studentId);
         } else if (apaarId) {
-            query += ' AND s.apaar_id = ?';
+            sql += ' AND s.apaar_id = ?';
             params.push(apaarId);
         }
 
-        const [students] = await pool.execute(query, params);
+        const students = await query(sql, params);
 
         if (students.length === 0) {
             return res.status(404).json({
@@ -910,7 +854,7 @@ router.post('/public/verify', async (req, res) => {
                 session: student.session_year,
                 resultFile: student.marksheet_file,
                 status: student.status,
-                publishedDate: student.published_date
+                publishedDate: student.published_date_ist
             }
         });
     } catch (error) {
@@ -929,34 +873,55 @@ router.post('/public/verify', async (req, res) => {
 
 router.get('/stats', async (req, res) => {
     try {
-        const [totalStudents] = await pool.execute(
-            'SELECT COUNT(*) as count FROM students'
-        );
-        
-        const [publishedResults] = await pool.execute(
-            'SELECT COUNT(*) as count FROM results WHERE status = "published"'
-        );
-        
-        const [unpublishedResults] = await pool.execute(
-            'SELECT COUNT(*) as count FROM results WHERE status = "unpublished"'
-        );
-
-        const [classes] = await pool.execute(
-            'SELECT DISTINCT class, session_year FROM students ORDER BY session_year DESC, class ASC'
-        );
+        const [totalStudents] = await query('SELECT COUNT(*) as count FROM students');
+        const [publishedResults] = await query('SELECT COUNT(*) as count FROM results WHERE status = "published"');
+        const [unpublishedResults] = await query('SELECT COUNT(*) as count FROM results WHERE status = "unpublished"');
+        const classes = await query('SELECT DISTINCT class, session_year FROM students ORDER BY session_year DESC, class ASC');
 
         res.json({
             success: true,
             data: {
-                totalStudents: totalStudents[0].count,
-                publishedResults: publishedResults[0].count,
-                unpublishedResults: unpublishedResults[0].count,
-                totalResults: publishedResults[0].count + unpublishedResults[0].count,
+                totalStudents: totalStudents.count,
+                publishedResults: publishedResults.count,
+                unpublishedResults: unpublishedResults.count,
+                totalResults: publishedResults.count + unpublishedResults.count,
                 classes: classes
             }
         });
     } catch (error) {
         console.error('Get stats error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+});
+
+// =============================================
+// 6. GET PUBLISHED STATUS FOR A CLASS
+// =============================================
+
+router.get('/status/:class/:session', async (req, res) => {
+    try {
+        const { class: studentClass, session } = req.params;
+        const results = await query(
+            'SELECT COUNT(*) as total, SUM(CASE WHEN status = "published" THEN 1 ELSE 0 END) as published FROM results WHERE class = ? AND session_year = ?',
+            [studentClass, session]
+        );
+
+        res.json({
+            success: true,
+            data: {
+                class: studentClass,
+                session: session,
+                total: results[0]?.total || 0,
+                published: results[0]?.published || 0,
+                isPublished: results[0]?.total === results[0]?.published && results[0]?.total > 0
+            }
+        });
+    } catch (error) {
+        console.error('Get status error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
