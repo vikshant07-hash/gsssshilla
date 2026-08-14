@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const rateLimit = require('express-rate-limit'); // ← ADD THIS
+const rateLimit = require('express-rate-limit');
 require("dotenv").config();
 const path = require("path");
 const session = require('express-session'); 
@@ -12,11 +12,11 @@ const app = express();
 app.set("trust proxy", 1);
 
 // ============================================================
-// RATE LIMITING - ADD THIS (After app initialization)
+// RATE LIMITING
 // ============================================================
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // 100 requests per IP
+    windowMs: 15 * 60 * 1000,
+    max: 100,
     message: { 
         success: false, 
         message: 'Too many requests, please try again later.' 
@@ -43,15 +43,13 @@ app.use(session({
 }));
 
 // ============================================================
-// CORS - ONLY ALLOW SPECIFIC DOMAINS (CHANGE THIS)
+// CORS - ONLY ALLOW SPECIFIC DOMAINS
 // ============================================================
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5500,https://gsssshilla07.pages.dev').split(',');
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl)
         if (!origin) return callback(null, true);
-        
         if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -64,16 +62,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token']
 }));
 
-// ============================================================
-// REST OF YOUR CODE - KEEP AS IS (No changes needed)
-// ============================================================
 app.options('*', cors());
-
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-// ... BAAKI SAB WAISA HI RAHEGA ...
 
 // ============================================================
 // MIDDLEWARE
@@ -88,7 +77,6 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 function runMigration() {
   console.log("🔄 Checking database schema...");
   
-  // Check for slider_images
   db.query("SHOW COLUMNS FROM slider_images LIKE 'public_id'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
@@ -105,7 +93,6 @@ function runMigration() {
     }
   });
 
-  // Check for recent_updates
   db.query("SHOW COLUMNS FROM recent_updates LIKE 'public_id'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
@@ -122,7 +109,6 @@ function runMigration() {
     }
   });
 
-  // Check for gallery_images - image_date column
   db.query("SHOW COLUMNS FROM gallery_images LIKE 'image_date'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
@@ -145,7 +131,6 @@ function runMigration() {
     }
   });
 
-  // Check for downloads - public_id column
   db.query("SHOW COLUMNS FROM downloads LIKE 'public_id'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
@@ -162,7 +147,6 @@ function runMigration() {
     }
   });
 
-  // Check for faculty - photo_public_id column
   db.query("SHOW COLUMNS FROM faculty LIKE 'photo_public_id'", (err, results) => {
     if (err) {
       console.error("❌ Error checking columns:", err.message);
@@ -185,7 +169,6 @@ function runMigration() {
 // ============================================================
 function createTables() {
   const queries = [
-    // Slider Images (Homepage)
     `CREATE TABLE IF NOT EXISTS slider_images (
       id INT PRIMARY KEY AUTO_INCREMENT,
       filename VARCHAR(255) NOT NULL UNIQUE,
@@ -204,7 +187,6 @@ function createTables() {
       INDEX idx_active (is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    // Recent Updates
     `CREATE TABLE IF NOT EXISTS recent_updates (
       id INT PRIMARY KEY AUTO_INCREMENT,
       title VARCHAR(255) NOT NULL,
@@ -223,7 +205,6 @@ function createTables() {
       INDEX idx_is_new (is_new)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    // Notifications
     `CREATE TABLE IF NOT EXISTS notifications (
       id INT PRIMARY KEY AUTO_INCREMENT,
       title VARCHAR(255) NOT NULL,
@@ -243,7 +224,6 @@ function createTables() {
       INDEX idx_active (is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    // Contact Info
     `CREATE TABLE IF NOT EXISTS contact_info (
       id INT PRIMARY KEY DEFAULT 1,
       school_name VARCHAR(255) NOT NULL,
@@ -254,7 +234,6 @@ function createTables() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    // Contact Messages
     `CREATE TABLE IF NOT EXISTS contact_messages (
       id INT PRIMARY KEY AUTO_INCREMENT,
       name VARCHAR(100) NOT NULL,
@@ -267,11 +246,6 @@ function createTables() {
       INDEX idx_read (is_read)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    // ============================================================
-    // GALLERY TABLES - UPDATED
-    // ============================================================
-    
-    // Gallery Slider
     `CREATE TABLE IF NOT EXISTS gallery_slider (
       id INT PRIMARY KEY AUTO_INCREMENT,
       filename VARCHAR(255) NOT NULL,
@@ -288,7 +262,6 @@ function createTables() {
       INDEX idx_active (is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    // Gallery Images (without album_id requirement)
     `CREATE TABLE IF NOT EXISTS gallery_images (
       id INT PRIMARY KEY AUTO_INCREMENT,
       filename VARCHAR(255) NOT NULL,
@@ -310,7 +283,6 @@ function createTables() {
       INDEX idx_order (\`order\`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
-    // Analytics
     `CREATE TABLE IF NOT EXISTS analytics (
       id INT PRIMARY KEY AUTO_INCREMENT,
       type VARCHAR(50) NOT NULL,
@@ -330,7 +302,6 @@ function createTables() {
     });
   });
   
-  // Insert default contact info
   setTimeout(() => {
     db.query(
       `INSERT INTO contact_info (id, school_name, address, phone, email) 
@@ -380,8 +351,6 @@ app.get("/test", (req, res) => {
 // ============================================================
 // SLIDER IMAGE ROUTES (Homepage)
 // ============================================================
-
-// GET - All Slider Images
 app.get("/images", (req, res) => {
   db.query(
     `SELECT *, 
@@ -398,7 +367,6 @@ app.get("/images", (req, res) => {
   );
 });
 
-// GET - Public Slider Images
 app.get("/images/public", (req, res) => {
   db.query(
     `SELECT filename, file_path, public_id, title, alt_text, \`order\`
@@ -415,7 +383,6 @@ app.get("/images/public", (req, res) => {
   );
 });
 
-// GET - Slider Image Stats
 app.get("/images/stats", (req, res) => {
   db.query(
     `SELECT 
@@ -436,7 +403,6 @@ app.get("/images/stats", (req, res) => {
   );
 });
 
-// POST - Upload Slider Images to Cloudinary
 app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
   console.log("📸 Upload request received");
   console.log("📸 Files:", req.files ? req.files.length : 0);
@@ -496,7 +462,6 @@ app.post("/upload", uploadSlider.array('images', 20), async (req, res) => {
   }
 });
 
-// DELETE - Slider Image
 app.delete("/delete", (req, res) => {
   const { filename } = req.body;
   if (!filename) return res.status(400).json({ success: false, message: "Filename/Public ID is required" });
@@ -519,7 +484,6 @@ app.delete("/delete", (req, res) => {
   });
 });
 
-// PUT - Update Slider Image
 app.put("/images/update/:id", (req, res) => {
   const { id } = req.params;
   const { title, alt_text, is_active } = req.body;
@@ -533,7 +497,6 @@ app.put("/images/update/:id", (req, res) => {
   );
 });
 
-// PUT - Reorder Slider Images
 app.put("/images/reorder", (req, res) => {
   const { orders } = req.body;
   if (!orders || !Array.isArray(orders)) return res.status(400).json({ success: false, message: "Orders array is required" });
@@ -555,7 +518,6 @@ app.put("/images/reorder", (req, res) => {
 // ============================================================
 // RECENT UPDATES ROUTES
 // ============================================================
-
 app.get("/recent/admin/all", (req, res) => {
   db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM recent_updates ORDER BY created_at DESC`,
     (err, results) => {
@@ -651,7 +613,6 @@ app.delete("/recent/admin/bulk-delete", (req, res) => {
 // ============================================================
 // NOTIFICATION MODULE ROUTES
 // ============================================================
-
 app.get("/api/notifications/admin/all", (req, res) => {
   db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM notifications ORDER BY created_at DESC`,
     (err, results) => {
@@ -745,76 +706,51 @@ app.delete("/api/notifications/admin/bulk-delete", (req, res) => {
 // ============================================================
 // CONTACT MODULE ROUTES
 // ============================================================
-
-// ============================================================
-// CONTACT MODULE ROUTES - COMPLETE
-// ============================================================
-
-// GET - Contact Info (Public)
 app.get("/api/contact/info", (req, res) => {
-  db.query(
-    `SELECT * FROM contact_info WHERE id = 1`,
-    (err, results) => {
-      if (err) {
-        console.error("❌ DB Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      if (!results || results.length === 0) {
-        return res.json({
-          success: true,
-          data: {
-            school_name: "GSS School Shilla",
-            address: "Shilla, Himachal Pradesh",
-            phone: "+91 98765 43210",
-            email: "info@gssshilla.edu.in"
-          }
-        });
-      }
-      
-      res.json({ success: true, data: results[0] });
+  db.query(`SELECT * FROM contact_info WHERE id = 1`, (err, results) => {
+    if (err) {
+      console.error("❌ DB Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
     }
-  );
-});
-
-// GET - Contact Info (Admin)
-app.get("/admin/contact/info", (req, res) => {
-  db.query(
-    `SELECT * FROM contact_info WHERE id = 1`,
-    (err, results) => {
-      if (err) {
-        console.error("❌ DB Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      if (!results || results.length === 0) {
-        return res.json({
+    if (!results || results.length === 0) {
+      return res.json({
+        success: true,
+        data: {
           school_name: "GSS School Shilla",
           address: "Shilla, Himachal Pradesh",
           phone: "+91 98765 43210",
           email: "info@gssshilla.edu.in"
-        });
-      }
-      
-      res.json(results[0]);
+        }
+      });
     }
-  );
+    res.json({ success: true, data: results[0] });
+  });
 });
 
-// PUT - Update Contact Info (Admin)
+app.get("/admin/contact/info", (req, res) => {
+  db.query(`SELECT * FROM contact_info WHERE id = 1`, (err, results) => {
+    if (err) {
+      console.error("❌ DB Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    if (!results || results.length === 0) {
+      return res.json({
+        school_name: "GSS School Shilla",
+        address: "Shilla, Himachal Pradesh",
+        phone: "+91 98765 43210",
+        email: "info@gssshilla.edu.in"
+      });
+    }
+    res.json(results[0]);
+  });
+});
+
 app.put("/admin/contact/info/update", (req, res) => {
   const { school_name, address, phone, email } = req.body;
-
-  console.log("📝 Update Contact Info:", req.body);
-
   if (!school_name || !address || !phone || !email) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "All fields are required (school_name, address, phone, email)" 
-    });
+    return res.status(400).json({ success: false, message: "All fields are required" });
   }
 
-  // Check if record exists
   db.query("SELECT id FROM contact_info WHERE id = 1", (err, results) => {
     if (err) {
       console.error("❌ DB Error:", err);
@@ -822,103 +758,58 @@ app.put("/admin/contact/info/update", (req, res) => {
     }
 
     if (results && results.length > 0) {
-      // Update existing
       db.query(
-        `UPDATE contact_info 
-         SET school_name = ?, address = ?, phone = ?, email = ?, updated_at = NOW()
-         WHERE id = 1`,
+        `UPDATE contact_info SET school_name = ?, address = ?, phone = ?, email = ?, updated_at = NOW() WHERE id = 1`,
         [school_name, address, phone, email],
-        (updateErr, result) => {
+        (updateErr) => {
           if (updateErr) {
             console.error("❌ Update Error:", updateErr);
             return res.status(500).json({ success: false, error: updateErr.message });
           }
-
-          console.log("✅ Contact info updated");
-          res.json({ 
-            success: true, 
-            message: "✅ Contact information updated successfully!" 
-          });
+          res.json({ success: true, message: "✅ Contact information updated successfully!" });
         }
       );
     } else {
-      // Insert new
       db.query(
-        `INSERT INTO contact_info (id, school_name, address, phone, email, created_at) 
-         VALUES (1, ?, ?, ?, ?, NOW())`,
+        `INSERT INTO contact_info (id, school_name, address, phone, email, created_at) VALUES (1, ?, ?, ?, ?, NOW())`,
         [school_name, address, phone, email],
-        (insertErr, result) => {
+        (insertErr) => {
           if (insertErr) {
             console.error("❌ Insert Error:", insertErr);
             return res.status(500).json({ success: false, error: insertErr.message });
           }
-
-          console.log("✅ Contact info created");
-          res.json({ 
-            success: true, 
-            message: "✅ Contact information saved successfully!" 
-          });
+          res.json({ success: true, message: "✅ Contact information saved successfully!" });
         }
       );
     }
   });
 });
 
-// POST - Contact Form Submit (Public)
 app.post("/contact", (req, res) => {
   const { name, email, message } = req.body;
-
-  console.log("📩 Contact Form Submission:");
-  console.log("  Name:", name);
-  console.log("  Email:", email);
-  console.log("  Message:", message);
-
-  // Validation
   if (!name || !email || !message) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "All fields are required (name, email, message)" 
-    });
+    return res.status(400).json({ success: false, message: "All fields are required" });
   }
 
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
-    return res.status(400).json({
-      success: false,
-      message: "Please enter a valid email address"
-    });
+    return res.status(400).json({ success: false, message: "Please enter a valid email address" });
   }
 
-  db.query(
-    `INSERT INTO contact_messages (name, email, message, created_at) 
-     VALUES (?, ?, ?, NOW())`,
+  db.query(`INSERT INTO contact_messages (name, email, message, created_at) VALUES (?, ?, ?, NOW())`,
     [name, email, message],
     (err, result) => {
       if (err) {
         console.error("❌ DB Error:", err);
-        return res.status(500).json({ 
-          success: false, 
-          message: "Failed to send message. Please try again later." 
-        });
+        return res.status(500).json({ success: false, message: "Failed to send message" });
       }
-
-      console.log("✅ Message saved with ID:", result.insertId);
-      
-      res.status(201).json({
-        success: true,
-        message: "✅ Message sent successfully! We'll get back to you soon."
-      });
+      res.status(201).json({ success: true, message: "✅ Message sent successfully!" });
     }
   );
 });
 
-// GET - All Contact Messages (Admin)
 app.get("/admin/contact/messages", (req, res) => {
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
-     FROM contact_messages 
-     ORDER BY created_at DESC`,
+  db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM contact_messages ORDER BY created_at DESC`,
     (err, results) => {
       if (err) {
         console.error("❌ DB Error:", err);
@@ -929,14 +820,9 @@ app.get("/admin/contact/messages", (req, res) => {
   );
 });
 
-// GET - Single Contact Message (Admin)
 app.get("/admin/contact/messages/:id", (req, res) => {
   const { id } = req.params;
-
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
-     FROM contact_messages WHERE id = ?`,
+  db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM contact_messages WHERE id = ?`,
     [id],
     (err, results) => {
       if (err) {
@@ -946,88 +832,58 @@ app.get("/admin/contact/messages/:id", (req, res) => {
       if (!results || results.length === 0) {
         return res.status(404).json({ success: false, message: "Message not found" });
       }
-
-      // Mark as read
       db.query("UPDATE contact_messages SET is_read = 1 WHERE id = ?", [id]);
-
       res.json({ success: true, data: results[0] });
     }
   );
 });
 
-// PUT - Mark Message as Read (Admin)
 app.put("/admin/contact/messages/read/:id", (req, res) => {
   const { id } = req.params;
-
-  db.query(
-    "UPDATE contact_messages SET is_read = 1 WHERE id = ?",
-    [id],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Update Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ success: false, message: "Message not found" });
-      }
-      res.json({ success: true, message: "✅ Marked as read" });
+  db.query("UPDATE contact_messages SET is_read = 1 WHERE id = ?", [id], (err, result) => {
+    if (err) {
+      console.error("❌ Update Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
     }
-  );
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Message not found" });
+    }
+    res.json({ success: true, message: "✅ Marked as read" });
+  });
 });
 
-// DELETE - Delete Contact Message (Admin)
 app.delete("/admin/contact/messages/delete/:id", (req, res) => {
   const { id } = req.params;
-
   if (!id || isNaN(id)) {
     return res.status(400).json({ success: false, message: "Invalid ID" });
   }
-
-  db.query(
-    "DELETE FROM contact_messages WHERE id = ?",
-    [id],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Delete Error:", err);
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ success: false, message: "Message not found" });
-      }
-
-      res.json({ success: true, message: "✅ Message deleted successfully!" });
+  db.query("DELETE FROM contact_messages WHERE id = ?", [id], (err, result) => {
+    if (err) {
+      console.error("❌ Delete Error:", err);
+      return res.status(500).json({ success: false, error: err.message });
     }
-  );
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Message not found" });
+    }
+    res.json({ success: true, message: "✅ Message deleted successfully!" });
+  });
 });
 
-// DELETE - Bulk Delete Messages (Admin)
 app.delete("/admin/contact/messages/bulk-delete", (req, res) => {
   const { ids } = req.body;
-
   if (!ids || !Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ success: false, message: "No IDs provided" });
   }
-
   const placeholders = ids.map(() => '?').join(',');
-  
-  db.query(
-    `DELETE FROM contact_messages WHERE id IN (${placeholders})`, 
-    ids, 
-    (deleteErr, result) => {
-      if (deleteErr) {
-        console.error("❌ Delete Error:", deleteErr);
-        return res.status(500).json({ success: false, error: deleteErr.message });
-      }
-      res.json({ 
-        success: true, 
-        message: `${result.affectedRows} messages deleted successfully ✅` 
-      });
+  db.query(`DELETE FROM contact_messages WHERE id IN (${placeholders})`, ids, (deleteErr, result) => {
+    if (deleteErr) {
+      console.error("❌ Delete Error:", deleteErr);
+      return res.status(500).json({ success: false, error: deleteErr.message });
     }
-  );
+    res.json({ success: true, message: `${result.affectedRows} messages deleted successfully ✅` });
+  });
 });
 
-// GET - Contact Stats (Admin)
 app.get("/admin/contact/stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as count FROM contact_messages",
@@ -1042,14 +898,9 @@ app.get("/admin/contact/stats", (req, res) => {
 
   Object.entries(queries).forEach(([key, query]) => {
     db.query(query, (err, result) => {
-      if (err) {
-        console.error(`❌ Stats Error (${key}):`, err);
-        results[key] = { count: 0 };
-      } else {
-        results[key] = result[0] || { count: 0 };
-      }
+      if (err) results[key] = { count: 0 };
+      else results[key] = result[0] || { count: 0 };
       completed++;
-      
       if (completed === totalQueries) {
         res.json({
           success: true,
@@ -1066,15 +917,8 @@ app.get("/admin/contact/stats", (req, res) => {
 });
 
 // ============================================================
+// GALLERY MODULE ROUTES
 // ============================================================
-// GALLERY MODULE ROUTES - UPDATED (No album_id required)
-// ============================================================
-// ============================================================
-
-// ============================================================
-// SLIDER APIs
-// ============================================================
-
 app.get("/api/gallery/slider", (req, res) => {
   db.query(`SELECT * FROM gallery_slider WHERE is_active = 1 ORDER BY \`order\` ASC, created_at DESC LIMIT 10`,
     (err, results) => {
@@ -1162,16 +1006,8 @@ app.put("/api/gallery/slider/reorder", (req, res) => {
 });
 
 // ============================================================
-// GALLERY IMAGES APIs (Month/Year Organized)
+// GALLERY IMAGES APIs
 // ============================================================
-
-// GET - Gallery Images by Year (Public)
-
-// ============================================================
-// GALLERY MODULE ROUTES - WITH VIDEO SUPPORT
-// ============================================================
-
-// GET - Gallery Images by Year (Public)
 app.get("/api/gallery/images/public", (req, res) => {
   const year = req.query.year || new Date().getFullYear();
   db.query(
@@ -1196,10 +1032,8 @@ app.get("/api/gallery/images/public", (req, res) => {
   );
 });
 
-// GET - Available Years
 app.get("/api/gallery/years", (req, res) => {
-  db.query(
-    `SELECT DISTINCT YEAR(image_date) as year FROM gallery_images WHERE is_active = 1 ORDER BY year DESC`,
+  db.query(`SELECT DISTINCT YEAR(image_date) as year FROM gallery_images WHERE is_active = 1 ORDER BY year DESC`,
     (err, results) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
       const years = results.map(r => r.year);
@@ -1208,14 +1042,9 @@ app.get("/api/gallery/years", (req, res) => {
   );
 });
 
-// GET - Admin Recent Gallery Items
 app.get("/api/gallery/images/admin/recent", (req, res) => {
   const limit = parseInt(req.query.limit) || 20;
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist 
-     FROM gallery_images 
-     ORDER BY created_at DESC LIMIT ?`,
+  db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM gallery_images ORDER BY created_at DESC LIMIT ?`,
     [limit],
     (err, results) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
@@ -1224,13 +1053,8 @@ app.get("/api/gallery/images/admin/recent", (req, res) => {
   );
 });
 
-// GET - All Gallery Items (Admin)
 app.get("/api/gallery/images", (req, res) => {
-  db.query(
-    `SELECT *, 
-     DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist 
-     FROM gallery_images 
-     ORDER BY created_at DESC LIMIT 50`,
+  db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM gallery_images ORDER BY created_at DESC LIMIT 50`,
     (err, results) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
       res.json({ success: true, data: results || [] });
@@ -1238,7 +1062,6 @@ app.get("/api/gallery/images", (req, res) => {
   );
 });
 
-// POST - Add Gallery Items (Images & Videos)
 app.post("/api/gallery/images/add", uploadGallery.array('media', 30), async (req, res) => {
   const { title, description, image_date } = req.body;
 
@@ -1261,11 +1084,8 @@ app.post("/api/gallery/images/add", uploadGallery.array('media', 30), async (req
       const filePath = file.path;
       const publicId = file.filename;
       
-      // For videos, Cloudinary automatically generates thumbnail
-      // We'll store the video thumbnail URL separately
       let videoThumbnail = null;
       if (isVideo) {
-        // Cloudinary video thumbnail URL (add .jpg extension)
         videoThumbnail = filePath.replace(/\.[^.]+$/, '.jpg');
       }
 
@@ -1308,13 +1128,11 @@ app.post("/api/gallery/images/add", uploadGallery.array('media', 30), async (req
   });
 });
 
-// PUT - Update Single Gallery Item
 app.put("/api/gallery/images/update/:id", (req, res) => {
   const { id } = req.params;
   const { title, description, image_date, is_active } = req.body;
 
-  db.query(
-    `UPDATE gallery_images SET title=?, description=?, image_date=?, is_active=?, updated_at=NOW() WHERE id=?`,
+  db.query(`UPDATE gallery_images SET title=?, description=?, image_date=?, is_active=?, updated_at=NOW() WHERE id=?`,
     [title || '', description || '', image_date || null, is_active !== undefined ? parseInt(is_active) : 1, id],
     (err, result) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
@@ -1324,7 +1142,6 @@ app.put("/api/gallery/images/update/:id", (req, res) => {
   );
 });
 
-// DELETE - Delete Gallery Item
 app.delete("/api/gallery/images/delete/:id", (req, res) => {
   const { id } = req.params;
   if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
@@ -1334,7 +1151,6 @@ app.delete("/api/gallery/images/delete/:id", (req, res) => {
     if (!results || results.length === 0) return res.status(404).json({ success: false, message: "Item not found" });
 
     const item = results[0];
-    // Delete from Cloudinary
     if (item.public_id) {
       cloudinary.uploader.destroy(item.public_id, { 
         resource_type: item.media_type === 'video' ? 'video' : 'image' 
@@ -1348,7 +1164,6 @@ app.delete("/api/gallery/images/delete/:id", (req, res) => {
   });
 });
 
-// DELETE - Bulk Delete Gallery Items
 app.delete("/api/gallery/images/bulk-delete", (req, res) => {
   const { ids } = req.body;
   if (!ids || !Array.isArray(ids) || ids.length === 0) {
@@ -1374,7 +1189,6 @@ app.delete("/api/gallery/images/bulk-delete", (req, res) => {
   });
 });
 
-// GET - Gallery Stats
 app.get("/api/gallery/stats", (req, res) => {
   const queries = {
     total_images: "SELECT COUNT(*) as count FROM gallery_images WHERE is_active = 1 AND media_type = 'image'",
@@ -1410,9 +1224,6 @@ app.get("/api/gallery/stats", (req, res) => {
 // ============================================================
 // DOWNLOAD MODULE ROUTES
 // ============================================================
-
-
-// GET - Public Downloads with Filters
 app.get("/api/downloads", (req, res) => {
   const { class: classFilter, session, category, search, page = 1, limit = 20 } = req.query;
   
@@ -1479,10 +1290,8 @@ app.get("/api/downloads", (req, res) => {
   });
 });
 
-// GET - Single Download
 app.get("/api/downloads/:id", (req, res) => {
   const { id } = req.params;
-  
   db.query("SELECT * FROM downloads WHERE id = ? AND is_active = 1", [id], (err, results) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
     if (!results || results.length === 0) return res.status(404).json({ success: false, message: "File not found" });
@@ -1490,25 +1299,18 @@ app.get("/api/downloads/:id", (req, res) => {
   });
 });
 
-// GET - Download File (Track Download Count)
 app.get("/api/downloads/:id/download", (req, res) => {
   const { id } = req.params;
-  
   db.query("SELECT * FROM downloads WHERE id = ? AND is_active = 1", [id], (err, results) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
     if (!results || results.length === 0) return res.status(404).json({ success: false, message: "File not found" });
 
     const file = results[0];
-    
-    // Increment download count
     db.query("UPDATE downloads SET download_count = download_count + 1 WHERE id = ?", [id]);
-    
-    // Redirect to Cloudinary URL (direct download)
     res.redirect(file.file_path);
   });
 });
 
-// GET - Available Sessions
 app.get("/api/downloads/sessions", (req, res) => {
   db.query("SELECT DISTINCT session_year FROM downloads WHERE is_active = 1 ORDER BY session_year DESC", 
     (err, results) => {
@@ -1518,7 +1320,6 @@ app.get("/api/downloads/sessions", (req, res) => {
   );
 });
 
-// GET - Available Classes
 app.get("/api/downloads/classes", (req, res) => {
   db.query("SELECT DISTINCT class FROM downloads WHERE is_active = 1 ORDER BY CAST(class AS UNSIGNED) ASC", 
     (err, results) => {
@@ -1531,32 +1332,24 @@ app.get("/api/downloads/classes", (req, res) => {
 // ============================================================
 // ADMIN DOWNLOAD ROUTES
 // ============================================================
-
-// GET - All Downloads (Admin)
 app.get("/admin/downloads", (req, res) => {
   const { page = 1, limit = 50 } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
   
   db.query("SELECT COUNT(*) as total FROM downloads", (countErr, countResult) => {
     if (countErr) return res.status(500).json({ success: false, error: countErr.message });
-    
     const total = countResult[0]?.total || 0;
-    
-    db.query("SELECT * FROM downloads ORDER BY created_at DESC LIMIT ? OFFSET ?", 
-      [parseInt(limit), offset], 
-      (err, results) => {
-        if (err) return res.status(500).json({ success: false, error: err.message });
-        res.json({
-          success: true,
-          data: results || [],
-          pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) }
-        });
-      }
-    );
+    db.query("SELECT * FROM downloads ORDER BY created_at DESC LIMIT ? OFFSET ?", [parseInt(limit), offset], (err, results) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({
+        success: true,
+        data: results || [],
+        pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) }
+      });
+    });
   });
 });
 
-// POST - Add Download (Admin)
 app.post("/admin/downloads/add", uploadDownload.single("file"), (req, res) => {
   const { title, description, class: classNum, session_year, category, series, subject } = req.body;
 
@@ -1593,7 +1386,6 @@ app.post("/admin/downloads/add", uploadDownload.single("file"), (req, res) => {
         console.error("❌ Insert Error:", err);
         return res.status(500).json({ success: false, error: err.message });
       }
-
       res.status(201).json({
         success: true,
         message: "✅ File uploaded successfully!",
@@ -1603,7 +1395,6 @@ app.post("/admin/downloads/add", uploadDownload.single("file"), (req, res) => {
   );
 });
 
-// PUT - Update Download (Admin)
 app.put("/admin/downloads/update/:id", uploadDownload.single("file"), (req, res) => {
   const { id } = req.params;
   const { title, description, class: classNum, session_year, category, series, subject, is_active } = req.body;
@@ -1625,7 +1416,6 @@ app.put("/admin/downloads/update/:id", uploadDownload.single("file"), (req, res)
     let file_type = existing.file_type;
 
     if (req.file) {
-      // Delete old file from Cloudinary
       if (existing.public_id) {
         cloudinary.uploader.destroy(existing.public_id)
           .catch(err => console.error("Cloudinary delete error:", err));
@@ -1654,10 +1444,8 @@ app.put("/admin/downloads/update/:id", uploadDownload.single("file"), (req, res)
   });
 });
 
-// DELETE - Delete Download (Admin)
 app.delete("/admin/downloads/delete/:id", (req, res) => {
   const { id } = req.params;
-
   db.query("SELECT * FROM downloads WHERE id = ?", [id], (err, results) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
     if (!results || results.length === 0) return res.status(404).json({ success: false, message: "Not found" });
@@ -1675,7 +1463,6 @@ app.delete("/admin/downloads/delete/:id", (req, res) => {
   });
 });
 
-// DELETE - Bulk Delete (Admin)
 app.delete("/admin/downloads/bulk-delete", (req, res) => {
   const { ids } = req.body;
   if (!ids || !Array.isArray(ids) || ids.length === 0) {
@@ -1683,14 +1470,11 @@ app.delete("/admin/downloads/bulk-delete", (req, res) => {
   }
 
   const placeholders = ids.map(() => '?').join(',');
-  
   db.query(`SELECT * FROM downloads WHERE id IN (${placeholders})`, ids, (fetchErr, fetchResults) => {
     if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
-    
     fetchResults.forEach(item => {
       if (item.public_id) cloudinary.uploader.destroy(item.public_id).catch(err => console.error(err));
     });
-
     db.query(`DELETE FROM downloads WHERE id IN (${placeholders})`, ids, (deleteErr) => {
       if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
       res.json({ success: true, message: `${ids.length} items deleted ✅` });
@@ -1698,7 +1482,6 @@ app.delete("/admin/downloads/bulk-delete", (req, res) => {
   });
 });
 
-// GET - Download Stats (Admin)
 app.get("/admin/downloads/stats", (req, res) => {
   const queries = {
     total: "SELECT COUNT(*) as count FROM downloads",
@@ -1723,18 +1506,11 @@ app.get("/admin/downloads/stats", (req, res) => {
   });
 });
 
-
 // ============================================================
 // FACULTY MODULE ROUTES
 // ============================================================
-
-// GET - Public Faculty (Grouped by Subject)
 app.get("/api/faculty", (req, res) => {
-  const query = `
-    SELECT * FROM faculty 
-    WHERE is_active = 1 
-    ORDER BY is_principal DESC, \`order\` ASC, name ASC
-  `;
+  const query = `SELECT * FROM faculty WHERE is_active = 1 ORDER BY is_principal DESC, \`order\` ASC, name ASC`;
 
   db.query(query, (err, results) => {
     if (err) {
@@ -1742,10 +1518,7 @@ app.get("/api/faculty", (req, res) => {
       return res.status(500).json({ success: false, error: err.message });
     }
 
-    // Separate Principal
     const principal = results.find(f => f.is_principal == 1);
-    
-    // Group teaching staff by subject
     const teachingStaff = {};
     results.forEach(f => {
       if (!f.is_principal && f.staff_type === 'teaching') {
@@ -1754,8 +1527,6 @@ app.get("/api/faculty", (req, res) => {
         teachingStaff[dept].push(f);
       }
     });
-
-    // Non-teaching staff
     const nonTeaching = results.filter(f => !f.is_principal && f.staff_type !== 'teaching');
 
     res.json({
@@ -1769,10 +1540,8 @@ app.get("/api/faculty", (req, res) => {
   });
 });
 
-// GET - Admin All Faculty
 app.get("/admin/faculty", (req, res) => {
-  db.query(
-    "SELECT * FROM faculty ORDER BY is_principal DESC, staff_type ASC, `order` ASC, name ASC",
+  db.query("SELECT * FROM faculty ORDER BY is_principal DESC, staff_type ASC, `order` ASC, name ASC",
     (err, results) => {
       if (err) return res.status(500).json({ success: false, error: err.message });
       res.json({ success: true, data: results || [] });
@@ -1780,7 +1549,6 @@ app.get("/admin/faculty", (req, res) => {
   );
 });
 
-// GET - Single Faculty
 app.get("/admin/faculty/:id", (req, res) => {
   db.query("SELECT * FROM faculty WHERE id = ?", [req.params.id], (err, results) => {
     if (err) return res.status(500).json({ success: false, error: err.message });
@@ -1789,7 +1557,6 @@ app.get("/admin/faculty/:id", (req, res) => {
   });
 });
 
-// POST - Add Faculty
 app.post("/admin/faculty/add", uploadFaculty.single("photo"), (req, res) => {
   const { name, designation, department, subject, qualification, experience, email, phone, message, is_principal, staff_type, joining_date } = req.body;
 
@@ -1811,7 +1578,6 @@ app.post("/admin/faculty/add", uploadFaculty.single("photo"), (req, res) => {
   );
 });
 
-// PUT - Update Faculty
 app.put("/admin/faculty/update/:id", uploadFaculty.single("photo"), (req, res) => {
   const { id } = req.params;
   const { name, designation, department, subject, qualification, experience, email, phone, message, is_principal, staff_type, is_active, joining_date } = req.body;
@@ -1848,7 +1614,6 @@ app.put("/admin/faculty/update/:id", uploadFaculty.single("photo"), (req, res) =
   });
 });
 
-// DELETE - Delete Faculty
 app.delete("/admin/faculty/delete/:id", (req, res) => {
   const { id } = req.params;
   db.query("SELECT * FROM faculty WHERE id = ?", [id], (err, results) => {
@@ -1866,7 +1631,6 @@ app.delete("/admin/faculty/delete/:id", (req, res) => {
   });
 });
 
-// GET - Departments List
 app.get("/api/faculty/departments", (req, res) => {
   db.query("SELECT DISTINCT department FROM faculty WHERE is_active = 1 AND department IS NOT NULL ORDER BY department",
     (err, results) => {
@@ -1875,8 +1639,6 @@ app.get("/api/faculty/departments", (req, res) => {
     }
   );
 });
-
-
 
 // ============================================================
 // ANALYTICS ROUTES
@@ -1900,12 +1662,6 @@ app.get("/analytics/stats", (req, res) => {
   );
 });
 
-
-// ============================================================
-// LOGIN ROUTE - WITH ATTEMPT TRACKING
-// ============================================================
-
-
 // ============================================================
 // ADMIN ROUTES - DEBUG VERSION
 // ============================================================
@@ -1919,7 +1675,6 @@ try {
   app.use('/api/admin', adminRoutes);
   console.log('✅ Admin routes registered at /api/admin');
   
-  // Test route - Check if router is working
   app.get('/api/admin/direct-test', (req, res) => {
     res.json({ success: true, message: 'Direct test working!' });
   });
@@ -1927,8 +1682,6 @@ try {
 } catch (error) {
   console.error('❌ Error loading admin routes:', error.message);
 }
-
-
 
 // ============================================================
 // 404 & ERROR HANDLER
