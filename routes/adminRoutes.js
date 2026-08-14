@@ -13,9 +13,12 @@ console.log('🔧 adminRoutes.js loaded!');
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
 const verifyToken = (req, res, next) => {
+  console.log('🛡️ verifyToken middleware called for:', req.method, req.path);
+  
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('❌ No token provided for:', req.path);
       return res.status(401).json({ 
         success: false, 
         message: 'No token provided',
@@ -25,8 +28,10 @@ const verifyToken = (req, res, next) => {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     req.admin = decoded;
+    console.log('✅ Token verified for:', decoded.username);
     next();
   } catch (error) {
+    console.log('❌ Token verification failed:', error.message);
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({ 
         success: false, 
@@ -271,8 +276,9 @@ function findAdminByEmail(email) {
 }
 
 // ============================================================
-// 🔓 PUBLIC ROUTES - NO TOKEN REQUIRED
+// 🔓 PUBLIC ROUTES - NO TOKEN REQUIRED (DEFINED FIRST)
 // ============================================================
+console.log('🔓 Registering PUBLIC routes...');
 
 // 1. Test Route
 router.get('/test', (req, res) => {
@@ -288,7 +294,7 @@ router.get('/csrf-token', (req, res) => {
 
 // 3. LOGIN - Public
 router.post('/login', checkLoginAttempts, async (req, res) => {
-  console.log('🔥 LOGIN ROUTE HIT');
+  console.log('🔥 LOGIN ROUTE HIT - PUBLIC');
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -360,9 +366,9 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
   }
 });
 
-// 4. VERIFY OTP - Public (NO TOKEN REQUIRED) ✅
+// 4. VERIFY OTP - PUBLIC (NO TOKEN REQUIRED) ✅✅✅
 router.post('/verify-otp', async (req, res) => {
-  console.log('🔥 VERIFY OTP ROUTE HIT - PUBLIC');
+  console.log('🔥 VERIFY OTP ROUTE HIT - PUBLIC ✅');
 
   const { username, password, otp } = req.body;
 
@@ -421,7 +427,7 @@ router.post('/verify-otp', async (req, res) => {
 
     delete otpStore[username];
 
-    // ✅ Generate JWT Token (This is where token is created)
+    // ✅ Generate JWT Token
     const token = jwt.sign(
       {
         id: admin.id,
@@ -531,7 +537,7 @@ router.post('/refresh-token', async (req, res) => {
 
 // 6. Send Reset OTP - Public
 router.post('/send-reset-otp', async (req, res) => {
-  console.log('🔥 SEND RESET OTP ROUTE HIT');
+  console.log('🔥 SEND RESET OTP ROUTE HIT - PUBLIC');
 
   const { email } = req.body;
 
@@ -588,7 +594,7 @@ router.post('/send-reset-otp', async (req, res) => {
 
 // 7. Reset Password - Public
 router.post('/reset-password', async (req, res) => {
-  console.log('🔥 RESET PASSWORD ROUTE HIT');
+  console.log('🔥 RESET PASSWORD ROUTE HIT - PUBLIC');
 
   const { email, otp, newPassword, confirmPassword } = req.body;
 
@@ -657,7 +663,6 @@ router.post('/reset-password', async (req, res) => {
     const newHash = await bcrypt.hash(newPassword, 10);
 
     console.log(`✅ Password reset OTP verified for: ${email}`);
-    console.log(`📝 New hash for ${email}: ${newHash}`);
 
     res.json({
       success: true,
@@ -681,6 +686,7 @@ router.post('/reset-password', async (req, res) => {
 
 // 8. Verify Token - Public (Checks token but doesn't require it)
 router.get('/verify', (req, res) => {
+  console.log('🔓 VERIFY ROUTE HIT - PUBLIC');
   try {
     const authHeader = req.headers.authorization;
     
@@ -768,10 +774,12 @@ router.get('/generate-hash/:password', async (req, res) => {
 // ============================================================
 // 🛡️ PROTECTED ROUTES - TOKEN REQUIRED
 // ============================================================
+console.log('🛡️ Registering PROTECTED routes...');
 router.use(verifyToken);
 
 // 10. Profile - Protected
 router.get('/profile', (req, res) => {
+  console.log('🔒 PROFILE ROUTE HIT - PROTECTED');
   res.json({
     success: true,
     data: {
@@ -787,6 +795,7 @@ router.get('/profile', (req, res) => {
 
 // 11. Logout - Protected
 router.post('/logout', (req, res) => {
+  console.log('🔒 LOGOUT ROUTE HIT - PROTECTED');
   if (req.session) {
     req.session.destroy();
   }
@@ -798,6 +807,7 @@ router.post('/logout', (req, res) => {
 
 // 12. Extend Session - Protected
 router.post('/extend-session', (req, res) => {
+  console.log('🔒 EXTEND SESSION ROUTE HIT - PROTECTED');
   res.json({
     success: true,
     message: 'Session extended',
@@ -807,6 +817,7 @@ router.post('/extend-session', (req, res) => {
 
 // 13. Session Status - Protected
 router.get('/session-status', (req, res) => {
+  console.log('🔒 SESSION STATUS ROUTE HIT - PROTECTED');
   res.json({
     success: true,
     active: true,
@@ -817,6 +828,7 @@ router.get('/session-status', (req, res) => {
 
 // 14. Login Status - Protected
 router.get('/login-status', (req, res) => {
+  console.log('🔒 LOGIN STATUS ROUTE HIT - PROTECTED');
   const { username } = req.query;
   
   if (username) {
@@ -889,6 +901,7 @@ router.get('/login-status', (req, res) => {
 
 // 15. Clear Attempts - Protected (Super Admin only)
 router.delete('/clear-attempts/:username', (req, res) => {
+  console.log('🔒 CLEAR ATTEMPTS ROUTE HIT - PROTECTED');
   const { username } = req.params;
   
   if (req.admin.role !== 'Super Admin') {
@@ -916,17 +929,16 @@ router.delete('/clear-attempts/:username', (req, res) => {
 
 // 16. Debug - Protected
 router.get('/debug', (req, res) => {
+  console.log('🔒 DEBUG ROUTE HIT - PROTECTED');
   res.json({
     success: true,
     message: 'Admin router is working!',
     admins_configured: ADMINS.length,
     admins: ADMINS.map(a => ({ username: a.username, email: a.email, role: a.role })),
-    routes: [
-      '/test', '/csrf-token', '/login', '/verify-otp', '/refresh-token',
-      '/verify', '/profile', '/logout', '/extend-session', '/send-reset-otp',
-      '/reset-password', '/generate-hash/:password', '/session-status',
-      '/login-status', '/clear-attempts/:username', '/debug'
-    ],
+    routes: {
+      public: ['/test', '/csrf-token', '/login', '/verify-otp', '/refresh-token', '/verify', '/send-reset-otp', '/reset-password', '/generate-hash/:password'],
+      protected: ['/profile', '/logout', '/extend-session', '/session-status', '/login-status', '/clear-attempts/:username', '/debug']
+    },
     security: {
       jwt: 'Active',
       session: 'Active',
@@ -939,6 +951,7 @@ router.get('/debug', (req, res) => {
 
 // 17. Force Clear - Protected
 router.get('/force-clear/:username', (req, res) => {
+  console.log('🔒 FORCE CLEAR ROUTE HIT - PROTECTED');
     const { username } = req.params;
     
     if (username === 'all') {
@@ -967,6 +980,7 @@ router.get('/force-clear/:username', (req, res) => {
 
 // 18. Blocked Users - Protected
 router.get('/blocked-users', (req, res) => {
+  console.log('🔒 BLOCKED USERS ROUTE HIT - PROTECTED');
     const blocked = [];
     const now = Date.now();
     
@@ -1001,6 +1015,8 @@ router.get('/blocked-users', (req, res) => {
     });
 });
 
-console.log('✅ All routes defined - Public & Protected separated');
+console.log('✅ All routes registered successfully!');
+console.log('🔓 Public routes: /login, /verify-otp, /refresh-token, /send-reset-otp, /reset-password, /verify');
+console.log('🛡️ Protected routes: /profile, /logout, /extend-session, /session-status, /login-status, /clear-attempts/:username, /debug');
 
 module.exports = router;
