@@ -8,6 +8,8 @@ const fs = require("fs-extra");
 const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, uploadDownload } = require("./config/cloudinary");
 const { db } = require("./config/db");
 
+// After other imports, add this
+const resultRoutes = require('./routes/resultRoutes');
 // 🔐 Import Auth Middleware
 const authMiddleware = require('./middleware/auth');
 
@@ -144,6 +146,7 @@ app.post("/contact", (req, res) => {
         }
     );
 });
+app.use('/api/result', resultRoutes);
 
 // 4. Public analytics tracking
 app.get("/analytics/track", (req, res) => {
