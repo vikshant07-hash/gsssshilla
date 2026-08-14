@@ -11,10 +11,8 @@ console.log('🔧 adminRoutes.js loaded!');
 // SECURITY MIDDLEWARE
 // ============================================================
 
-// JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
-// Token Verification Middleware
 const verifyToken = (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -45,22 +43,28 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// CSRF Verification Middleware - DISABLED (localStorage auth)
+// CSRF Disabled (localStorage auth)
 const verifyCsrf = (req, res, next) => {
-  // CSRF is disabled for localStorage/JWT based authentication
   return next();
 };
 
 // ============================================================
-// LOGIN ATTEMPTS STORE (In-Memory)
+// LOGIN ATTEMPTS STORE - PER USERNAME (Not IP)
 // ============================================================
 const loginAttempts = new Map();
 
 // ============================================================
-// CHECK LOGIN ATTEMPTS MIDDLEWARE
+// CHECK LOGIN ATTEMPTS MIDDLEWARE - PER USERNAME
 // ============================================================
 const checkLoginAttempts = (req, res, next) => {
-    const key = req.ip || req.connection.remoteAddress;
+    const { username } = req.body;
+    
+    // If no username provided, skip (will be handled by login route)
+    if (!username) {
+        return next();
+    }
+    
+    const key = `user_${username}`; // Per-user key
     const now = Date.now();
     
     let attempt = loginAttempts.get(key);
@@ -84,12 +88,13 @@ const checkLoginAttempts = (req, res, next) => {
         
         return res.status(429).json({
             success: false,
-            message: `Too many failed attempts. Please try again after ${timeMessage}.`,
+            message: `Too many failed attempts for this account. Please try again after ${timeMessage}.`,
             blocked: true,
             blockUntil: attempt.blockUntil,
             remainingMs: attempt.blockUntil - now,
             remainingHours: remainingHours,
             remainingMinutes: remainingMinutes,
+            username: username,
             code: 'ACCOUNT_LOCKED'
         });
     }
@@ -103,39 +108,53 @@ const checkLoginAttempts = (req, res, next) => {
     }
     
     req._loginAttempt = attempt;
+    req._loginKey = key;
     next();
 };
 
 // ============================================================
-// RECORD LOGIN ATTEMPT
+// RECORD LOGIN ATTEMPT - PER USERNAME
 // ============================================================
-const recordLoginAttempt = (req, success) => {
-    const key = req.ip || req.connection.remoteAddress;
-    const attempt = req._loginAttempt || loginAttempts.get(key) || { count: 0, firstAttempt: Date.now(), blockUntil: null };
+const recordLoginAttempt = (req, success, username) => {
+    // Use username from parameter or from request body
+    const user = username || req.body?.username;
     
-    if (success) {
-        loginAttempts.delete(key);
+    if (!user) {
+        console.warn('⚠️ No username provided for login attempt record');
         return;
     }
     
+    const key = `user_${user}`;
+    const attempt = loginAttempts.get(key) || { count: 0, firstAttempt: Date.now(), blockUntil: null };
+    
+    if (success) {
+        // Successful login - Reset attempts for this user
+        loginAttempts.delete(key);
+        console.log(`✅ Login successful for ${user}, attempts reset`);
+        return;
+    }
+    
+    // Failed attempt
     attempt.count++;
     attempt.firstAttempt = attempt.firstAttempt || Date.now();
     
+    // If 5 failed attempts, block for 12 hours
     if (attempt.count >= 5) {
         attempt.blockUntil = Date.now() + 12 * 60 * 60 * 1000; // 12 hours
-        console.log(`🔒 IP ${key} blocked for 12 hours after ${attempt.count} failed attempts`);
+        console.log(`🔒 User "${user}" blocked for 12 hours after ${attempt.count} failed attempts`);
     }
     
     loginAttempts.set(key, attempt);
+    console.log(`❌ Failed login attempt for "${user}" (${attempt.count}/5)`);
 };
 
 // ============================================================
-// ADMIN CREDENTIALS - Multiple Admins
+// ADMIN CREDENTIALS
 // ============================================================
 const ADMINS = [
   {
     id: 1,
-    username: process.env.ADMIN_USERNAME || 'admin',
+    username: process.env.ADMIN_USERNAME || 'admin@shilla171210',
     email: process.env.ADMIN_EMAIL || 'vikshant07@gmail.com',
     name: process.env.ADMIN_NAME || 'VIKSHANT KRALTA',
     role: 'Super Admin',
@@ -313,7 +332,7 @@ router.get('/csrf-token', (req, res) => {
 });
 
 // ============================================================
-// 3. LOGIN ROUTE - WITH ATTEMPT TRACKING
+// 3. LOGIN ROUTE - WITH PER-USER ATTEMPT TRACKING
 // ============================================================
 router.post('/login', checkLoginAttempts, async (req, res) => {
   console.log('🔥 LOGIN ROUTE HIT');
@@ -329,9 +348,11 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
   }
 
   try {
+    // Check if user exists
     const admin = findAdminByUsername(username);
     if (!admin) {
-      recordLoginAttempt(req, false);
+      // Record failed attempt for this username
+      recordLoginAttempt(req, false, username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password',
@@ -341,7 +362,8 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, admin.passwordHash);
     if (!isMatch) {
-      recordLoginAttempt(req, false);
+      // Record failed attempt for this username
+      recordLoginAttempt(req, false, username);
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password',
@@ -367,8 +389,8 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
       });
     }
 
-    // Record successful attempt (resets counter)
-    recordLoginAttempt(req, true);
+    // Record successful attempt (resets counter for this user)
+    recordLoginAttempt(req, true, username);
 
     // Generate CSRF token
     const csrfToken = uuidv4();
@@ -824,43 +846,116 @@ router.get('/session-status', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 14. LOGIN STATUS - Check attempts
+// 14. LOGIN STATUS - Per-User Attempts
 // ============================================================
 router.get('/login-status', (req, res) => {
-  const key = req.ip || req.connection.remoteAddress;
-  const attempt = loginAttempts.get(key);
+  const { username } = req.query;
   
-  if (!attempt) {
+  // If username provided, check for that specific user
+  if (username) {
+    const key = `user_${username}`;
+    const attempt = loginAttempts.get(key);
+    
+    if (!attempt) {
+      return res.json({
+        success: true,
+        username: username,
+        attempts: 0,
+        blocked: false,
+        message: 'No login attempts recorded for this user'
+      });
+    }
+    
+    const now = Date.now();
+    const isBlocked = attempt.blockUntil && now < attempt.blockUntil;
+    const remainingMs = isBlocked ? attempt.blockUntil - now : 0;
+    const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
+    const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+    
     return res.json({
       success: true,
-      attempts: 0,
-      blocked: false,
-      message: 'No login attempts recorded'
+      username: username,
+      attempts: attempt.count,
+      blocked: isBlocked,
+      blockUntil: attempt.blockUntil,
+      remainingMs: remainingMs,
+      remainingHours: remainingHours,
+      remainingMinutes: remainingMinutes,
+      message: isBlocked ? `User "${username}" is blocked for ${remainingHours} hours` : 'Not blocked'
     });
   }
   
-  const now = Date.now();
-  const isBlocked = attempt.blockUntil && now < attempt.blockUntil;
-  const remainingMs = isBlocked ? attempt.blockUntil - now : 0;
-  const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
-  const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+  // If no username, return all blocked users summary
+  const blockedUsers = [];
+  const allUsers = [];
+  
+  for (const [key, value] of loginAttempts) {
+    const username = key.replace('user_', '');
+    const now = Date.now();
+    const isBlocked = value.blockUntil && now < value.blockUntil;
+    
+    allUsers.push({
+      username: username,
+      attempts: value.count,
+      blocked: isBlocked,
+      blockUntil: value.blockUntil
+    });
+    
+    if (isBlocked) {
+      blockedUsers.push({
+        username: username,
+        attempts: value.count,
+        blockUntil: value.blockUntil,
+        remainingMs: value.blockUntil - now
+      });
+    }
+  }
   
   res.json({
     success: true,
-    attempts: attempt.count,
-    blocked: isBlocked,
-    blockUntil: attempt.blockUntil,
-    remainingMs: remainingMs,
-    remainingHours: remainingHours,
-    remainingMinutes: remainingMinutes,
-    message: isBlocked ? `Blocked for ${remainingHours} hours` : 'Not blocked'
+    totalUsers: allUsers.length,
+    blockedUsers: blockedUsers.length,
+    users: allUsers,
+    blocked: blockedUsers
   });
 });
 
 // ============================================================
-// 15. DEBUG ROUTE
+// 15. CLEAR ATTEMPTS - Admin Only (Optional)
+// ============================================================
+router.delete('/clear-attempts/:username', verifyToken, (req, res) => {
+  const { username } = req.params;
+  
+  // Only super admin can clear attempts
+  if (req.admin.role !== 'Super Admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only Super Admin can clear login attempts',
+      code: 'ACCESS_DENIED'
+    });
+  }
+  
+  const key = `user_${username}`;
+  if (loginAttempts.has(key)) {
+    loginAttempts.delete(key);
+    res.json({
+      success: true,
+      message: `Login attempts cleared for user: ${username}`
+    });
+  } else {
+    res.json({
+      success: true,
+      message: `No attempts found for user: ${username}`
+    });
+  }
+});
+
+// ============================================================
+// 16. DEBUG ROUTE
 // ============================================================
 router.get('/debug', (req, res) => {
+  const totalAttempts = loginAttempts.size;
+  
   res.json({
     success: true,
     message: 'Admin router is working!',
@@ -881,6 +976,7 @@ router.get('/debug', (req, res) => {
       '/generate-hash/:password',
       '/session-status',
       '/login-status',
+      '/clear-attempts/:username',
       '/debug'
     ],
     security: {
@@ -888,14 +984,15 @@ router.get('/debug', (req, res) => {
       session: 'Active',
       csrf: 'Disabled (localStorage auth)',
       rateLimiting: 'Active (via server.js)',
-      loginAttempts: '5 attempts, 12 hours block'
+      loginAttempts: '5 attempts per user, 12 hours block'
     },
+    loginAttemptsCount: totalAttempts,
     school_logo_url: SCHOOL_LOGO_URL,
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
   });
 });
 
-console.log('✅ All routes defined');
+console.log('✅ All routes defined - Per-User Login Attempts');
 
 module.exports = router;
