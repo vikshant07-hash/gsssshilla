@@ -35,12 +35,12 @@ app.use('/api/', limiter);
 app.use(session({
     secret: process.env.SESSION_SECRET || 'fallback-secret-change-this-in-production',
     resave: false,
-    saveUninitialized: false,  // ✅ Changed to false
+    saveUninitialized: false,
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
-        maxAge: 30 * 60 * 1000, // 30 minutes
-        sameSite: 'lax'  // ✅ Changed from 'strict' to 'lax' for better compatibility
+        maxAge: 30 * 60 * 1000,
+        sameSite: 'lax'
     },
     name: 'gsss_session'
 }));
@@ -75,7 +75,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ============================================================
-// 🔐 SESSION CHECK HELPER - For routes that need session only
+// 🔐 SESSION CHECK HELPER
 // ============================================================
 const checkSession = (req, res, next) => {
     if (!req.session || !req.session.admin_id) {
@@ -89,8 +89,12 @@ const checkSession = (req, res, next) => {
 };
 
 // ============================================================
-// PUBLIC ROUTES - No authentication required
 // ============================================================
+// 🟢 PART 1: ALL PUBLIC ROUTES (NO AUTH REQUIRED)
+// ============================================================
+// ============================================================
+
+// 1. Home route
 app.get("/", (req, res) => {
     res.json({
         success: true,
@@ -112,11 +116,12 @@ app.get("/", (req, res) => {
     });
 });
 
+// 2. Test route
 app.get("/test", (req, res) => {
     res.json({ success: true, message: "✅ Server Working!" });
 });
 
-// Public contact endpoint
+// 3. Public contact endpoint
 app.post("/contact", (req, res) => {
     const { name, email, message } = req.body;
     if (!name || !email || !message) {
@@ -140,7 +145,7 @@ app.post("/contact", (req, res) => {
     );
 });
 
-// Public analytics tracking
+// 4. Public analytics tracking
 app.get("/analytics/track", (req, res) => {
     const ip = req.ip || req.connection.remoteAddress;
     const userAgent = req.headers['user-agent'] || '';
@@ -151,9 +156,307 @@ app.get("/analytics/track", (req, res) => {
     res.json({ success: true });
 });
 
+// 5. Public analytics stats
+app.get("/analytics/stats", (req, res) => {
+    db.query(`SELECT COUNT(*) as total, COUNT(DISTINCT ip_address) as unique_visitors, COUNT(CASE WHEN DATE(timestamp)=CURDATE() THEN 1 END) as today FROM analytics WHERE type='visitor'`,
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, total: results[0]?.total || 0, unique: results[0]?.unique_visitors || 0, today: results[0]?.today || 0 });
+        }
+    );
+});
+
 // ============================================================
-// ADMIN ROUTES - Registered BEFORE auth middleware
+// 🟢 PUBLIC SLIDER ROUTES
 // ============================================================
+
+// Public slider images (NO AUTH)
+app.get("/images/public", (req, res) => {
+    db.query(
+        `SELECT filename, file_path, public_id, title, alt_text, \`order\`
+         FROM slider_images 
+         WHERE is_active = 1 
+         ORDER BY \`order\` ASC, created_at DESC`,
+        (err, results) => {
+            if (err) {
+                console.error("❌ DB Error:", err);
+                return res.status(500).json({ success: false, error: err.message });
+            }
+            res.json(results || []);
+        }
+    );
+});
+
+// ============================================================
+// 🟢 PUBLIC RECENT UPDATES ROUTES
+// ============================================================
+
+// Public recent updates (NO AUTH)
+app.get("/recent/public", (req, res) => {
+    db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM recent_updates ORDER BY created_at DESC LIMIT 20`,
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, data: results || [] });
+        }
+    );
+});
+
+// ============================================================
+// 🟢 PUBLIC GALLERY ROUTES
+// ============================================================
+
+// Public gallery images (NO AUTH)
+app.get("/api/gallery/images/public", (req, res) => {
+    const year = req.query.year || new Date().getFullYear();
+    db.query(
+        `SELECT *, 
+         DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist,
+         CASE 
+           WHEN media_type = 'video' THEN CONCAT(SUBSTRING_INDEX(file_path, '.', 1), '.jpg')
+           ELSE file_path 
+         END as thumbnail_url,
+         CASE 
+           WHEN media_type = 'video' THEN CONCAT(file_path, '.jpg')
+           ELSE NULL 
+         END as video_poster
+         FROM gallery_images 
+         WHERE is_active = 1 AND YEAR(image_date) = ? 
+         ORDER BY image_date DESC, created_at DESC`,
+        [year],
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, data: results || [] });
+        }
+    );
+});
+
+// Public gallery years (NO AUTH)
+app.get("/api/gallery/years", (req, res) => {
+    db.query(`SELECT DISTINCT YEAR(image_date) as year FROM gallery_images WHERE is_active = 1 ORDER BY year DESC`,
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            const years = results.map(r => r.year);
+            res.json({ success: true, years: years.length ? years : [new Date().getFullYear()] });
+        }
+    );
+});
+
+// Public gallery slider (NO AUTH)
+app.get("/api/gallery/slider", (req, res) => {
+    db.query(`SELECT * FROM gallery_slider WHERE is_active = 1 ORDER BY \`order\` ASC, created_at DESC LIMIT 10`,
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json(results || []);
+        }
+    );
+});
+
+// ============================================================
+// 🟢 PUBLIC FACULTY ROUTES
+// ============================================================
+
+// Public faculty (NO AUTH)
+app.get("/api/faculty", (req, res) => {
+    const query = `SELECT * FROM faculty WHERE is_active = 1 ORDER BY is_principal DESC, \`order\` ASC, name ASC`;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error("❌ Faculty Error:", err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+
+        const principal = results.find(f => f.is_principal == 1);
+        const teachingStaff = {};
+        results.forEach(f => {
+            if (!f.is_principal && f.staff_type === 'teaching') {
+                const dept = f.department || 'Other';
+                if (!teachingStaff[dept]) teachingStaff[dept] = [];
+                teachingStaff[dept].push(f);
+            }
+        });
+        const nonTeaching = results.filter(f => !f.is_principal && f.staff_type !== 'teaching');
+
+        res.json({
+            success: true,
+            data: {
+                principal: principal || null,
+                teachingStaff: teachingStaff,
+                nonTeaching: nonTeaching
+            }
+        });
+    });
+});
+
+// Public faculty departments (NO AUTH)
+app.get("/api/faculty/departments", (req, res) => {
+    db.query("SELECT DISTINCT department FROM faculty WHERE is_active = 1 AND department IS NOT NULL ORDER BY department",
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, data: results.map(r => r.department) });
+        }
+    );
+});
+
+// ============================================================
+// 🟢 PUBLIC DOWNLOADS ROUTES
+// ============================================================
+
+// Public downloads (NO AUTH)
+app.get("/api/downloads", (req, res) => {
+    const { class: classFilter, session, category, search, page = 1, limit = 20 } = req.query;
+
+    let query = `SELECT id, title, description, class, session_year, category, series, subject, 
+                 file_type, file_size, download_count, 
+                 DATE_FORMAT(created_at, '%d/%m/%Y') as upload_date
+                 FROM downloads WHERE is_active = 1`;
+    let countQuery = `SELECT COUNT(*) as total FROM downloads WHERE is_active = 1`;
+    let params = [];
+
+    if (classFilter && classFilter !== 'all') {
+        query += ` AND class = ?`;
+        countQuery += ` AND class = ?`;
+        params.push(classFilter);
+    }
+
+    if (session && session !== 'all') {
+        query += ` AND session_year = ?`;
+        countQuery += ` AND session_year = ?`;
+        params.push(session);
+    }
+
+    if (category && category !== 'all') {
+        query += ` AND category = ?`;
+        countQuery += ` AND category = ?`;
+        params.push(category);
+    }
+
+    if (search) {
+        query += ` AND (title LIKE ? OR description LIKE ? OR subject LIKE ?)`;
+        countQuery += ` AND (title LIKE ? OR description LIKE ? OR subject LIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    db.query(countQuery, params, (countErr, countResult) => {
+        if (countErr) {
+            console.error("❌ Count Error:", countErr);
+            return res.status(500).json({ success: false, error: countErr.message });
+        }
+
+        const total = countResult[0]?.total || 0;
+
+        query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+        params.push(parseInt(limit), offset);
+
+        db.query(query, params, (err, results) => {
+            if (err) {
+                console.error("❌ Downloads Error:", err);
+                return res.status(500).json({ success: false, error: err.message });
+            }
+            res.json({
+                success: true,
+                data: results || [],
+                pagination: {
+                    total,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    totalPages: Math.ceil(total / parseInt(limit))
+                }
+            });
+        });
+    });
+});
+
+// Public download by ID (NO AUTH)
+app.get("/api/downloads/:id", (req, res) => {
+    const { id } = req.params;
+    db.query("SELECT * FROM downloads WHERE id = ? AND is_active = 1", [id], (err, results) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        if (!results || results.length === 0) return res.status(404).json({ success: false, message: "File not found" });
+        res.json({ success: true, data: results[0] });
+    });
+});
+
+// Public download file (NO AUTH)
+app.get("/api/downloads/:id/download", (req, res) => {
+    const { id } = req.params;
+    db.query("SELECT * FROM downloads WHERE id = ? AND is_active = 1", [id], (err, results) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        if (!results || results.length === 0) return res.status(404).json({ success: false, message: "File not found" });
+
+        const file = results[0];
+        db.query("UPDATE downloads SET download_count = download_count + 1 WHERE id = ?", [id]);
+        res.redirect(file.file_path);
+    });
+});
+
+// Public download sessions (NO AUTH)
+app.get("/api/downloads/sessions", (req, res) => {
+    db.query("SELECT DISTINCT session_year FROM downloads WHERE is_active = 1 ORDER BY session_year DESC",
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, data: results.map(r => r.session_year) });
+        }
+    );
+});
+
+// Public download classes (NO AUTH)
+app.get("/api/downloads/classes", (req, res) => {
+    db.query("SELECT DISTINCT class FROM downloads WHERE is_active = 1 ORDER BY CAST(class AS UNSIGNED) ASC",
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, data: results.map(r => r.class) });
+        }
+    );
+});
+
+// ============================================================
+// 🟢 PUBLIC CONTACT ROUTES
+// ============================================================
+
+// Public contact info (NO AUTH)
+app.get("/api/contact/info", (req, res) => {
+    db.query(`SELECT * FROM contact_info WHERE id = 1`, (err, results) => {
+        if (err) {
+            console.error("❌ DB Error:", err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+        if (!results || results.length === 0) {
+            return res.json({
+                success: true,
+                data: {
+                    school_name: "GSS School Shilla",
+                    address: "Shilla, Himachal Pradesh",
+                    phone: "+91 98765 43210",
+                    email: "info@gssshilla.edu.in"
+                }
+            });
+        }
+        res.json({ success: true, data: results[0] });
+    });
+});
+
+// ============================================================
+// 🟢 PUBLIC NOTIFICATIONS
+// ============================================================
+
+// Public notifications (NO AUTH)
+app.get("/api/notifications/public", (req, res) => {
+    db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM notifications WHERE is_active = 1 ORDER BY created_at DESC LIMIT 20`,
+        (err, results) => {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, data: results || [] });
+        }
+    );
+});
+
+// ============================================================
+// ============================================================
+// 🟡 PART 2: ADMIN ROUTES (Registered BEFORE auth middleware)
+// ============================================================
+// ============================================================
+
 console.log('🔧 Loading admin routes...');
 
 try {
@@ -171,8 +474,11 @@ try {
 }
 
 // ============================================================
-// 🛡️ PROTECTED ROUTES - All routes below require authentication
 // ============================================================
+// 🔴 PART 3: PROTECTED ROUTES (Auth middleware ke BAAD)
+// ============================================================
+// ============================================================
+
 app.use(authMiddleware);
 
 // ============================================================
@@ -455,38 +761,20 @@ function createTables() {
     setTimeout(runMigration, 2000);
 }
 
-// ============================================================
-// CHECK DATABASE CONNECTION AND CREATE TABLES
-// ============================================================
 setTimeout(() => {
     console.log("🔄 Creating tables if not exist...");
     createTables();
 }, 1000);
 
 // ============================================================
-// SLIDER IMAGE ROUTES (Protected)
+// 🔴 PROTECTED SLIDER ROUTES (Admin only)
 // ============================================================
+
 app.get("/images", (req, res) => {
     db.query(
         `SELECT *, 
          DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist
          FROM slider_images 
-         ORDER BY \`order\` ASC, created_at DESC`,
-        (err, results) => {
-            if (err) {
-                console.error("❌ DB Error:", err);
-                return res.status(500).json({ success: false, error: err.message });
-            }
-            res.json(results || []);
-        }
-    );
-});
-
-app.get("/images/public", (req, res) => {
-    db.query(
-        `SELECT filename, file_path, public_id, title, alt_text, \`order\`
-         FROM slider_images 
-         WHERE is_active = 1 
          ORDER BY \`order\` ASC, created_at DESC`,
         (err, results) => {
             if (err) {
@@ -647,19 +935,11 @@ app.put("/images/reorder", (req, res) => {
 });
 
 // ============================================================
-// RECENT UPDATES ROUTES (Protected)
+// 🔴 PROTECTED RECENT UPDATES ROUTES (Admin only)
 // ============================================================
+
 app.get("/recent/admin/all", (req, res) => {
     db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM recent_updates ORDER BY created_at DESC`,
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            res.json({ success: true, data: results || [] });
-        }
-    );
-});
-
-app.get("/recent/public", (req, res) => {
-    db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM recent_updates ORDER BY created_at DESC LIMIT 20`,
         (err, results) => {
             if (err) return res.status(500).json({ success: false, error: err.message });
             res.json({ success: true, data: results || [] });
@@ -745,19 +1025,11 @@ app.delete("/recent/admin/bulk-delete", (req, res) => {
 });
 
 // ============================================================
-// NOTIFICATION MODULE ROUTES (Protected)
+// 🔴 PROTECTED NOTIFICATION ROUTES (Admin only)
 // ============================================================
+
 app.get("/api/notifications/admin/all", (req, res) => {
     db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM notifications ORDER BY created_at DESC`,
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            res.json({ success: true, data: results || [] });
-        }
-    );
-});
-
-app.get("/api/notifications/public", (req, res) => {
-    db.query(`SELECT *, DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist FROM notifications WHERE is_active = 1 ORDER BY created_at DESC LIMIT 20`,
         (err, results) => {
             if (err) return res.status(500).json({ success: false, error: err.message });
             res.json({ success: true, data: results || [] });
@@ -842,28 +1114,8 @@ app.delete("/api/notifications/admin/bulk-delete", (req, res) => {
 });
 
 // ============================================================
-// CONTACT MODULE ROUTES (Protected)
+// 🔴 PROTECTED CONTACT ROUTES (Admin only)
 // ============================================================
-app.get("/api/contact/info", (req, res) => {
-    db.query(`SELECT * FROM contact_info WHERE id = 1`, (err, results) => {
-        if (err) {
-            console.error("❌ DB Error:", err);
-            return res.status(500).json({ success: false, error: err.message });
-        }
-        if (!results || results.length === 0) {
-            return res.json({
-                success: true,
-                data: {
-                    school_name: "GSS School Shilla",
-                    address: "Shilla, Himachal Pradesh",
-                    phone: "+91 98765 43210",
-                    email: "info@gssshilla.edu.in"
-                }
-            });
-        }
-        res.json({ success: true, data: results[0] });
-    });
-});
 
 app.get("/admin/contact/info", (req, res) => {
     db.query(`SELECT * FROM contact_info WHERE id = 1`, (err, results) => {
@@ -1032,16 +1284,8 @@ app.get("/admin/contact/stats", (req, res) => {
 });
 
 // ============================================================
-// GALLERY MODULE ROUTES (Protected)
+// 🔴 PROTECTED GALLERY ROUTES (Admin only)
 // ============================================================
-app.get("/api/gallery/slider", (req, res) => {
-    db.query(`SELECT * FROM gallery_slider WHERE is_active = 1 ORDER BY \`order\` ASC, created_at DESC LIMIT 10`,
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            res.json(results || []);
-        }
-    );
-});
 
 app.get("/api/gallery/slider/admin/all", (req, res) => {
     db.query(`SELECT * FROM gallery_slider ORDER BY \`order\` ASC, created_at DESC`,
@@ -1121,41 +1365,8 @@ app.put("/api/gallery/slider/reorder", (req, res) => {
 });
 
 // ============================================================
-// GALLERY IMAGES APIs (Protected)
+// 🔴 PROTECTED GALLERY IMAGES ROUTES (Admin only)
 // ============================================================
-app.get("/api/gallery/images/public", (req, res) => {
-    const year = req.query.year || new Date().getFullYear();
-    db.query(
-        `SELECT *, 
-         DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+05:30'), '%d/%m/%y %H:%i') as created_at_ist,
-         CASE 
-           WHEN media_type = 'video' THEN CONCAT(SUBSTRING_INDEX(file_path, '.', 1), '.jpg')
-           ELSE file_path 
-         END as thumbnail_url,
-         CASE 
-           WHEN media_type = 'video' THEN CONCAT(file_path, '.jpg')
-           ELSE NULL 
-         END as video_poster
-         FROM gallery_images 
-         WHERE is_active = 1 AND YEAR(image_date) = ? 
-         ORDER BY image_date DESC, created_at DESC`,
-        [year],
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            res.json({ success: true, data: results || [] });
-        }
-    );
-});
-
-app.get("/api/gallery/years", (req, res) => {
-    db.query(`SELECT DISTINCT YEAR(image_date) as year FROM gallery_images WHERE is_active = 1 ORDER BY year DESC`,
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            const years = results.map(r => r.year);
-            res.json({ success: true, years: years.length ? years : [new Date().getFullYear()] });
-        }
-    );
-});
 
 app.get("/api/gallery/images/admin/recent", (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
@@ -1337,116 +1548,9 @@ app.get("/api/gallery/stats", (req, res) => {
 });
 
 // ============================================================
-// DOWNLOAD MODULE ROUTES (Protected)
+// 🔴 PROTECTED DOWNLOAD ROUTES (Admin only)
 // ============================================================
-app.get("/api/downloads", (req, res) => {
-    const { class: classFilter, session, category, search, page = 1, limit = 20 } = req.query;
 
-    let query = `SELECT id, title, description, class, session_year, category, series, subject, 
-                 file_type, file_size, download_count, 
-                 DATE_FORMAT(created_at, '%d/%m/%Y') as upload_date
-                 FROM downloads WHERE is_active = 1`;
-    let countQuery = `SELECT COUNT(*) as total FROM downloads WHERE is_active = 1`;
-    let params = [];
-
-    if (classFilter && classFilter !== 'all') {
-        query += ` AND class = ?`;
-        countQuery += ` AND class = ?`;
-        params.push(classFilter);
-    }
-
-    if (session && session !== 'all') {
-        query += ` AND session_year = ?`;
-        countQuery += ` AND session_year = ?`;
-        params.push(session);
-    }
-
-    if (category && category !== 'all') {
-        query += ` AND category = ?`;
-        countQuery += ` AND category = ?`;
-        params.push(category);
-    }
-
-    if (search) {
-        query += ` AND (title LIKE ? OR description LIKE ? OR subject LIKE ?)`;
-        countQuery += ` AND (title LIKE ? OR description LIKE ? OR subject LIKE ?)`;
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
-
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-
-    db.query(countQuery, params, (countErr, countResult) => {
-        if (countErr) {
-            console.error("❌ Count Error:", countErr);
-            return res.status(500).json({ success: false, error: countErr.message });
-        }
-
-        const total = countResult[0]?.total || 0;
-
-        query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-        params.push(parseInt(limit), offset);
-
-        db.query(query, params, (err, results) => {
-            if (err) {
-                console.error("❌ Downloads Error:", err);
-                return res.status(500).json({ success: false, error: err.message });
-            }
-            res.json({
-                success: true,
-                data: results || [],
-                pagination: {
-                    total,
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    totalPages: Math.ceil(total / parseInt(limit))
-                }
-            });
-        });
-    });
-});
-
-app.get("/api/downloads/:id", (req, res) => {
-    const { id } = req.params;
-    db.query("SELECT * FROM downloads WHERE id = ? AND is_active = 1", [id], (err, results) => {
-        if (err) return res.status(500).json({ success: false, error: err.message });
-        if (!results || results.length === 0) return res.status(404).json({ success: false, message: "File not found" });
-        res.json({ success: true, data: results[0] });
-    });
-});
-
-app.get("/api/downloads/:id/download", (req, res) => {
-    const { id } = req.params;
-    db.query("SELECT * FROM downloads WHERE id = ? AND is_active = 1", [id], (err, results) => {
-        if (err) return res.status(500).json({ success: false, error: err.message });
-        if (!results || results.length === 0) return res.status(404).json({ success: false, message: "File not found" });
-
-        const file = results[0];
-        db.query("UPDATE downloads SET download_count = download_count + 1 WHERE id = ?", [id]);
-        res.redirect(file.file_path);
-    });
-});
-
-app.get("/api/downloads/sessions", (req, res) => {
-    db.query("SELECT DISTINCT session_year FROM downloads WHERE is_active = 1 ORDER BY session_year DESC",
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            res.json({ success: true, data: results.map(r => r.session_year) });
-        }
-    );
-});
-
-app.get("/api/downloads/classes", (req, res) => {
-    db.query("SELECT DISTINCT class FROM downloads WHERE is_active = 1 ORDER BY CAST(class AS UNSIGNED) ASC",
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            res.json({ success: true, data: results.map(r => r.class) });
-        }
-    );
-});
-
-// ============================================================
-// ADMIN DOWNLOAD ROUTES (Protected)
-// ============================================================
 app.get("/admin/downloads", (req, res) => {
     const { page = 1, limit = 50 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -1622,38 +1726,8 @@ app.get("/admin/downloads/stats", (req, res) => {
 });
 
 // ============================================================
-// FACULTY MODULE ROUTES (Protected)
+// 🔴 PROTECTED FACULTY ROUTES (Admin only)
 // ============================================================
-app.get("/api/faculty", (req, res) => {
-    const query = `SELECT * FROM faculty WHERE is_active = 1 ORDER BY is_principal DESC, \`order\` ASC, name ASC`;
-
-    db.query(query, (err, results) => {
-        if (err) {
-            console.error("❌ Faculty Error:", err);
-            return res.status(500).json({ success: false, error: err.message });
-        }
-
-        const principal = results.find(f => f.is_principal == 1);
-        const teachingStaff = {};
-        results.forEach(f => {
-            if (!f.is_principal && f.staff_type === 'teaching') {
-                const dept = f.department || 'Other';
-                if (!teachingStaff[dept]) teachingStaff[dept] = [];
-                teachingStaff[dept].push(f);
-            }
-        });
-        const nonTeaching = results.filter(f => !f.is_principal && f.staff_type !== 'teaching');
-
-        res.json({
-            success: true,
-            data: {
-                principal: principal || null,
-                teachingStaff: teachingStaff,
-                nonTeaching: nonTeaching
-            }
-        });
-    });
-});
 
 app.get("/admin/faculty", (req, res) => {
     db.query("SELECT * FROM faculty ORDER BY is_principal DESC, staff_type ASC, `order` ASC, name ASC",
@@ -1744,27 +1818,6 @@ app.delete("/admin/faculty/delete/:id", (req, res) => {
             res.json({ success: true, message: "✅ Faculty deleted!" });
         });
     });
-});
-
-app.get("/api/faculty/departments", (req, res) => {
-    db.query("SELECT DISTINCT department FROM faculty WHERE is_active = 1 AND department IS NOT NULL ORDER BY department",
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            res.json({ success: true, data: results.map(r => r.department) });
-        }
-    );
-});
-
-// ============================================================
-// ANALYTICS ROUTES (Protected)
-// ============================================================
-app.get("/analytics/stats", (req, res) => {
-    db.query(`SELECT COUNT(*) as total, COUNT(DISTINCT ip_address) as unique_visitors, COUNT(CASE WHEN DATE(timestamp)=CURDATE() THEN 1 END) as today FROM analytics WHERE type='visitor'`,
-        (err, results) => {
-            if (err) return res.status(500).json({ success: false, error: err.message });
-            res.json({ success: true, total: results[0]?.total || 0, unique: results[0]?.unique_visitors || 0, today: results[0]?.today || 0 });
-        }
-    );
 });
 
 // ============================================================
