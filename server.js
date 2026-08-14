@@ -65,7 +65,10 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token']
 }));
 
-app.options('*', cors());
+// FIX #3: bare '*' wildcard route can throw at startup on newer path-to-regexp
+// (used internally by Express 5 / recent Express 4 patch releases).
+// A regex that matches everything is safe across versions.
+app.options(/.*/, cors());
 
 // ============================================================
 // MIDDLEWARE
@@ -139,6 +142,33 @@ app.get("/analytics/track", (req, res) => {
     res.json({ success: true });
 });
 
+// ============================================================
+// ADMIN ROUTES - registered BEFORE the global authMiddleware
+// ============================================================
+// FIX #1 (CRITICAL): adminRoutes has its OWN public/protected split
+// internally (login, verify-otp, refresh-token etc. must be reachable
+// WITHOUT a token, otherwise no admin can ever log in). It was previously
+// mounted after `app.use(authMiddleware)`, which forced a token check on
+// the login route itself — a chicken-and-egg deadlock. Mounting it here,
+// before the global auth middleware, restores the intended flow.
+console.log('🔧 Loading admin routes...');
+
+try {
+    const adminRoutes = require('./routes/adminRoutes');
+    console.log('✅ Admin routes loaded successfully');
+    console.log('✅ Router type:', typeof adminRoutes);
+
+    app.use('/api/admin', adminRoutes);
+    console.log('✅ Admin routes registered at /api/admin');
+
+    app.get('/api/admin/direct-test', (req, res) => {
+        res.json({ success: true, message: 'Direct test working!' });
+    });
+
+} catch (error) {
+    console.error('❌ Error loading admin routes:', error.message);
+}
+
 // 🛡️ ALL ROUTES BELOW THIS LINE ARE PROTECTED
 app.use(authMiddleware);
 
@@ -199,6 +229,43 @@ function runMigration() {
             });
         } else {
             console.log("✅ image_date column already exists in gallery_images");
+        }
+    });
+
+    // FIX #2: gallery_images was missing `media_type` and `video_thumbnail`
+    // columns even though the /api/gallery/images/add insert query and the
+    // /api/gallery/images/public SELECT both reference them. Without this
+    // migration, every video/image gallery upload (and the public listing
+    // query) would fail with an "unknown column" DB error.
+    db.query("SHOW COLUMNS FROM gallery_images LIKE 'media_type'", (err, results) => {
+        if (err) {
+            console.error("❌ Error checking columns:", err.message);
+            return;
+        }
+        if (!results || results.length === 0) {
+            console.log("📌 Adding media_type column to gallery_images...");
+            db.query("ALTER TABLE gallery_images ADD COLUMN media_type VARCHAR(20) DEFAULT 'image' AFTER mime_type", (err) => {
+                if (err) console.error("❌ Error adding media_type to gallery_images:", err.message);
+                else console.log("✅ media_type column added to gallery_images");
+            });
+        } else {
+            console.log("✅ media_type column already exists in gallery_images");
+        }
+    });
+
+    db.query("SHOW COLUMNS FROM gallery_images LIKE 'video_thumbnail'", (err, results) => {
+        if (err) {
+            console.error("❌ Error checking columns:", err.message);
+            return;
+        }
+        if (!results || results.length === 0) {
+            console.log("📌 Adding video_thumbnail column to gallery_images...");
+            db.query("ALTER TABLE gallery_images ADD COLUMN video_thumbnail VARCHAR(500) AFTER media_type", (err) => {
+                if (err) console.error("❌ Error adding video_thumbnail to gallery_images:", err.message);
+                else console.log("✅ video_thumbnail column added to gallery_images");
+            });
+        } else {
+            console.log("✅ video_thumbnail column already exists in gallery_images");
         }
     });
 
@@ -333,6 +400,9 @@ function createTables() {
             INDEX idx_active (is_active)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+        // FIX #2: added media_type + video_thumbnail so inserts/selects
+        // elsewhere in this file (which already reference these columns)
+        // actually succeed on a fresh database.
         `CREATE TABLE IF NOT EXISTS gallery_images (
             id INT PRIMARY KEY AUTO_INCREMENT,
             filename VARCHAR(255) NOT NULL,
@@ -340,6 +410,8 @@ function createTables() {
             public_id VARCHAR(255),
             file_size INT DEFAULT 0,
             mime_type VARCHAR(100) DEFAULT 'image/jpeg',
+            media_type VARCHAR(20) DEFAULT 'image',
+            video_thumbnail VARCHAR(500),
             title VARCHAR(255) DEFAULT '',
             description TEXT,
             image_date DATE,
@@ -524,9 +596,32 @@ app.delete("/delete", (req, res) => {
 
         db.query("DELETE FROM slider_images WHERE id = ?", [image.id], (deleteErr) => {
             if (deleteErr) return res.status(500).json({ success: false, error: deleteErr.message });
-            db.query("SET @new_order = 0; UPDATE slider_images SET `order` = (@new_order := @new_order + 1) ORDER BY `order` ASC;", (reorderErr) => {
-                if (reorderErr) console.warn("Reorder warning:", reorderErr.message);
-                res.json({ success: true, message: "Image deleted successfully" });
+
+            // FIX #4: the original single query
+            // "SET @new_order = 0; UPDATE slider_images SET `order` = (@new_order := @new_order + 1) ..."
+            // packs two statements into one db.query() call. Unless the mysql
+            // connection was created with `multipleStatements: true`, the
+            // driver rejects this outright (and if it *is* enabled globally,
+            // it's a SQL-injection risk best avoided). Rewritten as two
+            // separate, safe queries that don't require that flag.
+            db.query("SELECT id FROM slider_images ORDER BY `order` ASC", (fetchErr, rows) => {
+                if (fetchErr || !rows || rows.length === 0) {
+                    if (fetchErr) console.warn("Reorder warning:", fetchErr.message);
+                    return res.json({ success: true, message: "Image deleted successfully" });
+                }
+
+                const updates = rows.map((row, index) =>
+                    new Promise((resolve) => {
+                        db.query("UPDATE slider_images SET `order` = ? WHERE id = ?", [index + 1, row.id], (updateErr) => {
+                            if (updateErr) console.warn("Reorder warning:", updateErr.message);
+                            resolve();
+                        });
+                    })
+                );
+
+                Promise.all(updates).then(() => {
+                    res.json({ success: true, message: "Image deleted successfully" });
+                });
             });
         });
     });
@@ -1683,27 +1778,6 @@ app.get("/analytics/stats", (req, res) => {
         }
     );
 });
-
-// ============================================================
-// ADMIN ROUTES - Complete (Protected via authMiddleware)
-// ============================================================
-console.log('🔧 Loading admin routes...');
-
-try {
-    const adminRoutes = require('./routes/adminRoutes');
-    console.log('✅ Admin routes loaded successfully');
-    console.log('✅ Router type:', typeof adminRoutes);
-
-    app.use('/api/admin', adminRoutes);
-    console.log('✅ Admin routes registered at /api/admin');
-
-    app.get('/api/admin/direct-test', (req, res) => {
-        res.json({ success: true, message: 'Direct test working!' });
-    });
-
-} catch (error) {
-    console.error('❌ Error loading admin routes:', error.message);
-}
 
 // ============================================================
 // 404 & ERROR HANDLER
