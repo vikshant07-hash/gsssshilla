@@ -133,11 +133,6 @@ const recordLoginAttempt = (req, success, username) => {
 // ============================================================
 // ADMIN CREDENTIALS
 // ============================================================
-// NOTE: this array lives in memory. On a server restart it resets back
-// to whatever ADMIN_PASSWORD_HASH / ADMIN2_PASSWORD_HASH are set to in
-// the environment. See FIX #2 (reset-password route) below for how a
-// runtime password change is applied to this array so login actually
-// picks up the new password without needing an env var / redeploy.
 const ADMINS = [
   {
     id: 1,
@@ -177,15 +172,6 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
     ? 'We received a request to reset your admin password. Use the OTP below to proceed.'
     : 'Use the One-Time Password below to securely log in to your admin account.';
 
-  // FIX #1 (root cause of the "email arrives but empty" bug):
-  // The previous template opened <body> but never closed it before
-  // </html> — several mail clients (Outlook's Word rendering engine,
-  // some corporate scanners, and Brevo's own HTML sanitizer) treat
-  // malformed/unclosed markup as invalid and render a blank body
-  // instead of failing loudly. Switched to the standard XHTML
-  // Transitional doctype used for HTML emails (much more reliably
-  // supported across clients than the plain HTML5 doctype) and made
-  // sure every tag opened is explicitly closed.
   const htmlContent = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -238,8 +224,6 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
 </body>
 </html>`;
 
-  // Plain-text fallback so clients/spam filters that can't (or won't)
-  // render the HTML part still show the OTP instead of a blank email.
   const textContent = `${headingText}\n\nHi, ${recipientName}!\n${introText}\n\nYour OTP Code: ${otp}\n\nThis OTP is valid for 5 minutes.\nIf you did not request this, please ignore this email or contact the school administration.\n\n© ${new Date().getFullYear()} GSSS SHILLA`;
 
   const response = await fetch('https://api.brevo.com/v3/smtp/email', {
@@ -383,7 +367,10 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
   }
 });
 
+// ============================================================
 // 4. VERIFY OTP - PUBLIC (NO TOKEN REQUIRED) ✅✅✅
+// ✅ SESSION SET KARO - Dashboard ke liye important!
+// ============================================================
 router.post('/verify-otp', async (req, res) => {
   console.log('🔥 VERIFY OTP ROUTE HIT - PUBLIC ✅');
 
@@ -444,7 +431,23 @@ router.post('/verify-otp', async (req, res) => {
 
     delete otpStore[username];
 
-    // ✅ Generate JWT Token
+    // ✅✅✅ SESSION SET KARO - Dashboard ke liye (MOST IMPORTANT) ✅✅✅
+    req.session.admin_id = admin.id;
+    req.session.admin_name = admin.name;
+    req.session.admin_email = admin.email;
+    req.session.admin_role = admin.role;
+    req.session.admin_username = admin.username;
+
+    // Force session save
+    req.session.save((err) => {
+      if (err) {
+        console.error('❌ Session save error:', err);
+      } else {
+        console.log('✅ Session saved for admin:', admin.username);
+      }
+    });
+
+    // ✅ Generate JWT Token (Mobile/API ke liye)
     const token = jwt.sign(
       {
         id: admin.id,
@@ -679,16 +682,6 @@ router.post('/reset-password', async (req, res) => {
 
     const newHash = await bcrypt.hash(newPassword, 10);
 
-    // FIX #2: previously this route generated a new hash and just
-    // returned it in the response, expecting someone to manually copy
-    // it into ADMIN_PASSWORD_HASH and redeploy — meaning the "reset"
-    // never actually took effect and the old password kept working.
-    // Now the in-memory ADMINS record is updated immediately, so the
-    // new password works right away for /login.
-    // NOTE: this is still in-memory only — it will revert to the env
-    // var value on a server restart/redeploy. For a permanent reset,
-    // also update ADMIN_PASSWORD_HASH / ADMIN2_PASSWORD_HASH with the
-    // hash below in your environment variables.
     admin.passwordHash = newHash;
     console.log(`✅ Password reset applied for: ${email} (in-memory — update env var for permanence)`);
 
