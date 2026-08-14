@@ -42,26 +42,17 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// CSRF Disabled (localStorage auth)
-const verifyCsrf = (req, res, next) => {
-  return next();
-};
-
 // ============================================================
-// LOGIN ATTEMPTS STORE
+// LOGIN ATTEMPTS
 // ============================================================
 const loginAttempts = new Map();
 
 const checkLoginAttempts = (req, res, next) => {
     const { username } = req.body;
-    
-    if (!username) {
-        return next();
-    }
+    if (!username) return next();
     
     const key = `user_${username}`;
     const now = Date.now();
-    
     let attempt = loginAttempts.get(key);
     
     if (!attempt) {
@@ -90,15 +81,9 @@ const checkLoginAttempts = (req, res, next) => {
         
         return res.status(429).json({
             success: false,
-            message: `Too many failed attempts for this account. Please try again after ${timeMessage}.`,
+            message: `Too many failed attempts. Please try again after ${timeMessage}.`,
             blocked: true,
             blockUntil: attempt.blockUntil,
-            remainingMs: remainingMs,
-            remainingHours: remainingHours,
-            remainingMinutes: remainingMinutes,
-            remainingDays: remainingDays,
-            username: username,
-            timeMessage: timeMessage,
             code: 'ACCOUNT_LOCKED'
         });
     }
@@ -117,18 +102,14 @@ const checkLoginAttempts = (req, res, next) => {
 
 const recordLoginAttempt = (req, success, username) => {
     const user = username || req.body?.username;
-    
-    if (!user) {
-        console.warn('⚠️ No username provided for login attempt record');
-        return;
-    }
+    if (!user) return;
     
     const key = `user_${user}`;
     const attempt = loginAttempts.get(key) || { count: 0, firstAttempt: Date.now(), blockUntil: null };
     
     if (success) {
         loginAttempts.delete(key);
-        console.log(`✅ Login successful for ${user}, attempts reset`);
+        console.log(`✅ Login successful for ${user}`);
         return;
     }
     
@@ -137,11 +118,11 @@ const recordLoginAttempt = (req, success, username) => {
     
     if (attempt.count >= 5) {
         attempt.blockUntil = Date.now() + 12 * 60 * 60 * 1000;
-        console.log(`🔒 User "${user}" blocked for 12 hours after ${attempt.count} failed attempts`);
+        console.log(`🔒 User "${user}" blocked for 12 hours`);
     }
     
     loginAttempts.set(key, attempt);
-    console.log(`❌ Failed login attempt for "${user}" (${attempt.count}/5)`);
+    console.log(`❌ Failed login for "${user}" (${attempt.count}/5)`);
 };
 
 // ============================================================
@@ -166,22 +147,12 @@ const ADMINS = [
   }
 ].filter(admin => admin.username && admin.passwordHash);
 
-if (ADMINS.length === 0) {
-  console.warn('⚠️ No admins configured!');
-} else {
-  console.log(`✅ ${ADMINS.length} admin(s) loaded:`, ADMINS.map(a => a.username).join(', '));
-}
-
 // ============================================================
-// SCHOOL LOGO URL
-// ============================================================
-const SCHOOL_LOGO_URL = process.env.SCHOOL_LOGO_URL || 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png';
-
-// ============================================================
-// EMAIL SENDING (Brevo)
+// EMAIL SENDING
 // ============================================================
 const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'magicalmathsquiz@gmail.com';
 const BREVO_SENDER_NAME = 'GSSS SHILLA';
+const SCHOOL_LOGO_URL = process.env.SCHOOL_LOGO_URL || 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png';
 
 async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Admin') {
   const subjectText = purpose === 'reset'
@@ -274,13 +245,10 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
 }
 
 // ============================================================
-// STORE OTP IN MEMORY
+// STORE OTP
 // ============================================================
 let otpStore = {};
 
-// ============================================================
-// HELPER - Generate OTP
-// ============================================================
 function generateOTP() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   const numbers = "0123456789";
@@ -294,9 +262,6 @@ function generateOTP() {
   return otp;
 }
 
-// ============================================================
-// HELPER - Find admin
-// ============================================================
 function findAdminByUsername(username) {
   return ADMINS.find(a => a.username === username);
 }
@@ -306,26 +271,22 @@ function findAdminByEmail(email) {
 }
 
 // ============================================================
-// 🔓 PUBLIC ROUTES - No token required
+// 🔓 PUBLIC ROUTES - NO TOKEN REQUIRED
 // ============================================================
 
-// 1. TEST ROUTE
+// 1. Test Route
 router.get('/test', (req, res) => {
-  console.log('📥 Test route hit!');
   res.json({ success: true, message: 'Admin routes working!' });
 });
 
-// 2. CSRF TOKEN ROUTE
+// 2. CSRF Token
 router.get('/csrf-token', (req, res) => {
   const csrfToken = uuidv4();
   req.session.csrfToken = csrfToken;
-  res.json({
-    success: true,
-    token: csrfToken
-  });
+  res.json({ success: true, token: csrfToken });
 });
 
-// 3. LOGIN ROUTE - PUBLIC
+// 3. LOGIN - Public
 router.post('/login', checkLoginAttempts, async (req, res) => {
   console.log('🔥 LOGIN ROUTE HIT');
   const { username, password } = req.body;
@@ -379,9 +340,6 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
 
     recordLoginAttempt(req, true, username);
 
-    const csrfToken = uuidv4();
-    req.session.csrfToken = csrfToken;
-
     res.json({
       success: true,
       message: 'OTP sent successfully to your email!',
@@ -402,9 +360,9 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
   }
 });
 
-// 4. VERIFY OTP ROUTE - PUBLIC (No token required)
+// 4. VERIFY OTP - Public (NO TOKEN REQUIRED) ✅
 router.post('/verify-otp', async (req, res) => {
-  console.log('🔥 VERIFY OTP ROUTE HIT');
+  console.log('🔥 VERIFY OTP ROUTE HIT - PUBLIC');
 
   const { username, password, otp } = req.body;
 
@@ -482,9 +440,6 @@ router.post('/verify-otp', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    const csrfToken = uuidv4();
-    req.session.csrfToken = csrfToken;
-
     console.log('✅ Login successful:', admin.username);
 
     res.json({
@@ -492,7 +447,6 @@ router.post('/verify-otp', async (req, res) => {
       message: 'Login successful!',
       token: token,
       refreshToken: refreshToken,
-      csrfToken: csrfToken,
       data: {
         id: admin.id,
         username: admin.username,
@@ -512,7 +466,7 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
-// 5. REFRESH TOKEN ROUTE - PUBLIC
+// 5. Refresh Token - Public
 router.post('/refresh-token', async (req, res) => {
   const { refreshToken } = req.body;
 
@@ -526,7 +480,6 @@ router.post('/refresh-token', async (req, res) => {
 
   try {
     const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || JWT_SECRET);
-    
     const admin = ADMINS.find(a => a.id === decoded.id);
     if (!admin) {
       return res.status(401).json({
@@ -554,14 +507,10 @@ router.post('/refresh-token', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    const csrfToken = uuidv4();
-    req.session.csrfToken = csrfToken;
-
     res.json({
       success: true,
       token: newToken,
-      refreshToken: newRefreshToken,
-      csrfToken: csrfToken
+      refreshToken: newRefreshToken
     });
 
   } catch (error) {
@@ -580,7 +529,7 @@ router.post('/refresh-token', async (req, res) => {
   }
 });
 
-// 6. SEND RESET OTP - PUBLIC
+// 6. Send Reset OTP - Public
 router.post('/send-reset-otp', async (req, res) => {
   console.log('🔥 SEND RESET OTP ROUTE HIT');
 
@@ -637,7 +586,7 @@ router.post('/send-reset-otp', async (req, res) => {
   }
 });
 
-// 7. RESET PASSWORD - PUBLIC
+// 7. Reset Password - Public
 router.post('/reset-password', async (req, res) => {
   console.log('🔥 RESET PASSWORD ROUTE HIT');
 
@@ -730,11 +679,10 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-// 8. VERIFY ROUTE - PUBLIC (Returns admin data if token valid)
+// 8. Verify Token - Public (Checks token but doesn't require it)
 router.get('/verify', (req, res) => {
   try {
     const authHeader = req.headers.authorization;
-    console.log('📋 Auth Header:', authHeader);
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ 
@@ -745,24 +693,16 @@ router.get('/verify', (req, res) => {
     }
     
     const token = authHeader.split(' ')[1];
-    console.log('📋 Token received:', token.substring(0, 20) + '...');
-    
-    // Verify JWT
     const decoded = jwt.verify(token, JWT_SECRET);
-    console.log('✅ Token decoded:', decoded);
-    
     const admin = ADMINS.find(a => a.id === decoded.id);
     
     if (!admin) {
-      console.log('❌ User not found in ADMINS:', decoded.id);
       return res.status(401).json({
         success: false,
         message: 'User not found',
         code: 'USER_NOT_FOUND'
       });
     }
-    
-    console.log('✅ Admin found:', admin.username);
     
     res.json({ 
       success: true, 
@@ -778,8 +718,6 @@ router.get('/verify', (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Verify Error:', error.message);
-    
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,
@@ -802,7 +740,7 @@ router.get('/verify', (req, res) => {
   }
 });
 
-// 9. GENERATE HASH - PUBLIC (If enabled)
+// 9. Generate Hash - Public (If enabled)
 router.get('/generate-hash/:password', async (req, res) => {
   if (process.env.ENABLE_HASH_ROUTE !== 'true') {
     return res.status(403).json({ 
@@ -817,8 +755,7 @@ router.get('/generate-hash/:password', async (req, res) => {
     res.json({ 
       success: true, 
       password: req.params.password,
-      hash: hash,
-      note: 'Copy this hash and set it as ADMIN_PASSWORD_HASH or ADMIN2_PASSWORD_HASH in environment variables.'
+      hash: hash
     });
   } catch (error) {
     res.status(500).json({
@@ -829,11 +766,11 @@ router.get('/generate-hash/:password', async (req, res) => {
 });
 
 // ============================================================
-// 🛡️ PROTECTED ROUTES - Token required (After verifyToken)
+// 🛡️ PROTECTED ROUTES - TOKEN REQUIRED
 // ============================================================
 router.use(verifyToken);
 
-// 10. PROFILE ROUTE - Protected
+// 10. Profile - Protected
 router.get('/profile', (req, res) => {
   res.json({
     success: true,
@@ -848,7 +785,7 @@ router.get('/profile', (req, res) => {
   });
 });
 
-// 11. LOGOUT ROUTE - Protected
+// 11. Logout - Protected
 router.post('/logout', (req, res) => {
   if (req.session) {
     req.session.destroy();
@@ -859,7 +796,7 @@ router.post('/logout', (req, res) => {
   });
 });
 
-// 12. EXTEND SESSION - Protected
+// 12. Extend Session - Protected
 router.post('/extend-session', (req, res) => {
   res.json({
     success: true,
@@ -868,7 +805,7 @@ router.post('/extend-session', (req, res) => {
   });
 });
 
-// 13. SESSION STATUS - Protected
+// 13. Session Status - Protected
 router.get('/session-status', (req, res) => {
   res.json({
     success: true,
@@ -878,7 +815,7 @@ router.get('/session-status', (req, res) => {
   });
 });
 
-// 14. LOGIN STATUS - Protected
+// 14. Login Status - Protected
 router.get('/login-status', (req, res) => {
   const { username } = req.query;
   
@@ -891,8 +828,7 @@ router.get('/login-status', (req, res) => {
         success: true,
         username: username,
         attempts: 0,
-        blocked: false,
-        message: 'No login attempts recorded for this user'
+        blocked: false
       });
     }
     
@@ -903,19 +839,13 @@ router.get('/login-status', (req, res) => {
       const remainingMs = attempt.blockUntil - now;
       const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
       const remainingHours = Math.floor(remainingMs / (60 * 60 * 1000));
-      const remainingDays = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
       
       let timeMessage = '';
-      if (remainingDays >= 1) {
-        const hrs = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-        timeMessage = `${remainingDays} day${remainingDays > 1 ? 's' : ''}${hrs > 0 ? ` ${hrs} hour${hrs > 1 ? 's' : ''}` : ''}`;
-      } else if (remainingHours >= 1) {
+      if (remainingHours >= 1) {
         const mins = Math.ceil((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
-        timeMessage = `${remainingHours} hour${remainingHours > 1 ? 's' : ''}${mins > 0 ? ` ${mins} minute${mins > 1 ? 's' : ''}` : ''}`;
-      } else if (remainingMinutes >= 1) {
-        timeMessage = `${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}`;
+        timeMessage = `${remainingHours}h ${mins}m`;
       } else {
-        timeMessage = 'just a few seconds';
+        timeMessage = `${remainingMinutes}m`;
       }
       
       return res.json({
@@ -923,13 +853,8 @@ router.get('/login-status', (req, res) => {
         username: username,
         attempts: attempt.count,
         blocked: true,
-        blockUntil: attempt.blockUntil,
-        remainingMs: remainingMs,
-        remainingHours: remainingHours,
-        remainingMinutes: remainingMinutes,
-        remainingDays: remainingDays,
         timeMessage: timeMessage,
-        message: `Account locked. Please try again after ${timeMessage}.`
+        message: `Account locked. Try again after ${timeMessage}.`
       });
     }
     
@@ -937,14 +862,11 @@ router.get('/login-status', (req, res) => {
       success: true,
       username: username,
       attempts: attempt.count,
-      blocked: false,
-      message: 'Account is not blocked'
+      blocked: false
     });
   }
   
-  const blockedUsers = [];
   const allUsers = [];
-  
   for (const [key, value] of loginAttempts) {
     const user = key.replace('user_', '');
     const now = Date.now();
@@ -956,27 +878,16 @@ router.get('/login-status', (req, res) => {
       blocked: isBlocked,
       blockUntil: value.blockUntil
     });
-    
-    if (isBlocked) {
-      blockedUsers.push({
-        username: user,
-        attempts: value.count,
-        blockUntil: value.blockUntil,
-        remainingMs: value.blockUntil - now
-      });
-    }
   }
   
   res.json({
     success: true,
     totalUsers: allUsers.length,
-    blockedUsers: blockedUsers.length,
-    users: allUsers,
-    blocked: blockedUsers
+    users: allUsers
   });
 });
 
-// 15. CLEAR ATTEMPTS - Protected (Admin Only)
+// 15. Clear Attempts - Protected (Super Admin only)
 router.delete('/clear-attempts/:username', (req, res) => {
   const { username } = req.params;
   
@@ -1003,10 +914,8 @@ router.delete('/clear-attempts/:username', (req, res) => {
   }
 });
 
-// 16. DEBUG ROUTE - Protected
+// 16. Debug - Protected
 router.get('/debug', (req, res) => {
-  const totalAttempts = loginAttempts.size;
-  
   res.json({
     success: true,
     message: 'Admin router is working!',
@@ -1021,18 +930,14 @@ router.get('/debug', (req, res) => {
     security: {
       jwt: 'Active',
       session: 'Active',
-      csrf: 'Disabled (localStorage auth)',
-      rateLimiting: 'Active (via server.js)',
       loginAttempts: '5 attempts per user, 12 hours block'
     },
-    loginAttemptsCount: totalAttempts,
-    school_logo_url: SCHOOL_LOGO_URL,
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    loginAttemptsCount: loginAttempts.size,
+    timestamp: new Date().toISOString()
   });
 });
 
-// 17. FORCE CLEAR - Protected
+// 17. Force Clear - Protected
 router.get('/force-clear/:username', (req, res) => {
     const { username } = req.params;
     
@@ -1060,7 +965,7 @@ router.get('/force-clear/:username', (req, res) => {
     });
 });
 
-// 18. BLOCKED USERS - Protected
+// 18. Blocked Users - Protected
 router.get('/blocked-users', (req, res) => {
     const blocked = [];
     const now = Date.now();
@@ -1084,7 +989,6 @@ router.get('/blocked-users', (req, res) => {
                 username: username,
                 attempts: value.count,
                 remainingTime: timeStr,
-                remainingMinutes: minutes,
                 blockUntil: value.blockUntil
             });
         }
@@ -1093,16 +997,10 @@ router.get('/blocked-users', (req, res) => {
     res.json({
         success: true,
         blockedUsers: blocked,
-        totalBlocked: blocked.length,
-        allAttempts: Array.from(loginAttempts.entries()).map(([key, value]) => ({
-            username: key.replace('user_', ''),
-            attempts: value.count,
-            blocked: value.blockUntil ? true : false,
-            blockUntil: value.blockUntil
-        }))
+        totalBlocked: blocked.length
     });
 });
 
-console.log('✅ All routes defined - Per-User Login Attempts with Correct Time');
+console.log('✅ All routes defined - Public & Protected separated');
 
 module.exports = router;
