@@ -66,6 +66,87 @@ const verifyCsrf = (req, res, next) => {
 };
 
 // ============================================================
+// LOGIN ATTEMPTS STORE (In-Memory)
+// ============================================================
+const loginAttempts = new Map();
+
+// ============================================================
+// CHECK LOGIN ATTEMPTS MIDDLEWARE
+// ============================================================
+const checkLoginAttempts = (req, res, next) => {
+    const key = req.ip || req.connection.remoteAddress;
+    const now = Date.now();
+    
+    let attempt = loginAttempts.get(key);
+    
+    if (!attempt) {
+        attempt = { count: 0, firstAttempt: now, blockUntil: null };
+        loginAttempts.set(key, attempt);
+    }
+    
+    // Check if currently blocked
+    if (attempt.blockUntil && now < attempt.blockUntil) {
+        const remainingHours = Math.ceil((attempt.blockUntil - now) / (60 * 60 * 1000));
+        const remainingMinutes = Math.ceil((attempt.blockUntil - now) / (60 * 1000));
+        
+        let timeMessage = '';
+        if (remainingHours >= 1) {
+            timeMessage = `${remainingHours} hour${remainingHours > 1 ? 's' : ''}`;
+        } else {
+            timeMessage = `${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}`;
+        }
+        
+        return res.status(429).json({
+            success: false,
+            message: `Too many failed attempts. Please try again after ${timeMessage}.`,
+            blocked: true,
+            blockUntil: attempt.blockUntil,
+            remainingMs: attempt.blockUntil - now,
+            remainingHours: remainingHours,
+            remainingMinutes: remainingMinutes,
+            code: 'ACCOUNT_LOCKED'
+        });
+    }
+    
+    // Reset after 30 minutes of no activity
+    if (now - attempt.firstAttempt > 30 * 60 * 1000) {
+        attempt.count = 0;
+        attempt.firstAttempt = now;
+        attempt.blockUntil = null;
+        loginAttempts.set(key, attempt);
+    }
+    
+    req._loginAttempt = attempt;
+    next();
+};
+
+// ============================================================
+// RECORD LOGIN ATTEMPT
+// ============================================================
+const recordLoginAttempt = (req, success) => {
+    const key = req.ip || req.connection.remoteAddress;
+    const attempt = req._loginAttempt || loginAttempts.get(key) || { count: 0, firstAttempt: Date.now(), blockUntil: null };
+    
+    if (success) {
+        // Successful login - Reset attempts
+        loginAttempts.delete(key);
+        return;
+    }
+    
+    // Failed attempt
+    attempt.count++;
+    attempt.firstAttempt = attempt.firstAttempt || Date.now();
+    
+    // If 5 failed attempts, block for 12 hours
+    if (attempt.count >= 5) {
+        attempt.blockUntil = Date.now() + 12 * 60 * 60 * 1000; // 12 hours
+        console.log(`🔒 IP ${key} blocked for 12 hours after ${attempt.count} failed attempts`);
+    }
+    
+    loginAttempts.set(key, attempt);
+};
+
+// ============================================================
 // ADMIN CREDENTIALS - Multiple Admins (YOUR EXISTING CODE)
 // ============================================================
 const ADMINS = [
