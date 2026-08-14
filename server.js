@@ -1663,7 +1663,7 @@ app.get("/analytics/stats", (req, res) => {
 });
 
 // ============================================================
-// ADMIN ROUTES - DEBUG VERSION
+// ADMIN ROUTES - Complete (Register adminRoutes)
 // ============================================================
 console.log('🔧 Loading admin routes...');
 
