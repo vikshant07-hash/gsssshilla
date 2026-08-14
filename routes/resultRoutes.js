@@ -36,8 +36,17 @@ const upload = multer({
 });
 
 // =============================================
-// HELPER FUNCTIONS
+// HELPER FUNCTION
 // =============================================
+const query = (sql, params) => {
+    return new Promise((resolve, reject) => {
+        db.query(sql, params, (err, results) => {
+            if (err) reject(err);
+            else resolve(results);
+        });
+    });
+};
+
 const deleteFromCloudinary = async (publicId) => {
     try {
         if (publicId) {
@@ -51,18 +60,9 @@ const deleteFromCloudinary = async (publicId) => {
     }
 };
 
-const query = (sql, params) => {
-    return new Promise((resolve, reject) => {
-        db.query(sql, params, (err, results) => {
-            if (err) reject(err);
-            else resolve(results);
-        });
-    });
-};
-
 // =============================================
 // =============================================
-// 🟢 ALL ROUTES (NO AUTH REQUIRED)
+// 🟢 ALL ROUTES - NO AUTH REQUIRED
 // =============================================
 // =============================================
 
@@ -114,24 +114,7 @@ router.post('/students', async (req, res) => {
 // GET: All Students
 router.get('/students', async (req, res) => {
     try {
-        const { class: studentClass, session } = req.query;
-        let sql = 'SELECT * FROM students';
-        let params = [];
-
-        if (studentClass && session) {
-            sql += ' WHERE class = ? AND session_year = ? ORDER BY student_name';
-            params = [studentClass, session];
-        } else if (studentClass) {
-            sql += ' WHERE class = ? ORDER BY student_name';
-            params = [studentClass];
-        } else if (session) {
-            sql += ' WHERE session_year = ? ORDER BY student_name';
-            params = [session];
-        } else {
-            sql += ' ORDER BY session_year DESC, class ASC, student_name';
-        }
-
-        const students = await query(sql, params);
+        const students = await query('SELECT * FROM students ORDER BY session_year DESC, class ASC, student_name');
         res.json({
             success: true,
             data: students
@@ -173,41 +156,6 @@ router.get('/students/:studentId', async (req, res) => {
     }
 });
 
-// PUT: Update Student
-router.put('/students/:studentId', async (req, res) => {
-    try {
-        const { studentId } = req.params;
-        const { studentName, fatherName, apaarId, dob, class: studentClass, session } = req.body;
-
-        const result = await query(
-            `UPDATE students 
-            SET student_name = ?, father_name = ?, apaar_id = ?, 
-                date_of_birth = ?, class = ?, session_year = ?
-            WHERE student_id = ?`,
-            [studentName, fatherName, apaarId, dob, studentClass, session, studentId]
-        );
-
-        if (result.affectedRows === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Student not found'
-            });
-        }
-
-        res.json({
-            success: true,
-            message: 'Student updated successfully'
-        });
-    } catch (error) {
-        console.error('Update student error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
-});
-
 // DELETE: Delete Student
 router.delete('/students/:studentId', async (req, res) => {
     try {
@@ -235,7 +183,7 @@ router.delete('/students/:studentId', async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Student and all related results deleted successfully'
+            message: 'Student deleted successfully'
         });
     } catch (error) {
         console.error('Delete student error:', error);
@@ -337,10 +285,11 @@ router.post('/results/bulk-upload', upload.array('marksheets', 50), async (req, 
     try {
         const results = [];
         const errors = [];
+        const { class: studentClass, session } = req.body;
 
         for (const file of req.files) {
-            const { studentId, class: studentClass, session } = req.body;
-
+            const studentId = req.body.studentId || `S${String(results.length + 1).padStart(3, '0')}`;
+            
             try {
                 const students = await query('SELECT * FROM students WHERE student_id = ?', [studentId]);
 
@@ -402,6 +351,7 @@ router.post('/results/bulk-upload', upload.array('marksheets', 50), async (req, 
 router.get('/results', async (req, res) => {
     try {
         const { class: studentClass, session, status } = req.query;
+        
         let sql = `
             SELECT 
                 r.*,
@@ -477,57 +427,6 @@ router.get('/results/:resultId', async (req, res) => {
         });
     } catch (error) {
         console.error('Get result error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
-});
-
-// GET: Results by Student ID
-router.get('/results/student/:studentId', async (req, res) => {
-    try {
-        const { studentId } = req.params;
-        const { class: studentClass, session } = req.query;
-
-        let sql = `
-            SELECT 
-                r.*,
-                s.student_name,
-                s.father_name,
-                s.apaar_id,
-                s.date_of_birth
-            FROM results r
-            JOIN students s ON r.student_id = s.student_id
-            WHERE r.student_id = ?
-        `;
-        let params = [studentId];
-
-        if (studentClass) {
-            sql += ' AND r.class = ?';
-            params.push(studentClass);
-        }
-        if (session) {
-            sql += ' AND r.session_year = ?';
-            params.push(session);
-        }
-
-        const results = await query(sql, params);
-
-        if (results.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'No results found for this student'
-            });
-        }
-
-        res.json({
-            success: true,
-            data: results
-        });
-    } catch (error) {
-        console.error('Get student result error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -863,7 +762,7 @@ router.post('/public/verify', async (req, res) => {
 });
 
 // =============================================
-// 5. DASHBOARD STATS (Without Auth)
+// 5. DASHBOARD STATS (No Auth)
 // =============================================
 
 router.get('/stats', async (req, res) => {
@@ -885,38 +784,6 @@ router.get('/stats', async (req, res) => {
         });
     } catch (error) {
         console.error('Get stats error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
-});
-
-// =============================================
-// 6. GET PUBLISHED STATUS FOR A CLASS
-// =============================================
-
-router.get('/status/:class/:session', async (req, res) => {
-    try {
-        const { class: studentClass, session } = req.params;
-        const results = await query(
-            'SELECT COUNT(*) as total, SUM(CASE WHEN status = "published" THEN 1 ELSE 0 END) as published FROM results WHERE class = ? AND session_year = ?',
-            [studentClass, session]
-        );
-
-        res.json({
-            success: true,
-            data: {
-                class: studentClass,
-                session: session,
-                total: results[0]?.total || 0,
-                published: results[0]?.published || 0,
-                isPublished: results[0]?.total === results[0]?.published && results[0]?.total > 0
-            }
-        });
-    } catch (error) {
-        console.error('Get status error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
