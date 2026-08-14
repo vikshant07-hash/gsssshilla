@@ -1019,6 +1019,81 @@ router.get('/debug', (req, res) => {
   });
 });
 
+// ============================================================
+// 17. EMERGENCY - CLEAR LOGIN ATTEMPTS (No Auth Required)
+// ============================================================
+router.get('/force-clear/:username', (req, res) => {
+    const { username } = req.params;
+    
+    if (username === 'all') {
+        const count = loginAttempts.size;
+        loginAttempts.clear();
+        return res.json({
+            success: true,
+            message: `✅ Cleared all ${count} login attempts`
+        });
+    }
+    
+    const key = `user_${username}`;
+    if (loginAttempts.has(key)) {
+        loginAttempts.delete(key);
+        return res.json({
+            success: true,
+            message: `✅ Cleared login attempts for: ${username}`
+        });
+    }
+    
+    res.json({
+        success: true,
+        message: `ℹ️ No attempts found for: ${username}`
+    });
+});
+
+// ============================================================
+// 18. CHECK BLOCKED USERS (No Auth Required)
+// ============================================================
+router.get('/blocked-users', (req, res) => {
+    const blocked = [];
+    const now = Date.now();
+    
+    for (const [key, value] of loginAttempts) {
+        if (value.blockUntil && now < value.blockUntil) {
+            const username = key.replace('user_', '');
+            const remainingMs = value.blockUntil - now;
+            const minutes = Math.ceil(remainingMs / (60 * 1000));
+            const hours = Math.floor(minutes / 60);
+            const mins = minutes % 60;
+            
+            let timeStr = '';
+            if (hours > 0) {
+                timeStr = `${hours}h ${mins}m`;
+            } else {
+                timeStr = `${mins}m`;
+            }
+            
+            blocked.push({
+                username: username,
+                attempts: value.count,
+                remainingTime: timeStr,
+                remainingMinutes: minutes,
+                blockUntil: value.blockUntil
+            });
+        }
+    }
+    
+    res.json({
+        success: true,
+        blockedUsers: blocked,
+        totalBlocked: blocked.length,
+        allAttempts: Array.from(loginAttempts.entries()).map(([key, value]) => ({
+            username: key.replace('user_', ''),
+            attempts: value.count,
+            blocked: value.blockUntil ? true : false,
+            blockUntil: value.blockUntil
+        }))
+    });
+});
+
 console.log('✅ All routes defined - Per-User Login Attempts with Correct Time');
 
 module.exports = router;
