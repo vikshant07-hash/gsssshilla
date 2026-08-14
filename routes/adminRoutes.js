@@ -49,22 +49,21 @@ const verifyCsrf = (req, res, next) => {
 };
 
 // ============================================================
-// LOGIN ATTEMPTS STORE - PER USERNAME (Not IP)
+// LOGIN ATTEMPTS STORE - PER USERNAME
 // ============================================================
 const loginAttempts = new Map();
 
 // ============================================================
-// CHECK LOGIN ATTEMPTS MIDDLEWARE - PER USERNAME
+// CHECK LOGIN ATTEMPTS MIDDLEWARE - PER USERNAME WITH CORRECT TIME
 // ============================================================
 const checkLoginAttempts = (req, res, next) => {
     const { username } = req.body;
     
-    // If no username provided, skip (will be handled by login route)
     if (!username) {
         return next();
     }
     
-    const key = `user_${username}`; // Per-user key
+    const key = `user_${username}`;
     const now = Date.now();
     
     let attempt = loginAttempts.get(key);
@@ -76,14 +75,22 @@ const checkLoginAttempts = (req, res, next) => {
     
     // Check if currently blocked
     if (attempt.blockUntil && now < attempt.blockUntil) {
-        const remainingHours = Math.ceil((attempt.blockUntil - now) / (60 * 60 * 1000));
-        const remainingMinutes = Math.ceil((attempt.blockUntil - now) / (60 * 1000));
+        const remainingMs = attempt.blockUntil - now;
+        const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+        const remainingHours = Math.floor(remainingMs / (60 * 60 * 1000));
+        const remainingDays = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
         
         let timeMessage = '';
-        if (remainingHours >= 1) {
-            timeMessage = `${remainingHours} hour${remainingHours > 1 ? 's' : ''}`;
-        } else {
+        if (remainingDays >= 1) {
+            const hrs = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+            timeMessage = `${remainingDays} day${remainingDays > 1 ? 's' : ''}${hrs > 0 ? ` ${hrs} hour${hrs > 1 ? 's' : ''}` : ''}`;
+        } else if (remainingHours >= 1) {
+            const mins = Math.ceil((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+            timeMessage = `${remainingHours} hour${remainingHours > 1 ? 's' : ''}${mins > 0 ? ` ${mins} minute${mins > 1 ? 's' : ''}` : ''}`;
+        } else if (remainingMinutes >= 1) {
             timeMessage = `${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}`;
+        } else {
+            timeMessage = 'just a few seconds';
         }
         
         return res.status(429).json({
@@ -91,10 +98,12 @@ const checkLoginAttempts = (req, res, next) => {
             message: `Too many failed attempts for this account. Please try again after ${timeMessage}.`,
             blocked: true,
             blockUntil: attempt.blockUntil,
-            remainingMs: attempt.blockUntil - now,
+            remainingMs: remainingMs,
             remainingHours: remainingHours,
             remainingMinutes: remainingMinutes,
+            remainingDays: remainingDays,
             username: username,
+            timeMessage: timeMessage,
             code: 'ACCOUNT_LOCKED'
         });
     }
@@ -116,7 +125,6 @@ const checkLoginAttempts = (req, res, next) => {
 // RECORD LOGIN ATTEMPT - PER USERNAME
 // ============================================================
 const recordLoginAttempt = (req, success, username) => {
-    // Use username from parameter or from request body
     const user = username || req.body?.username;
     
     if (!user) {
@@ -128,13 +136,11 @@ const recordLoginAttempt = (req, success, username) => {
     const attempt = loginAttempts.get(key) || { count: 0, firstAttempt: Date.now(), blockUntil: null };
     
     if (success) {
-        // Successful login - Reset attempts for this user
         loginAttempts.delete(key);
         console.log(`✅ Login successful for ${user}, attempts reset`);
         return;
     }
     
-    // Failed attempt
     attempt.count++;
     attempt.firstAttempt = attempt.firstAttempt || Date.now();
     
@@ -348,10 +354,8 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
   }
 
   try {
-    // Check if user exists
     const admin = findAdminByUsername(username);
     if (!admin) {
-      // Record failed attempt for this username
       recordLoginAttempt(req, false, username);
       return res.status(401).json({
         success: false,
@@ -362,7 +366,6 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, admin.passwordHash);
     if (!isMatch) {
-      // Record failed attempt for this username
       recordLoginAttempt(req, false, username);
       return res.status(401).json({
         success: false,
@@ -389,10 +392,8 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
       });
     }
 
-    // Record successful attempt (resets counter for this user)
     recordLoginAttempt(req, true, username);
 
-    // Generate CSRF token
     const csrfToken = uuidv4();
     req.session.csrfToken = csrfToken;
 
@@ -846,12 +847,11 @@ router.get('/session-status', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 14. LOGIN STATUS - Per-User Attempts
+// 14. LOGIN STATUS - Per-User Attempts WITH CORRECT TIME
 // ============================================================
 router.get('/login-status', (req, res) => {
   const { username } = req.query;
   
-  // If username provided, check for that specific user
   if (username) {
     const key = `user_${username}`;
     const attempt = loginAttempts.get(key);
@@ -868,20 +868,47 @@ router.get('/login-status', (req, res) => {
     
     const now = Date.now();
     const isBlocked = attempt.blockUntil && now < attempt.blockUntil;
-    const remainingMs = isBlocked ? attempt.blockUntil - now : 0;
-    const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
-    const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+    
+    if (isBlocked) {
+      const remainingMs = attempt.blockUntil - now;
+      const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+      const remainingHours = Math.floor(remainingMs / (60 * 60 * 1000));
+      const remainingDays = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+      
+      let timeMessage = '';
+      if (remainingDays >= 1) {
+        const hrs = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+        timeMessage = `${remainingDays} day${remainingDays > 1 ? 's' : ''}${hrs > 0 ? ` ${hrs} hour${hrs > 1 ? 's' : ''}` : ''}`;
+      } else if (remainingHours >= 1) {
+        const mins = Math.ceil((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+        timeMessage = `${remainingHours} hour${remainingHours > 1 ? 's' : ''}${mins > 0 ? ` ${mins} minute${mins > 1 ? 's' : ''}` : ''}`;
+      } else if (remainingMinutes >= 1) {
+        timeMessage = `${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}`;
+      } else {
+        timeMessage = 'just a few seconds';
+      }
+      
+      return res.json({
+        success: true,
+        username: username,
+        attempts: attempt.count,
+        blocked: true,
+        blockUntil: attempt.blockUntil,
+        remainingMs: remainingMs,
+        remainingHours: remainingHours,
+        remainingMinutes: remainingMinutes,
+        remainingDays: remainingDays,
+        timeMessage: timeMessage,
+        message: `Account locked. Please try again after ${timeMessage}.`
+      });
+    }
     
     return res.json({
       success: true,
       username: username,
       attempts: attempt.count,
-      blocked: isBlocked,
-      blockUntil: attempt.blockUntil,
-      remainingMs: remainingMs,
-      remainingHours: remainingHours,
-      remainingMinutes: remainingMinutes,
-      message: isBlocked ? `User "${username}" is blocked for ${remainingHours} hours` : 'Not blocked'
+      blocked: false,
+      message: 'Account is not blocked'
     });
   }
   
@@ -890,12 +917,12 @@ router.get('/login-status', (req, res) => {
   const allUsers = [];
   
   for (const [key, value] of loginAttempts) {
-    const username = key.replace('user_', '');
+    const user = key.replace('user_', '');
     const now = Date.now();
     const isBlocked = value.blockUntil && now < value.blockUntil;
     
     allUsers.push({
-      username: username,
+      username: user,
       attempts: value.count,
       blocked: isBlocked,
       blockUntil: value.blockUntil
@@ -903,7 +930,7 @@ router.get('/login-status', (req, res) => {
     
     if (isBlocked) {
       blockedUsers.push({
-        username: username,
+        username: user,
         attempts: value.count,
         blockUntil: value.blockUntil,
         remainingMs: value.blockUntil - now
@@ -921,12 +948,11 @@ router.get('/login-status', (req, res) => {
 });
 
 // ============================================================
-// 15. CLEAR ATTEMPTS - Admin Only (Optional)
+// 15. CLEAR ATTEMPTS - Admin Only
 // ============================================================
 router.delete('/clear-attempts/:username', verifyToken, (req, res) => {
   const { username } = req.params;
   
-  // Only super admin can clear attempts
   if (req.admin.role !== 'Super Admin') {
     return res.status(403).json({
       success: false,
@@ -993,6 +1019,6 @@ router.get('/debug', (req, res) => {
   });
 });
 
-console.log('✅ All routes defined - Per-User Login Attempts');
+console.log('✅ All routes defined - Per-User Login Attempts with Correct Time');
 
 module.exports = router;
