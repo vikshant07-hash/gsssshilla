@@ -10,7 +10,6 @@ console.log('🔧 adminRoutes.js loaded!');
 // ============================================================
 // SECURITY MIDDLEWARE
 // ============================================================
-
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
 const verifyToken = (req, res, next) => {
@@ -49,13 +48,10 @@ const verifyCsrf = (req, res, next) => {
 };
 
 // ============================================================
-// LOGIN ATTEMPTS STORE - PER USERNAME
+// LOGIN ATTEMPTS STORE
 // ============================================================
 const loginAttempts = new Map();
 
-// ============================================================
-// CHECK LOGIN ATTEMPTS MIDDLEWARE - PER USERNAME WITH CORRECT TIME
-// ============================================================
 const checkLoginAttempts = (req, res, next) => {
     const { username } = req.body;
     
@@ -119,9 +115,6 @@ const checkLoginAttempts = (req, res, next) => {
     next();
 };
 
-// ============================================================
-// RECORD LOGIN ATTEMPT - PER USERNAME
-// ============================================================
 const recordLoginAttempt = (req, success, username) => {
     const user = username || req.body?.username;
     
@@ -313,33 +306,28 @@ function findAdminByEmail(email) {
 }
 
 // ============================================================
+// 🔓 PUBLIC ROUTES - No token required
 // ============================================================
+
 // 1. TEST ROUTE
-// ============================================================
 router.get('/test', (req, res) => {
   console.log('📥 Test route hit!');
   res.json({ success: true, message: 'Admin routes working!' });
 });
 
-// ============================================================
 // 2. CSRF TOKEN ROUTE
-// ============================================================
 router.get('/csrf-token', (req, res) => {
   const csrfToken = uuidv4();
   req.session.csrfToken = csrfToken;
-  
   res.json({
     success: true,
     token: csrfToken
   });
 });
 
-// ============================================================
-// 3. LOGIN ROUTE - WITH PER-USER ATTEMPT TRACKING
-// ============================================================
+// 3. LOGIN ROUTE - PUBLIC
 router.post('/login', checkLoginAttempts, async (req, res) => {
   console.log('🔥 LOGIN ROUTE HIT');
-
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -414,9 +402,7 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
   }
 });
 
-// ============================================================
-// 4. VERIFY OTP ROUTE
-// ============================================================
+// 4. VERIFY OTP ROUTE - PUBLIC (No token required)
 router.post('/verify-otp', async (req, res) => {
   console.log('🔥 VERIFY OTP ROUTE HIT');
 
@@ -477,6 +463,7 @@ router.post('/verify-otp', async (req, res) => {
 
     delete otpStore[username];
 
+    // ✅ Generate JWT Token (This is where token is created)
     const token = jwt.sign(
       {
         id: admin.id,
@@ -525,9 +512,7 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
-// ============================================================
-// 5. REFRESH TOKEN ROUTE
-// ============================================================
+// 5. REFRESH TOKEN ROUTE - PUBLIC
 router.post('/refresh-token', async (req, res) => {
   const { refreshToken } = req.body;
 
@@ -595,130 +580,7 @@ router.post('/refresh-token', async (req, res) => {
   }
 });
 
-// ============================================================
-// 6. VERIFY ROUTE - FIXED: NO BYPASS
-// ============================================================
-router.get('/verify', (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    console.log('📋 Auth Header:', authHeader);
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'No token provided',
-        code: 'NO_TOKEN'
-      });
-    }
-    
-    const token = authHeader.split(' ')[1];
-    console.log('📋 Token received:', token.substring(0, 20) + '...');
-    
-    // ✅ REMOVED BYPASS - Now all tokens must be valid JWT
-    
-    // Verify JWT
-    const decoded = jwt.verify(token, JWT_SECRET);
-    console.log('✅ Token decoded:', decoded);
-    console.log('👤 User ID:', decoded.id);
-    
-    // Find admin in ADMINS array (works for ALL users)
-    const admin = ADMINS.find(a => a.id === decoded.id);
-    
-    if (!admin) {
-      console.log('❌ User not found in ADMINS:', decoded.id);
-      return res.status(401).json({
-        success: false,
-        message: 'User not found',
-        code: 'USER_NOT_FOUND'
-      });
-    }
-    
-    console.log('✅ Admin found:', admin.username);
-    
-    // Return admin data (works for any user in ADMINS)
-    res.json({ 
-      success: true, 
-      admin: {
-        id: admin.id,
-        username: admin.username,
-        email: admin.email,
-        name: admin.name,
-        role: admin.role
-      },
-      message: 'Token is valid',
-      code: 'TOKEN_VALID'
-    });
-    
-  } catch (error) {
-    console.error('❌ Verify Error:', error.message);
-    
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired',
-        code: 'TOKEN_EXPIRED'
-      });
-    }
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token',
-        code: 'INVALID_TOKEN'
-      });
-    }
-    return res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message,
-      code: 'SERVER_ERROR'
-    });
-  }
-});
-
-// ============================================================
-// 7. PROFILE ROUTE
-// ============================================================
-router.get('/profile', verifyToken, (req, res) => {
-  res.json({
-    success: true,
-    data: {
-      id: req.admin.id,
-      username: req.admin.username,
-      email: req.admin.email,
-      name: req.admin.name,
-      role: req.admin.role,
-      last_login: new Date().toISOString()
-    }
-  });
-});
-
-// ============================================================
-// 8. LOGOUT ROUTE
-// ============================================================
-router.post('/logout', verifyToken, (req, res) => {
-  if (req.session) {
-    req.session.destroy();
-  }
-  
-  res.json({ 
-    success: true, 
-    message: 'Logged out successfully' 
-  });
-});
-
-// ============================================================
-// 9. EXTEND SESSION
-// ============================================================
-router.post('/extend-session', verifyToken, (req, res) => {
-  res.json({
-    success: true,
-    message: 'Session extended',
-    expiresIn: 30 * 60
-  });
-});
-
-// ============================================================
-// 10. SEND RESET OTP
-// ============================================================
+// 6. SEND RESET OTP - PUBLIC
 router.post('/send-reset-otp', async (req, res) => {
   console.log('🔥 SEND RESET OTP ROUTE HIT');
 
@@ -775,9 +637,7 @@ router.post('/send-reset-otp', async (req, res) => {
   }
 });
 
-// ============================================================
-// 11. RESET PASSWORD
-// ============================================================
+// 7. RESET PASSWORD - PUBLIC
 router.post('/reset-password', async (req, res) => {
   console.log('🔥 RESET PASSWORD ROUTE HIT');
 
@@ -870,9 +730,79 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-// ============================================================
-// 12. GENERATE HASH
-// ============================================================
+// 8. VERIFY ROUTE - PUBLIC (Returns admin data if token valid)
+router.get('/verify', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    console.log('📋 Auth Header:', authHeader);
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'No token provided',
+        code: 'NO_TOKEN'
+      });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    console.log('📋 Token received:', token.substring(0, 20) + '...');
+    
+    // Verify JWT
+    const decoded = jwt.verify(token, JWT_SECRET);
+    console.log('✅ Token decoded:', decoded);
+    
+    const admin = ADMINS.find(a => a.id === decoded.id);
+    
+    if (!admin) {
+      console.log('❌ User not found in ADMINS:', decoded.id);
+      return res.status(401).json({
+        success: false,
+        message: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+    
+    console.log('✅ Admin found:', admin.username);
+    
+    res.json({ 
+      success: true, 
+      admin: {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        name: admin.name,
+        role: admin.role
+      },
+      message: 'Token is valid',
+      code: 'TOKEN_VALID'
+    });
+    
+  } catch (error) {
+    console.error('❌ Verify Error:', error.message);
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Token expired',
+        code: 'TOKEN_EXPIRED'
+      });
+    }
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token',
+        code: 'INVALID_TOKEN'
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      message: 'Server error: ' + error.message,
+      code: 'SERVER_ERROR'
+    });
+  }
+});
+
+// 9. GENERATE HASH - PUBLIC (If enabled)
 router.get('/generate-hash/:password', async (req, res) => {
   if (process.env.ENABLE_HASH_ROUTE !== 'true') {
     return res.status(403).json({ 
@@ -899,9 +829,47 @@ router.get('/generate-hash/:password', async (req, res) => {
 });
 
 // ============================================================
-// 13. SESSION STATUS
+// 🛡️ PROTECTED ROUTES - Token required (After verifyToken)
 // ============================================================
-router.get('/session-status', verifyToken, (req, res) => {
+router.use(verifyToken);
+
+// 10. PROFILE ROUTE - Protected
+router.get('/profile', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      id: req.admin.id,
+      username: req.admin.username,
+      email: req.admin.email,
+      name: req.admin.name,
+      role: req.admin.role,
+      last_login: new Date().toISOString()
+    }
+  });
+});
+
+// 11. LOGOUT ROUTE - Protected
+router.post('/logout', (req, res) => {
+  if (req.session) {
+    req.session.destroy();
+  }
+  res.json({ 
+    success: true, 
+    message: 'Logged out successfully' 
+  });
+});
+
+// 12. EXTEND SESSION - Protected
+router.post('/extend-session', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Session extended',
+    expiresIn: 30 * 60
+  });
+});
+
+// 13. SESSION STATUS - Protected
+router.get('/session-status', (req, res) => {
   res.json({
     success: true,
     active: true,
@@ -910,9 +878,7 @@ router.get('/session-status', verifyToken, (req, res) => {
   });
 });
 
-// ============================================================
-// 14. LOGIN STATUS - Per-User Attempts WITH CORRECT TIME
-// ============================================================
+// 14. LOGIN STATUS - Protected
 router.get('/login-status', (req, res) => {
   const { username } = req.query;
   
@@ -1010,10 +976,8 @@ router.get('/login-status', (req, res) => {
   });
 });
 
-// ============================================================
-// 15. CLEAR ATTEMPTS - Admin Only
-// ============================================================
-router.delete('/clear-attempts/:username', verifyToken, (req, res) => {
+// 15. CLEAR ATTEMPTS - Protected (Admin Only)
+router.delete('/clear-attempts/:username', (req, res) => {
   const { username } = req.params;
   
   if (req.admin.role !== 'Super Admin') {
@@ -1039,9 +1003,7 @@ router.delete('/clear-attempts/:username', verifyToken, (req, res) => {
   }
 });
 
-// ============================================================
-// 16. DEBUG ROUTE
-// ============================================================
+// 16. DEBUG ROUTE - Protected
 router.get('/debug', (req, res) => {
   const totalAttempts = loginAttempts.size;
   
@@ -1051,22 +1013,10 @@ router.get('/debug', (req, res) => {
     admins_configured: ADMINS.length,
     admins: ADMINS.map(a => ({ username: a.username, email: a.email, role: a.role })),
     routes: [
-      '/test',
-      '/csrf-token',
-      '/login',
-      '/verify-otp',
-      '/refresh-token',
-      '/verify',
-      '/profile',
-      '/logout',
-      '/extend-session',
-      '/send-reset-otp',
-      '/reset-password',
-      '/generate-hash/:password',
-      '/session-status',
-      '/login-status',
-      '/clear-attempts/:username',
-      '/debug'
+      '/test', '/csrf-token', '/login', '/verify-otp', '/refresh-token',
+      '/verify', '/profile', '/logout', '/extend-session', '/send-reset-otp',
+      '/reset-password', '/generate-hash/:password', '/session-status',
+      '/login-status', '/clear-attempts/:username', '/debug'
     ],
     security: {
       jwt: 'Active',
@@ -1082,9 +1032,7 @@ router.get('/debug', (req, res) => {
   });
 });
 
-// ============================================================
-// 17. EMERGENCY - CLEAR LOGIN ATTEMPTS (No Auth Required)
-// ============================================================
+// 17. FORCE CLEAR - Protected
 router.get('/force-clear/:username', (req, res) => {
     const { username } = req.params;
     
@@ -1112,9 +1060,7 @@ router.get('/force-clear/:username', (req, res) => {
     });
 });
 
-// ============================================================
-// 18. CHECK BLOCKED USERS (No Auth Required)
-// ============================================================
+// 18. BLOCKED USERS - Protected
 router.get('/blocked-users', (req, res) => {
     const blocked = [];
     const now = Date.now();
