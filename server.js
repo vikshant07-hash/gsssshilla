@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const rateLimit = require('express-rate-limit'); // ← ADD THIS
 require("dotenv").config();
 const path = require("path");
 const session = require('express-session'); 
@@ -11,31 +12,68 @@ const app = express();
 app.set("trust proxy", 1);
 
 // ============================================================
-// SESSION MIDDLEWARE - ADDED (Fixes CSRF error)
+// RATE LIMITING - ADD THIS (After app initialization)
+// ============================================================
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // 100 requests per IP
+    message: { 
+        success: false, 
+        message: 'Too many requests, please try again later.' 
+    },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+app.use('/api/', limiter);
+
+// ============================================================
+// SESSION MIDDLEWARE
 // ============================================================
 app.use(session({
     secret: process.env.SESSION_SECRET || 'fallback-secret-change-this-in-production',
     resave: false,
-    saveUninitialized: true,  // Important: Set to true
+    saveUninitialized: true,
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
-        maxAge: 30 * 60 * 1000, // 30 minutes
+        maxAge: 30 * 60 * 1000,
         sameSite: 'strict'
     },
-    name: 'gsss_session' // Custom session cookie name
+    name: 'gsss_session'
 }));
 
 // ============================================================
-// CORS - UPDATED with credentials
+// CORS - ONLY ALLOW SPECIFIC DOMAINS (CHANGE THIS)
 // ============================================================
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5500,https://gsssshilla07.pages.dev').split(',');
+
 app.use(cors({
-  origin: "*",
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token']
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            console.warn(`⚠️ CORS blocked: ${origin}`);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token']
 }));
+
+// ============================================================
+// REST OF YOUR CODE - KEEP AS IS (No changes needed)
+// ============================================================
 app.options('*', cors());
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// ... BAAKI SAB WAISA HI RAHEGA ...
 
 // ============================================================
 // MIDDLEWARE
