@@ -2,12 +2,13 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 console.log('🔧 adminRoutes.js loaded!');
 
 // ============================================================
-// SECURITY MIDDLEWARE - ADDED
+// SECURITY MIDDLEWARE
 // ============================================================
 
 // JWT Secret
@@ -44,25 +45,10 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// CSRF Verification Middleware
+// CSRF Verification Middleware - DISABLED (localStorage auth)
 const verifyCsrf = (req, res, next) => {
-  // Skip for GET, HEAD, OPTIONS
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-    return next();
-  }
-
-  const csrfToken = req.headers['x-csrf-token'];
-  const sessionToken = req.session?.csrfToken;
-
-  if (!csrfToken || !sessionToken || csrfToken !== sessionToken) {
-    return res.status(403).json({
-      success: false,
-      message: 'Invalid CSRF token',
-      code: 'CSRF_INVALID'
-    });
-  }
-
-  next();
+  // CSRF is disabled for localStorage/JWT based authentication
+  return next();
 };
 
 // ============================================================
@@ -128,16 +114,13 @@ const recordLoginAttempt = (req, success) => {
     const attempt = req._loginAttempt || loginAttempts.get(key) || { count: 0, firstAttempt: Date.now(), blockUntil: null };
     
     if (success) {
-        // Successful login - Reset attempts
         loginAttempts.delete(key);
         return;
     }
     
-    // Failed attempt
     attempt.count++;
     attempt.firstAttempt = attempt.firstAttempt || Date.now();
     
-    // If 5 failed attempts, block for 12 hours
     if (attempt.count >= 5) {
         attempt.blockUntil = Date.now() + 12 * 60 * 60 * 1000; // 12 hours
         console.log(`🔒 IP ${key} blocked for 12 hours after ${attempt.count} failed attempts`);
@@ -147,16 +130,16 @@ const recordLoginAttempt = (req, success) => {
 };
 
 // ============================================================
-// ADMIN CREDENTIALS - Multiple Admins (YOUR EXISTING CODE)
+// ADMIN CREDENTIALS - Multiple Admins
 // ============================================================
 const ADMINS = [
   {
     id: 1,
-    username: process.env.ADMIN_USERNAME || process.env.ADMIN_USERNAME || 'admin',
-    email: process.env.ADMIN_EMAIL || process.env.ADMIN_EMAIL || 'vikshant07@gmail.com',
+    username: process.env.ADMIN_USERNAME || 'admin',
+    email: process.env.ADMIN_EMAIL || 'vikshant07@gmail.com',
     name: process.env.ADMIN_NAME || 'VIKSHANT KRALTA',
     role: 'Super Admin',
-    passwordHash: process.env.ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD_HASH
+    passwordHash: process.env.ADMIN_PASSWORD_HASH
   },
   {
     id: 2,
@@ -169,18 +152,18 @@ const ADMINS = [
 ].filter(admin => admin.username && admin.passwordHash);
 
 if (ADMINS.length === 0) {
-  console.warn('⚠️  No admins configured! Set ADMIN1_* and/or ADMIN2_* variables in Render Environment Variables.');
+  console.warn('⚠️ No admins configured!');
 } else {
   console.log(`✅ ${ADMINS.length} admin(s) loaded:`, ADMINS.map(a => a.username).join(', '));
 }
 
 // ============================================================
-// SCHOOL LOGO URL - (YOUR EXISTING CODE)
+// SCHOOL LOGO URL
 // ============================================================
 const SCHOOL_LOGO_URL = process.env.SCHOOL_LOGO_URL || 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png';
 
 // ============================================================
-// EMAIL SENDING (Brevo) - (YOUR EXISTING CODE)
+// EMAIL SENDING (Brevo)
 // ============================================================
 const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'magicalmathsquiz@gmail.com';
 const BREVO_SENDER_NAME = 'GSSS SHILLA';
@@ -210,7 +193,6 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
       <tr>
         <td align="center">
           <table role="presentation" width="100%" style="max-width:520px; background:#ffffff; border-radius:16px; overflow:hidden; box-shadow: 0 4px 18px rgba(0,0,0,0.08);">
-            
             <tr>
               <td style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #0ea5e9 100%); padding: 32px 24px; text-align:center;">
                 <img src="${SCHOOL_LOGO_URL}" alt="GSSS SHILLA" width="82" height="82" style="border-radius:50%; background:#ffffff; padding:6px; margin-bottom:12px; display:inline-block;" />
@@ -218,14 +200,12 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
                 <p style="color:#e0e7ff; font-size:13px; margin:0;">Government Senior Secondary School Shilla</p>
               </td>
             </tr>
-
             <tr>
               <td style="padding: 32px 28px;">
                 <h2 style="color:#1e293b; font-size:19px; margin:0 0 6px 0;">${headingText}</h2>
                 <p style="color:#64748b; font-size:14px; line-height:1.6; margin:0 0 20px 0;">
                   Hi, ${recipientName}! <br>${introText}
                 </p>
-
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                   <tr>
                     <td align="center" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px dashed #6366f1; border-radius: 12px; padding: 20px;">
@@ -236,13 +216,11 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
                     </td>
                   </tr>
                 </table>
-
                 <p style="color:#94a3b8; font-size:12.5px; line-height:1.6; margin:20px 0 0 0;">
                   ⏱ This OTP is valid for <strong>5 minutes</strong>. <br> <strong>Note:</strong> If you did not request this, please ignore this email or contact the school administration.
                 </p>
               </td>
             </tr>
-
             <tr>
               <td style="background:#f8fafc; padding: 18px 24px; text-align:center; border-top:1px solid #e2e8f0;">
                 <p style="margin:0; color:#94a3b8; font-size:11.5px;">
@@ -250,7 +228,6 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
                 </p>
               </td>
             </tr>
-
           </table>
         </td>
       </tr>
@@ -282,12 +259,12 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
 }
 
 // ============================================================
-// STORE OTP IN MEMORY - (YOUR EXISTING CODE)
+// STORE OTP IN MEMORY
 // ============================================================
 let otpStore = {};
 
 // ============================================================
-// HELPER - Generate OTP - (YOUR EXISTING CODE)
+// HELPER - Generate OTP
 // ============================================================
 function generateOTP() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -303,7 +280,7 @@ function generateOTP() {
 }
 
 // ============================================================
-// HELPER - Find admin - (YOUR EXISTING CODE)
+// HELPER - Find admin
 // ============================================================
 function findAdminByUsername(username) {
   return ADMINS.find(a => a.username === username);
@@ -315,7 +292,7 @@ function findAdminByEmail(email) {
 
 // ============================================================
 // ============================================================
-// 1. TEST ROUTE - (YOUR EXISTING CODE)
+// 1. TEST ROUTE
 // ============================================================
 router.get('/test', (req, res) => {
   console.log('📥 Test route hit!');
@@ -323,10 +300,9 @@ router.get('/test', (req, res) => {
 });
 
 // ============================================================
-// 2. CSRF TOKEN ROUTE - (NEW)
+// 2. CSRF TOKEN ROUTE
 // ============================================================
 router.get('/csrf-token', (req, res) => {
-  const { v4: uuidv4 } = require('uuid');
   const csrfToken = uuidv4();
   req.session.csrfToken = csrfToken;
   
@@ -337,9 +313,9 @@ router.get('/csrf-token', (req, res) => {
 });
 
 // ============================================================
-// 3. LOGIN ROUTE - SEND OTP - (YOUR EXISTING CODE - MODIFIED)
+// 3. LOGIN ROUTE - WITH ATTEMPT TRACKING
 // ============================================================
-router.post('/login', async (req, res) => {
+router.post('/login', checkLoginAttempts, async (req, res) => {
   console.log('🔥 LOGIN ROUTE HIT');
 
   const { username, password } = req.body;
@@ -347,24 +323,29 @@ router.post('/login', async (req, res) => {
   if (!username || !password) {
     return res.status(400).json({
       success: false,
-      message: 'Username and password are required'
+      message: 'Username and password are required',
+      code: 'MISSING_FIELDS'
     });
   }
 
   try {
     const admin = findAdminByUsername(username);
     if (!admin) {
+      recordLoginAttempt(req, false);
       return res.status(401).json({
         success: false,
-        message: 'Invalid username or password'
+        message: 'Invalid username or password',
+        code: 'INVALID_CREDENTIALS'
       });
     }
 
     const isMatch = await bcrypt.compare(password, admin.passwordHash);
     if (!isMatch) {
+      recordLoginAttempt(req, false);
       return res.status(401).json({
         success: false,
-        message: 'Invalid username or password'
+        message: 'Invalid username or password',
+        code: 'INVALID_CREDENTIALS'
       });
     }
 
@@ -381,30 +362,40 @@ router.post('/login', async (req, res) => {
       console.error('❌ Failed to send OTP email:', emailErr.message);
       return res.status(500).json({
         success: false,
-        message: 'OTP generated but failed to send email. Check email configuration.'
+        message: 'OTP generated but failed to send email. Check email configuration.',
+        code: 'EMAIL_FAILED'
       });
     }
 
-    // Generate CSRF token for the session
-    const { v4: uuidv4 } = require('uuid');
-    req.session.csrfToken = uuidv4();
+    // Record successful attempt (resets counter)
+    recordLoginAttempt(req, true);
+
+    // Generate CSRF token
+    const csrfToken = uuidv4();
+    req.session.csrfToken = csrfToken;
 
     res.json({
       success: true,
-      message: 'OTP sent successfully to your email!'
+      message: 'OTP sent successfully to your email!',
+      data: {
+        username: admin.username,
+        email: admin.email,
+        otpSent: true
+      }
     });
 
   } catch (error) {
     console.error('❌ Login Error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error: ' + error.message
+      message: 'Server error: ' + error.message,
+      code: 'SERVER_ERROR'
     });
   }
 });
 
 // ============================================================
-// 4. VERIFY OTP ROUTE - (YOUR EXISTING CODE - MODIFIED)
+// 4. VERIFY OTP ROUTE
 // ============================================================
 router.post('/verify-otp', async (req, res) => {
   console.log('🔥 VERIFY OTP ROUTE HIT');
@@ -414,33 +405,54 @@ router.post('/verify-otp', async (req, res) => {
   if (!username || !password || !otp) {
     return res.status(400).json({
       success: false,
-      message: 'Username, password and OTP are required'
+      message: 'Username, password and OTP are required',
+      code: 'MISSING_FIELDS'
     });
   }
 
   try {
     const admin = findAdminByUsername(username);
     if (!admin) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid credentials',
+        code: 'INVALID_CREDENTIALS'
+      });
     }
 
     const isMatch = await bcrypt.compare(password, admin.passwordHash);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid credentials',
+        code: 'INVALID_CREDENTIALS'
+      });
     }
 
     const stored = otpStore[username];
     if (!stored) {
-      return res.status(401).json({ success: false, message: 'No OTP found. Please request a new one.' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'No OTP found. Please request a new one.',
+        code: 'NO_OTP'
+      });
     }
 
     if (stored.otp !== otp.toUpperCase()) {
-      return res.status(401).json({ success: false, message: 'Invalid OTP' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid OTP',
+        code: 'INVALID_OTP'
+      });
     }
 
     if (Date.now() > stored.expiry) {
       delete otpStore[username];
-      return res.status(401).json({ success: false, message: 'OTP expired. Please request a new one.' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'OTP expired. Please request a new one.',
+        code: 'OTP_EXPIRED'
+      });
     }
 
     delete otpStore[username];
@@ -457,15 +469,12 @@ router.post('/verify-otp', async (req, res) => {
       { expiresIn: '24h' }
     );
 
-    // Generate refresh token
     const refreshToken = jwt.sign(
       { id: admin.id },
       process.env.JWT_REFRESH_SECRET || JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    // Generate CSRF token
-    const { v4: uuidv4 } = require('uuid');
     const csrfToken = uuidv4();
     req.session.csrfToken = csrfToken;
 
@@ -488,12 +497,16 @@ router.post('/verify-otp', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Verify OTP Error:', error);
-    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error: ' + error.message,
+      code: 'SERVER_ERROR'
+    });
   }
 });
 
 // ============================================================
-// 5. REFRESH TOKEN ROUTE - (NEW)
+// 5. REFRESH TOKEN ROUTE
 // ============================================================
 router.post('/refresh-token', async (req, res) => {
   const { refreshToken } = req.body;
@@ -501,7 +514,8 @@ router.post('/refresh-token', async (req, res) => {
   if (!refreshToken) {
     return res.status(401).json({
       success: false,
-      message: 'Refresh token required'
+      message: 'Refresh token required',
+      code: 'NO_REFRESH_TOKEN'
     });
   }
 
@@ -512,7 +526,8 @@ router.post('/refresh-token', async (req, res) => {
     if (!admin) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid refresh token'
+        message: 'Invalid refresh token',
+        code: 'INVALID_REFRESH_TOKEN'
       });
     }
 
@@ -534,7 +549,6 @@ router.post('/refresh-token', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    const { v4: uuidv4 } = require('uuid');
     const csrfToken = uuidv4();
     req.session.csrfToken = csrfToken;
 
@@ -546,22 +560,35 @@ router.post('/refresh-token', async (req, res) => {
     });
 
   } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Refresh token expired',
+        code: 'REFRESH_TOKEN_EXPIRED'
+      });
+    }
     return res.status(401).json({
       success: false,
-      message: 'Invalid refresh token'
+      message: 'Invalid refresh token',
+      code: 'INVALID_REFRESH_TOKEN'
     });
   }
 });
 
 // ============================================================
-// 6. VERIFY ROUTE - (YOUR EXISTING CODE - MODIFIED)
+// 6. VERIFY ROUTE
 // ============================================================
 router.get('/verify', verifyToken, (req, res) => {
-  res.json({ success: true, admin: req.admin, message: 'Token is valid' });
+  res.json({ 
+    success: true, 
+    admin: req.admin, 
+    message: 'Token is valid',
+    code: 'TOKEN_VALID'
+  });
 });
 
 // ============================================================
-// 7. PROFILE ROUTE - (YOUR EXISTING CODE - MODIFIED)
+// 7. PROFILE ROUTE
 // ============================================================
 router.get('/profile', verifyToken, (req, res) => {
   res.json({
@@ -578,11 +605,12 @@ router.get('/profile', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 8. LOGOUT ROUTE - (YOUR EXISTING CODE - MODIFIED)
+// 8. LOGOUT ROUTE
 // ============================================================
 router.post('/logout', verifyToken, (req, res) => {
-  // Clear session
-  req.session.destroy();
+  if (req.session) {
+    req.session.destroy();
+  }
   
   res.json({ 
     success: true, 
@@ -591,18 +619,18 @@ router.post('/logout', verifyToken, (req, res) => {
 });
 
 // ============================================================
-// 9. EXTEND SESSION - (NEW)
+// 9. EXTEND SESSION
 // ============================================================
 router.post('/extend-session', verifyToken, (req, res) => {
   res.json({
     success: true,
     message: 'Session extended',
-    expiresIn: 30 * 60 // 30 minutes
+    expiresIn: 30 * 60
   });
 });
 
 // ============================================================
-// 10. SEND RESET OTP - (YOUR EXISTING CODE)
+// 10. SEND RESET OTP
 // ============================================================
 router.post('/send-reset-otp', async (req, res) => {
   console.log('🔥 SEND RESET OTP ROUTE HIT');
@@ -610,13 +638,21 @@ router.post('/send-reset-otp', async (req, res) => {
   const { email } = req.body;
 
   if (!email) {
-    return res.status(400).json({ success: false, message: 'Email is required' });
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Email is required',
+      code: 'MISSING_EMAIL'
+    });
   }
 
   try {
     const admin = findAdminByEmail(email);
     if (!admin) {
-      return res.status(404).json({ success: false, message: 'Email not found in our system' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Email not found in our system',
+        code: 'EMAIL_NOT_FOUND'
+      });
     }
 
     const otp = generateOTP();
@@ -632,7 +668,8 @@ router.post('/send-reset-otp', async (req, res) => {
       console.error('❌ Failed to send reset OTP email:', emailErr.message);
       return res.status(500).json({
         success: false,
-        message: 'OTP generated but failed to send email. Check email configuration.'
+        message: 'OTP generated but failed to send email. Check email configuration.',
+        code: 'EMAIL_FAILED'
       });
     }
 
@@ -643,12 +680,16 @@ router.post('/send-reset-otp', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Send Reset OTP Error:', error);
-    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error: ' + error.message,
+      code: 'SERVER_ERROR'
+    });
   }
 });
 
 // ============================================================
-// 11. RESET PASSWORD - (YOUR EXISTING CODE)
+// 11. RESET PASSWORD
 // ============================================================
 router.post('/reset-password', async (req, res) => {
   console.log('🔥 RESET PASSWORD ROUTE HIT');
@@ -656,35 +697,63 @@ router.post('/reset-password', async (req, res) => {
   const { email, otp, newPassword, confirmPassword } = req.body;
 
   if (!email || !otp || !newPassword) {
-    return res.status(400).json({ success: false, message: 'Email, OTP and new password are required' });
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Email, OTP and new password are required',
+      code: 'MISSING_FIELDS'
+    });
   }
 
   if (newPassword !== confirmPassword) {
-    return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Passwords do not match',
+      code: 'PASSWORD_MISMATCH'
+    });
   }
 
   if (newPassword.length < 6) {
-    return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Password must be at least 6 characters',
+      code: 'PASSWORD_TOO_SHORT'
+    });
   }
 
   try {
     const admin = findAdminByEmail(email);
     if (!admin) {
-      return res.status(404).json({ success: false, message: 'Email not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Email not found',
+        code: 'EMAIL_NOT_FOUND'
+      });
     }
 
     const stored = otpStore[`reset_${email}`];
     if (!stored) {
-      return res.status(401).json({ success: false, message: 'No OTP found. Please request a new one.' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'No OTP found. Please request a new one.',
+        code: 'NO_OTP'
+      });
     }
 
     if (stored.otp !== otp.toUpperCase()) {
-      return res.status(401).json({ success: false, message: 'Invalid OTP' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid OTP',
+        code: 'INVALID_OTP'
+      });
     }
 
     if (Date.now() > stored.expiry) {
       delete otpStore[`reset_${email}`];
-      return res.status(401).json({ success: false, message: 'OTP expired. Please request a new one.' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'OTP expired. Please request a new one.',
+        code: 'OTP_EXPIRED'
+      });
     }
 
     delete otpStore[`reset_${email}`];
@@ -706,57 +775,127 @@ router.post('/reset-password', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Reset Password Error:', error);
-    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error: ' + error.message,
+      code: 'SERVER_ERROR'
+    });
   }
 });
 
 // ============================================================
-// 12. GENERATE HASH - (YOUR EXISTING CODE)
+// 12. GENERATE HASH
 // ============================================================
 router.get('/generate-hash/:password', async (req, res) => {
   if (process.env.ENABLE_HASH_ROUTE !== 'true') {
-    return res.status(403).json({ success: false, message: 'This route is disabled' });
+    return res.status(403).json({ 
+      success: false, 
+      message: 'This route is disabled',
+      code: 'ACCESS_DENIED'
+    });
   }
 
-  const hash = await bcrypt.hash(req.params.password, 10);
-  res.json({ success: true, hash });
+  try {
+    const hash = await bcrypt.hash(req.params.password, 10);
+    res.json({ 
+      success: true, 
+      password: req.params.password,
+      hash: hash,
+      note: 'Copy this hash and set it as ADMIN_PASSWORD_HASH or ADMIN2_PASSWORD_HASH in environment variables.'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error generating hash: ' + error.message
+    });
+  }
 });
 
 // ============================================================
-// 13. SESSION STATUS - (NEW)
+// 13. SESSION STATUS
 // ============================================================
 router.get('/session-status', verifyToken, (req, res) => {
   res.json({
     success: true,
     active: true,
-    expiresIn: 30 * 60, // 30 minutes
+    expiresIn: 30 * 60,
     remainingMinutes: 30
   });
 });
 
 // ============================================================
-// 14. DEBUG ROUTE - (YOUR EXISTING CODE - MODIFIED)
+// 14. LOGIN STATUS - Check attempts
+// ============================================================
+router.get('/login-status', (req, res) => {
+  const key = req.ip || req.connection.remoteAddress;
+  const attempt = loginAttempts.get(key);
+  
+  if (!attempt) {
+    return res.json({
+      success: true,
+      attempts: 0,
+      blocked: false,
+      message: 'No login attempts recorded'
+    });
+  }
+  
+  const now = Date.now();
+  const isBlocked = attempt.blockUntil && now < attempt.blockUntil;
+  const remainingMs = isBlocked ? attempt.blockUntil - now : 0;
+  const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
+  const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+  
+  res.json({
+    success: true,
+    attempts: attempt.count,
+    blocked: isBlocked,
+    blockUntil: attempt.blockUntil,
+    remainingMs: remainingMs,
+    remainingHours: remainingHours,
+    remainingMinutes: remainingMinutes,
+    message: isBlocked ? `Blocked for ${remainingHours} hours` : 'Not blocked'
+  });
+});
+
+// ============================================================
+// 15. DEBUG ROUTE
 // ============================================================
 router.get('/debug', (req, res) => {
   res.json({
     success: true,
     message: 'Admin router is working!',
     admins_configured: ADMINS.length,
-    routes: ['/test', '/csrf-token', '/login', '/verify-otp', '/refresh-token', '/verify', '/profile', '/logout', '/extend-session', '/send-reset-otp', '/reset-password', '/generate-hash/:password', '/session-status', '/debug'],
+    admins: ADMINS.map(a => ({ username: a.username, email: a.email, role: a.role })),
+    routes: [
+      '/test',
+      '/csrf-token',
+      '/login',
+      '/verify-otp',
+      '/refresh-token',
+      '/verify',
+      '/profile',
+      '/logout',
+      '/extend-session',
+      '/send-reset-otp',
+      '/reset-password',
+      '/generate-hash/:password',
+      '/session-status',
+      '/login-status',
+      '/debug'
+    ],
     security: {
       jwt: 'Active',
       session: 'Active',
-      csrf: 'Active',
-      rateLimiting: 'Active (via server.js)'
+      csrf: 'Disabled (localStorage auth)',
+      rateLimiting: 'Active (via server.js)',
+      loginAttempts: '5 attempts, 12 hours block'
     },
     school_logo_url: SCHOOL_LOGO_URL,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
 console.log('✅ All routes defined');
 
-// ============================================================
-// EXPORT
-// ============================================================
 module.exports = router;
