@@ -1904,59 +1904,7 @@ app.get("/analytics/stats", (req, res) => {
 // ============================================================
 // LOGIN ROUTE - WITH ATTEMPT TRACKING
 // ============================================================
-router.post('/login', 
-  checkLoginAttempts,  // ← YEH MIDDLEWARE ADD KARO
-  async (req, res) => {
-    console.log('🔐 LOGIN ROUTE HIT');
 
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username and password are required',
-        code: 'MISSING_FIELDS'
-      });
-    }
-
-    try {
-      const admin = findAdminByUsername(username);
-      if (!admin) {
-        // ❌ FAILED ATTEMPT - RECORD KARO
-        recordLoginAttempt(req, false);
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid username or password',
-          code: 'INVALID_CREDENTIALS'
-        });
-      }
-
-      const isMatch = await bcrypt.compare(password, admin.passwordHash);
-      if (!isMatch) {
-        // ❌ FAILED ATTEMPT - RECORD KARO
-        recordLoginAttempt(req, false);
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid username or password',
-          code: 'INVALID_CREDENTIALS'
-        });
-      }
-
-      // ✅ SUCCESS - Reset attempts
-      recordLoginAttempt(req, true);
-
-      // ... BAAKI LOGIN CODE (OTP GENERATE, ETC)
-      
-    } catch (error) {
-      console.error('❌ Login Error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Server error: ' + error.message,
-        code: 'SERVER_ERROR'
-      });
-    }
-  }
-);
 
 // ============================================================
 // ADMIN ROUTES - DEBUG VERSION
