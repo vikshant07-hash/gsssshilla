@@ -598,9 +598,13 @@ router.post('/refresh-token', async (req, res) => {
 // ============================================================
 // 6. VERIFY ROUTE - WITH BYPASS SUPPORT
 // ============================================================
+// ============================================================
+// 6. VERIFY ROUTE - MULTIPLE USERS SUPPORT
+// ============================================================
 router.get('/verify', (req, res) => {
   try {
     const authHeader = req.headers.authorization;
+    console.log('📋 Auth Header:', authHeader);
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ 
@@ -611,9 +615,11 @@ router.get('/verify', (req, res) => {
     }
     
     const token = authHeader.split(' ')[1];
+    console.log('📋 Token received:', token.substring(0, 20) + '...');
     
-    // 🔥 BYPASS - For testing with ?force=1
+    // 🔥 BYPASS - For testing (Single admin)
     if (token === 'bypass') {
+      console.log('✅ BYPASS mode activated');
       return res.json({
         success: true,
         admin: {
@@ -626,10 +632,16 @@ router.get('/verify', (req, res) => {
       });
     }
     
+    // Verify JWT
     const decoded = jwt.verify(token, JWT_SECRET);
+    console.log('✅ Token decoded:', decoded);
+    console.log('👤 User ID:', decoded.id);
     
+    // Find admin in ADMINS array (works for ALL users)
     const admin = ADMINS.find(a => a.id === decoded.id);
+    
     if (!admin) {
+      console.log('❌ User not found in ADMINS:', decoded.id);
       return res.status(401).json({
         success: false,
         message: 'User not found',
@@ -637,6 +649,9 @@ router.get('/verify', (req, res) => {
       });
     }
     
+    console.log('✅ Admin found:', admin.username);
+    
+    // Return admin data (works for any user in ADMINS)
     res.json({ 
       success: true, 
       admin: {
@@ -674,7 +689,6 @@ router.get('/verify', (req, res) => {
     });
   }
 });
-
 // ============================================================
 // 7. PROFILE ROUTE
 // ============================================================
