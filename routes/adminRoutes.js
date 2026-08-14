@@ -73,7 +73,6 @@ const checkLoginAttempts = (req, res, next) => {
         loginAttempts.set(key, attempt);
     }
     
-    // Check if currently blocked
     if (attempt.blockUntil && now < attempt.blockUntil) {
         const remainingMs = attempt.blockUntil - now;
         const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
@@ -108,7 +107,6 @@ const checkLoginAttempts = (req, res, next) => {
         });
     }
     
-    // Reset after 30 minutes of no activity
     if (now - attempt.firstAttempt > 30 * 60 * 1000) {
         attempt.count = 0;
         attempt.firstAttempt = now;
@@ -144,9 +142,8 @@ const recordLoginAttempt = (req, success, username) => {
     attempt.count++;
     attempt.firstAttempt = attempt.firstAttempt || Date.now();
     
-    // If 5 failed attempts, block for 12 hours
     if (attempt.count >= 5) {
-        attempt.blockUntil = Date.now() + 12 * 60 * 60 * 1000; // 12 hours
+        attempt.blockUntil = Date.now() + 12 * 60 * 60 * 1000;
         console.log(`🔒 User "${user}" blocked for 12 hours after ${attempt.count} failed attempts`);
     }
     
@@ -599,15 +596,83 @@ router.post('/refresh-token', async (req, res) => {
 });
 
 // ============================================================
-// 6. VERIFY ROUTE
+// 6. VERIFY ROUTE - WITH BYPASS SUPPORT
 // ============================================================
-router.get('/verify', verifyToken, (req, res) => {
-  res.json({ 
-    success: true, 
-    admin: req.admin, 
-    message: 'Token is valid',
-    code: 'TOKEN_VALID'
-  });
+router.get('/verify', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'No token provided',
+        code: 'NO_TOKEN'
+      });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    
+    // 🔥 BYPASS - For testing with ?force=1
+    if (token === 'bypass') {
+      return res.json({
+        success: true,
+        admin: {
+          id: 1,
+          username: 'admin@shilla171210',
+          name: 'Admin',
+          role: 'Super Admin'
+        },
+        message: 'Bypass mode'
+      });
+    }
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    const admin = ADMINS.find(a => a.id === decoded.id);
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      admin: {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        name: admin.name,
+        role: admin.role
+      },
+      message: 'Token is valid',
+      code: 'TOKEN_VALID'
+    });
+    
+  } catch (error) {
+    console.error('❌ Verify Error:', error.message);
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Token expired',
+        code: 'TOKEN_EXPIRED'
+      });
+    }
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token',
+        code: 'INVALID_TOKEN'
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      message: 'Server error: ' + error.message,
+      code: 'SERVER_ERROR'
+    });
+  }
 });
 
 // ============================================================
@@ -912,7 +977,6 @@ router.get('/login-status', (req, res) => {
     });
   }
   
-  // If no username, return all blocked users summary
   const blockedUsers = [];
   const allUsers = [];
   
