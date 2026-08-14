@@ -596,10 +596,7 @@ router.post('/refresh-token', async (req, res) => {
 });
 
 // ============================================================
-// 6. VERIFY ROUTE - WITH BYPASS SUPPORT
-// ============================================================
-// ============================================================
-// 6. VERIFY ROUTE - MULTIPLE USERS SUPPORT
+// 6. VERIFY ROUTE - FIXED: NO BYPASS
 // ============================================================
 router.get('/verify', (req, res) => {
   try {
@@ -617,20 +614,7 @@ router.get('/verify', (req, res) => {
     const token = authHeader.split(' ')[1];
     console.log('📋 Token received:', token.substring(0, 20) + '...');
     
-    // 🔥 BYPASS - For testing (Single admin)
-    if (token === 'bypass') {
-      console.log('✅ BYPASS mode activated');
-      return res.json({
-        success: true,
-        admin: {
-          id: 1,
-          username: 'admin@shilla171210',
-          name: 'Admin',
-          role: 'Super Admin'
-        },
-        message: 'Bypass mode'
-      });
-    }
+    // ✅ REMOVED BYPASS - Now all tokens must be valid JWT
     
     // Verify JWT
     const decoded = jwt.verify(token, JWT_SECRET);
@@ -689,6 +673,7 @@ router.get('/verify', (req, res) => {
     });
   }
 });
+
 // ============================================================
 // 7. PROFILE ROUTE
 // ============================================================
