@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../config/db');
+const { db } = require('../config/db');  // ← db pool import
 const { cloudinary } = require('../config/cloudinary');
 
 // ============================================================
-// STUDENT ROUTES
+// STUDENT ROUTES - Using db.query (callback based)
 // ============================================================
 
 // GET all students (with class filter)
@@ -619,7 +619,7 @@ router.post('/setup', (req, res) => {
                 } else {
                     res.json({ 
                         success: true, 
-                        message: 'All tables created successfully!' 
+                        message: 'All tables created successfully! Students and Results tables are ready.' 
                     });
                 }
             }
