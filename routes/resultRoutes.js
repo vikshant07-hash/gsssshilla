@@ -62,39 +62,68 @@ router.get('/students/class/:class', (req, res) => {
 });
 
 // Add this route in resultRoutes.js
+// ============================================================
+// PHOTO UPLOAD ROUTE - Cloudinary (FIXED)
+// ============================================================
 router.post('/upload-photo', async (req, res) => {
     try {
+        console.log('📸 Photo upload request received');
+        console.log('📸 req.files:', req.files);
+        
         if (!req.files || !req.files.photo) {
-            return res.status(400).json({ success: false, message: 'No photo uploaded' });
+            return res.status(400).json({ 
+                success: false, 
+                message: 'No photo uploaded. Please select an image file.' 
+            });
         }
 
         const file = req.files.photo;
-        
-        // Validate image
+        console.log('📸 File name:', file.name);
+        console.log('📸 File size:', file.size);
+        console.log('📸 File mimetype:', file.mimetype);
+
+        // Validate file type
         const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
         if (!validTypes.includes(file.mimetype)) {
-            return res.status(400).json({ success: false, message: 'Only JPG, PNG, WebP allowed' });
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Only JPG, PNG, WebP images are allowed. Got: ' + file.mimetype 
+            });
+        }
+
+        // Validate file size (2MB)
+        if (file.size > 2 * 1024 * 1024) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Photo size must be less than 2MB. Got: ' + (file.size / 1024 / 1024).toFixed(2) + 'MB' 
+            });
         }
 
         // Upload to Cloudinary
         const result = await cloudinary.uploader.upload(file.tempFilePath, {
             folder: 'students',
             transformation: [
-                { width: 200, height: 200, crop: 'thumb', gravity: 'face' },
+                { width: 300, height: 300, crop: 'thumb', gravity: 'face' },
                 { quality: 'auto:good' }
             ]
         });
+
+        console.log('✅ Photo uploaded to Cloudinary:', result.secure_url);
 
         res.json({ 
             success: true, 
             data: {
                 url: result.secure_url,
                 publicId: result.public_id
-            }
+            },
+            message: 'Photo uploaded successfully!'
         });
     } catch (error) {
         console.error('❌ Photo upload error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ 
+            success: false, 
+            message: error.message || 'Failed to upload photo to Cloudinary' 
+        });
     }
 });
 
