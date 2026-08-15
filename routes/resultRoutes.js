@@ -295,15 +295,25 @@ router.delete('/students/:id', (req, res) => {
 // ============================================================
 
 // Upload marksheet (PDF)
+// Upload marksheet (PDF)
 router.post('/upload', async (req, res) => {
     try {
+        // 🔥 DEBUG: Log entire request body
+        console.log('📤 Upload request received');
+        console.log('📤 req.body:', req.body);
+        console.log('📤 req.files:', req.files ? 'Files present' : 'No files');
+        console.log('📤 req.files.marksheet:', req.files?.marksheet ? req.files.marksheet.name : 'No marksheet');
+        
         const { studentId } = req.body;
+        console.log('📤 studentId from body:', studentId);
         
         if (!studentId) {
+            console.log('❌ ERROR: studentId is missing from req.body');
             return res.status(400).json({ success: false, message: 'Student ID is required' });
         }
 
         if (!req.files || !req.files.marksheet) {
+            console.log('❌ ERROR: No file uploaded');
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
 
@@ -407,7 +417,6 @@ router.post('/upload', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-
 // Get result status
 router.get('/status/:studentId', (req, res) => {
     const { studentId } = req.params;
