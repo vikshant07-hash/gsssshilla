@@ -61,6 +61,43 @@ router.get('/students/class/:class', (req, res) => {
     });
 });
 
+// Add this route in resultRoutes.js
+router.post('/upload-photo', async (req, res) => {
+    try {
+        if (!req.files || !req.files.photo) {
+            return res.status(400).json({ success: false, message: 'No photo uploaded' });
+        }
+
+        const file = req.files.photo;
+        
+        // Validate image
+        const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
+        if (!validTypes.includes(file.mimetype)) {
+            return res.status(400).json({ success: false, message: 'Only JPG, PNG, WebP allowed' });
+        }
+
+        // Upload to Cloudinary
+        const result = await cloudinary.uploader.upload(file.tempFilePath, {
+            folder: 'students',
+            transformation: [
+                { width: 200, height: 200, crop: 'thumb', gravity: 'face' },
+                { quality: 'auto:good' }
+            ]
+        });
+
+        res.json({ 
+            success: true, 
+            data: {
+                url: result.secure_url,
+                publicId: result.public_id
+            }
+        });
+    } catch (error) {
+        console.error('❌ Photo upload error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // GET single student
 router.get('/students/:id', (req, res) => {
     const { id } = req.params;
