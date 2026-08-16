@@ -12,6 +12,9 @@ const { db } = require("./config/db");
 
 // After other imports
 const resultRoutes = require('./routes/resultRoutes');
+// Add result routes (before auth middleware)
+app.use('/api/result', resultRoutes);
+
 
 // 🔐 Import Auth Middleware
 const authMiddleware = require('./middleware/auth');
@@ -31,8 +34,6 @@ app.use(fileUpload({
     limits: { fileSize: 50 * 1024 * 1024 }
 }));
 
-// Add result routes (before auth middleware)
-app.use('/api/result', resultRoutes);
 
 // ============================================================
 // RATE LIMITING
