@@ -11,10 +11,20 @@ const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, up
 const { db } = require("./config/db");
 
 // After other imports
-
 const resultRoutes = require('./routes/resultRoutes');
 
-// After app.use(express.urlencoded...)
+// 🔐 Import Auth Middleware
+const authMiddleware = require('./middleware/auth');
+
+// ============================================================
+// ✅ STEP 1: PEHLE app DECLARE KAREIN
+// ============================================================
+const app = express();
+app.set("trust proxy", 1);
+
+// ============================================================
+// ✅ STEP 2: AB app.use USE KAREIN
+// ============================================================
 app.use(fileUpload({
     useTempFiles: true,
     tempFileDir: '/tmp/',
@@ -23,11 +33,6 @@ app.use(fileUpload({
 
 // Add result routes (before auth middleware)
 app.use('/api/result', resultRoutes);
-// 🔐 Import Auth Middleware
-const authMiddleware = require('./middleware/auth');
-
-const app = express();
-app.set("trust proxy", 1);
 
 // ============================================================
 // RATE LIMITING
@@ -104,9 +109,7 @@ const checkSession = (req, res, next) => {
 };
 
 // ============================================================
-// ============================================================
 // 🟢 PART 1: ALL PUBLIC ROUTES (NO AUTH REQUIRED)
-// ============================================================
 // ============================================================
 
 // 1. Home route
@@ -159,9 +162,6 @@ app.post("/contact", (req, res) => {
         }
     );
 });
-
-
-app.use('/api/result', resultRoutes);
 
 // 4. Public analytics tracking
 app.get("/analytics/track", (req, res) => {
@@ -470,9 +470,7 @@ app.get("/api/notifications/public", (req, res) => {
 });
 
 // ============================================================
-// ============================================================
 // 🟡 PART 2: ADMIN ROUTES (Registered BEFORE auth middleware)
-// ============================================================
 // ============================================================
 
 console.log('🔧 Loading admin routes...');
@@ -492,9 +490,7 @@ try {
 }
 
 // ============================================================
-// ============================================================
 // 🔴 PART 3: PROTECTED ROUTES (Auth middleware ke BAAD)
-// ============================================================
 // ============================================================
 
 app.use(authMiddleware);
