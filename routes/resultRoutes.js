@@ -1,26 +1,29 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../config/db');  // ← db pool import
-const { cloudinary } = require('../config/cloudinary');
+const { db } = require('../config/db');
+const cloudinary = require('cloudinary').v2;
+
+// Cloudinary config
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // ============================================================
-// STUDENT ROUTES - Using db.query (callback based)
+// STUDENT ROUTES - Without Photo
 // ============================================================
 
 // GET all students (with class filter)
 router.get('/students', (req, res) => {
     const { class: classFilter } = req.query;
-    
     let query = 'SELECT * FROM students';
     let params = [];
-    
     if (classFilter) {
         query += ' WHERE class = ?';
         params.push(classFilter);
     }
-    
     query += ' ORDER BY student_name ASC';
-    
     db.query(query, params, (err, results) => {
         if (err) {
             console.error('❌ Error fetching students:', err);
@@ -33,7 +36,6 @@ router.get('/students', (req, res) => {
 // GET students by class with result status
 router.get('/students/class/:class', (req, res) => {
     const { class: className } = req.params;
-    
     const query = `
         SELECT s.*, 
                r.id as result_id, 
@@ -51,7 +53,6 @@ router.get('/students/class/:class', (req, res) => {
         WHERE s.class = ?
         ORDER BY s.student_name ASC
     `;
-    
     db.query(query, [className], (err, results) => {
         if (err) {
             console.error('❌ Error fetching class students:', err);
@@ -61,76 +62,9 @@ router.get('/students/class/:class', (req, res) => {
     });
 });
 
-// Add this route in resultRoutes.js
-// ============================================================
-// PHOTO UPLOAD ROUTE - Cloudinary (FIXED)
-// ============================================================
-router.post('/upload-photo', async (req, res) => {
-    try {
-        console.log('📸 Photo upload request received');
-        console.log('📸 req.files:', req.files);
-        
-        if (!req.files || !req.files.photo) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'No photo uploaded. Please select an image file.' 
-            });
-        }
-
-        const file = req.files.photo;
-        console.log('📸 File name:', file.name);
-        console.log('📸 File size:', file.size);
-        console.log('📸 File mimetype:', file.mimetype);
-
-        // Validate file type
-        const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
-        if (!validTypes.includes(file.mimetype)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Only JPG, PNG, WebP images are allowed. Got: ' + file.mimetype 
-            });
-        }
-
-        // Validate file size (2MB)
-        if (file.size > 2 * 1024 * 1024) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Photo size must be less than 2MB. Got: ' + (file.size / 1024 / 1024).toFixed(2) + 'MB' 
-            });
-        }
-
-        // Upload to Cloudinary
-        const result = await cloudinary.uploader.upload(file.tempFilePath, {
-            folder: 'students',
-            transformation: [
-                { width: 300, height: 300, crop: 'thumb', gravity: 'face' },
-                { quality: 'auto:good' }
-            ]
-        });
-
-        console.log('✅ Photo uploaded to Cloudinary:', result.secure_url);
-
-        res.json({ 
-            success: true, 
-            data: {
-                url: result.secure_url,
-                publicId: result.public_id
-            },
-            message: 'Photo uploaded successfully!'
-        });
-    } catch (error) {
-        console.error('❌ Photo upload error:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: error.message || 'Failed to upload photo to Cloudinary' 
-        });
-    }
-});
-
 // GET single student
 router.get('/students/:id', (req, res) => {
     const { id } = req.params;
-    
     db.query('SELECT * FROM students WHERE id = ?', [id], (err, results) => {
         if (err) {
             console.error('❌ Error fetching student:', err);
@@ -143,17 +77,17 @@ router.get('/students/:id', (req, res) => {
     });
 });
 
-// POST create student
+// POST create student (Without Photo)
 router.post('/students', (req, res) => {
     const {
         studentName, fatherName, motherName, studentId, apaarId,
         class: className, aaharNumber, examRollNo, dateOfBirth,
-        session, examType, stream, studentPhoto
+        session, examType, stream
     } = req.body;
 
     if (!studentName || !fatherName || !motherName || !studentId || !apaarId ||
         !className || !aaharNumber || !examRollNo || !dateOfBirth ||
-        !session || !examType || !studentPhoto) {
+        !session || !examType) {
         return res.status(400).json({ 
             success: false, 
             message: 'All fields are required' 
@@ -165,7 +99,6 @@ router.post('/students', (req, res) => {
             console.error('❌ Error checking duplicate:', err);
             return res.status(500).json({ success: false, message: err.message });
         }
-        
         if (results && results.length > 0) {
             return res.status(400).json({ 
                 success: false, 
@@ -177,20 +110,18 @@ router.post('/students', (req, res) => {
             INSERT INTO students (
                 student_name, father_name, mother_name, student_id, apaar_id,
                 class, aahar_number, exam_roll_no, date_of_birth,
-                session, exam_type, stream, student_photo, result_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                session, exam_type, stream, result_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
         `;
-
         db.query(query, [
             studentName, fatherName, motherName, studentId, apaarId,
             className, aaharNumber, examRollNo, dateOfBirth,
-            session, examType, stream || '', studentPhoto
+            session, examType, stream || ''
         ], (insertErr, result) => {
             if (insertErr) {
                 console.error('❌ Error inserting student:', insertErr);
                 return res.status(500).json({ success: false, message: insertErr.message });
             }
-
             db.query('SELECT * FROM students WHERE id = ?', [result.insertId], (fetchErr, newStudent) => {
                 if (fetchErr) {
                     console.error('❌ Error fetching new student:', fetchErr);
@@ -206,11 +137,10 @@ router.post('/students', (req, res) => {
     });
 });
 
-// PUT update student
+// PUT update student (Without Photo)
 router.put('/students/:id', (req, res) => {
     const { id } = req.params;
     const updates = req.body;
-
     db.query('SELECT * FROM students WHERE id = ?', [id], (err, results) => {
         if (err) {
             console.error('❌ Error checking student:', err);
@@ -219,39 +149,32 @@ router.put('/students/:id', (req, res) => {
         if (!results || results.length === 0) {
             return res.status(404).json({ success: false, message: 'Student not found' });
         }
-
         const allowedFields = [
             'student_name', 'father_name', 'mother_name', 'student_id',
             'apaar_id', 'class', 'aahar_number', 'exam_roll_no',
-            'date_of_birth', 'session', 'exam_type', 'stream', 'student_photo'
+            'date_of_birth', 'session', 'exam_type', 'stream'
         ];
-
         const fields = [];
         const values = [];
-
         for (const [key, value] of Object.entries(updates)) {
             if (allowedFields.includes(key) && value !== undefined) {
                 fields.push(`${key} = ?`);
                 values.push(value);
             }
         }
-
         if (fields.length === 0) {
             return res.status(400).json({ 
                 success: false, 
                 message: 'No valid fields to update' 
             });
         }
-
         values.push(id);
         const query = `UPDATE students SET ${fields.join(', ')} WHERE id = ?`;
-
         db.query(query, values, (updateErr) => {
             if (updateErr) {
                 console.error('❌ Error updating student:', updateErr);
                 return res.status(500).json({ success: false, message: updateErr.message });
             }
-
             db.query('SELECT * FROM students WHERE id = ?', [id], (fetchErr, updated) => {
                 if (fetchErr) {
                     console.error('❌ Error fetching updated student:', fetchErr);
@@ -270,7 +193,6 @@ router.put('/students/:id', (req, res) => {
 // DELETE student
 router.delete('/students/:id', (req, res) => {
     const { id } = req.params;
-
     db.query('SELECT * FROM students WHERE id = ?', [id], (err, results) => {
         if (err) {
             console.error('❌ Error checking student:', err);
@@ -279,7 +201,6 @@ router.delete('/students/:id', (req, res) => {
         if (!results || results.length === 0) {
             return res.status(404).json({ success: false, message: 'Student not found' });
         }
-
         db.query('DELETE FROM students WHERE id = ?', [id], (deleteErr) => {
             if (deleteErr) {
                 console.error('❌ Error deleting student:', deleteErr);
@@ -295,34 +216,19 @@ router.delete('/students/:id', (req, res) => {
 // ============================================================
 
 // Upload marksheet (PDF)
-// Upload marksheet (PDF)
 router.post('/upload', async (req, res) => {
     try {
-        // 🔥 DEBUG: Log entire request body
-        console.log('📤 Upload request received');
-        console.log('📤 req.body:', req.body);
-        console.log('📤 req.files:', req.files ? 'Files present' : 'No files');
-        console.log('📤 req.files.marksheet:', req.files?.marksheet ? req.files.marksheet.name : 'No marksheet');
-        
         const { studentId } = req.body;
-        console.log('📤 studentId from body:', studentId);
-        
         if (!studentId) {
-            console.log('❌ ERROR: studentId is missing from req.body');
             return res.status(400).json({ success: false, message: 'Student ID is required' });
         }
-
         if (!req.files || !req.files.marksheet) {
-            console.log('❌ ERROR: No file uploaded');
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
-
         const file = req.files.marksheet;
-        
         if (file.mimetype !== 'application/pdf') {
             return res.status(400).json({ success: false, message: 'Only PDF files are allowed' });
         }
-
         db.query('SELECT * FROM students WHERE id = ?', [studentId], async (err, studentResults) => {
             if (err) {
                 console.error('❌ Error checking student:', err);
@@ -331,20 +237,17 @@ router.post('/upload', async (req, res) => {
             if (!studentResults || studentResults.length === 0) {
                 return res.status(404).json({ success: false, message: 'Student not found' });
             }
-
             try {
                 const result = await cloudinary.uploader.upload(file.tempFilePath, {
                     folder: 'results',
                     resource_type: 'auto',
                     allowed_formats: ['pdf']
                 });
-
                 db.query('SELECT id FROM results WHERE student_id = ?', [studentId], (err2, existingResult) => {
                     if (err2) {
                         console.error('❌ Error checking existing result:', err2);
                         return res.status(500).json({ success: false, message: err2.message });
                     }
-
                     if (existingResult && existingResult.length > 0) {
                         db.query(
                             `UPDATE results SET 
@@ -360,9 +263,7 @@ router.post('/upload', async (req, res) => {
                                     console.error('❌ Error updating result:', updateErr);
                                     return res.status(500).json({ success: false, message: updateErr.message });
                                 }
-
                                 db.query('UPDATE students SET result_status = "uploaded" WHERE id = ?', [studentId]);
-
                                 db.query('SELECT * FROM results WHERE student_id = ?', [studentId], (fetchErr, updated) => {
                                     if (fetchErr) {
                                         console.error('❌ Error fetching updated result:', fetchErr);
@@ -386,9 +287,7 @@ router.post('/upload', async (req, res) => {
                                     console.error('❌ Error inserting result:', insertErr);
                                     return res.status(500).json({ success: false, message: insertErr.message });
                                 }
-
                                 db.query('UPDATE students SET result_status = "uploaded" WHERE id = ?', [studentId]);
-
                                 db.query('SELECT * FROM results WHERE id = ?', [insertResult.insertId], (fetchErr, newResult) => {
                                     if (fetchErr) {
                                         console.error('❌ Error fetching new result:', fetchErr);
@@ -417,10 +316,10 @@ router.post('/upload', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
+
 // Get result status
 router.get('/status/:studentId', (req, res) => {
     const { studentId } = req.params;
-    
     const query = `
         SELECT s.result_status, 
                r.id as result_id,
@@ -432,7 +331,6 @@ router.get('/status/:studentId', (req, res) => {
         LEFT JOIN results r ON s.id = r.student_id 
         WHERE s.id = ?
     `;
-    
     db.query(query, [studentId], (err, results) => {
         if (err) {
             console.error('❌ Error fetching status:', err);
@@ -448,7 +346,6 @@ router.get('/status/:studentId', (req, res) => {
 // Get all results for a class
 router.get('/class/:class', (req, res) => {
     const { class: className } = req.params;
-    
     const query = `
         SELECT s.*, 
                r.id as result_id,
@@ -466,7 +363,6 @@ router.get('/class/:class', (req, res) => {
         WHERE s.class = ?
         ORDER BY s.student_name ASC
     `;
-    
     db.query(query, [className], (err, results) => {
         if (err) {
             console.error('❌ Error fetching class results:', err);
@@ -479,11 +375,9 @@ router.get('/class/:class', (req, res) => {
 // Publish results for a class
 router.post('/publish', (req, res) => {
     const { class: className } = req.body;
-    
     if (!className) {
         return res.status(400).json({ success: false, message: 'Class is required' });
     }
-
     db.query(
         `SELECT s.id, r.id as result_id 
          FROM students s 
@@ -495,17 +389,14 @@ router.post('/publish', (req, res) => {
                 console.error('❌ Error fetching students:', err);
                 return res.status(500).json({ success: false, message: err.message });
             }
-
             if (!students || students.length === 0) {
                 return res.status(404).json({ 
                     success: false, 
                     message: 'No uploaded results found for this class' 
                 });
             }
-
             const resultIds = students.map(s => s.result_id);
             const placeholders = resultIds.map(() => '?').join(',');
-            
             db.query(
                 `UPDATE results SET is_published = true, published_at = CURRENT_TIMESTAMP 
                  WHERE id IN (${placeholders})`,
@@ -515,10 +406,8 @@ router.post('/publish', (req, res) => {
                         console.error('❌ Error publishing results:', updateErr);
                         return res.status(500).json({ success: false, message: updateErr.message });
                     }
-
                     const studentIds = students.map(s => s.id);
                     const studentPlaceholders = studentIds.map(() => '?').join(',');
-                    
                     db.query(
                         `UPDATE students SET result_status = 'published' 
                          WHERE id IN (${studentPlaceholders})`,
@@ -540,11 +429,9 @@ router.post('/publish', (req, res) => {
 // Unpublish results for a class
 router.post('/unpublish', (req, res) => {
     const { class: className } = req.body;
-    
     if (!className) {
         return res.status(400).json({ success: false, message: 'Class is required' });
     }
-
     db.query(
         `SELECT s.id, r.id as result_id 
          FROM students s 
@@ -556,17 +443,14 @@ router.post('/unpublish', (req, res) => {
                 console.error('❌ Error fetching students:', err);
                 return res.status(500).json({ success: false, message: err.message });
             }
-
             if (!students || students.length === 0) {
                 return res.status(404).json({ 
                     success: false, 
                     message: 'No published results found for this class' 
                 });
             }
-
             const resultIds = students.map(s => s.result_id);
             const placeholders = resultIds.map(() => '?').join(',');
-            
             db.query(
                 `UPDATE results SET is_published = false, published_at = NULL 
                  WHERE id IN (${placeholders})`,
@@ -576,10 +460,8 @@ router.post('/unpublish', (req, res) => {
                         console.error('❌ Error unpublishing results:', updateErr);
                         return res.status(500).json({ success: false, message: updateErr.message });
                     }
-
                     const studentIds = students.map(s => s.id);
                     const studentPlaceholders = studentIds.map(() => '?').join(',');
-                    
                     db.query(
                         `UPDATE students SET result_status = 'uploaded' 
                          WHERE id IN (${studentPlaceholders})`,
@@ -601,31 +483,25 @@ router.post('/unpublish', (req, res) => {
 // Delete result
 router.delete('/:studentId', (req, res) => {
     const { studentId } = req.params;
-    
     db.query('SELECT * FROM results WHERE student_id = ?', [studentId], async (err, results) => {
         if (err) {
             console.error('❌ Error fetching result:', err);
             return res.status(500).json({ success: false, message: err.message });
         }
-        
         if (!results || results.length === 0) {
             return res.status(404).json({ success: false, message: 'Result not found' });
         }
-
         const result = results[0];
-        
         try {
             await cloudinary.uploader.destroy(result.public_id);
         } catch (cloudinaryErr) {
             console.warn('⚠️ Cloudinary delete warning:', cloudinaryErr.message);
         }
-
         db.query('DELETE FROM results WHERE student_id = ?', [studentId], (deleteErr) => {
             if (deleteErr) {
                 console.error('❌ Error deleting result:', deleteErr);
                 return res.status(500).json({ success: false, message: deleteErr.message });
             }
-            
             db.query('UPDATE students SET result_status = "pending" WHERE id = ?', [studentId]);
             res.json({ success: true, message: 'Result deleted successfully' });
         });
@@ -649,7 +525,6 @@ router.post('/setup', (req, res) => {
             session VARCHAR(20) NOT NULL,
             exam_type ENUM('midterm', 'final', 'other') NOT NULL,
             stream VARCHAR(20) DEFAULT '',
-            student_photo VARCHAR(500) NOT NULL,
             result_status ENUM('pending', 'uploaded', 'published') DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -657,7 +532,6 @@ router.post('/setup', (req, res) => {
             INDEX idx_student_id (student_id),
             INDEX idx_result_status (result_status)
         )`,
-
         `CREATE TABLE IF NOT EXISTS results (
             id INT PRIMARY KEY AUTO_INCREMENT,
             student_id INT NOT NULL,
@@ -671,10 +545,8 @@ router.post('/setup', (req, res) => {
             INDEX idx_is_published (is_published)
         )`
     ];
-
     let completed = 0;
     let errors = [];
-
     queries.forEach((query, index) => {
         db.query(query, (err) => {
             if (err) {
@@ -694,7 +566,7 @@ router.post('/setup', (req, res) => {
                 } else {
                     res.json({ 
                         success: true, 
-                        message: 'All tables created successfully! Students and Results tables are ready.' 
+                        message: 'All tables created successfully!' 
                     });
                 }
             }
