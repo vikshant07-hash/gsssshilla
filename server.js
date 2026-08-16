@@ -13,18 +13,17 @@ const { db } = require("./config/db");
 // After other imports
 const resultRoutes = require('./routes/resultRoutes');
 // Add result routes (before auth middleware)
-app.use('/api/result', resultRoutes);
 
 
-// 🔐 Import Auth Middleware
-const authMiddleware = require('./middleware/auth');
+
+
 
 // ============================================================
 // ✅ STEP 1: PEHLE app DECLARE KAREIN
 // ============================================================
 const app = express();
 app.set("trust proxy", 1);
-
+app.use('/api/result', resultRoutes);
 // ============================================================
 // ✅ STEP 2: AB app.use USE KAREIN
 // ============================================================
@@ -34,6 +33,8 @@ app.use(fileUpload({
     limits: { fileSize: 50 * 1024 * 1024 }
 }));
 
+// 🔐 Import Auth Middleware
+const authMiddleware = require('./middleware/auth');
 
 // ============================================================
 // RATE LIMITING
