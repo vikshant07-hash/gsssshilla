@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('../config/cloudinary');
-const db = require('../config/database'); // Your existing DB connection
+const db = require('../config/db'); // Your existing DB connection
 
 // Configure Cloudinary storage for multer
 const storage = new CloudinaryStorage({
