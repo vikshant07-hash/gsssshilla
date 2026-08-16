@@ -1,6 +1,6 @@
 // ================================================================
-//  COMPLETE RESULT MANAGEMENT ROUTES
-//  Compatible with your existing db.js (using query function)
+//  COMPLETE RESULT MANAGEMENT ROUTES - FIXED SQL QUERIES
+//  Compatible with MySQL ONLY_FULL_GROUP_BY mode
 // ================================================================
 
 const express = require('express');
@@ -8,7 +8,7 @@ const router = express.Router();
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
-// ✅ Import from your existing db.js - using 'query' function
+// ✅ Import from your existing db.js
 const { query } = require("../config/db");
 const cloudinary = require("../config/cloudinary").cloudinary;
 
@@ -37,7 +37,7 @@ const storage = new CloudinaryStorage({
 
 const upload = multer({
     storage: storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         if (file.mimetype === 'application/pdf') {
             cb(null, true);
@@ -65,7 +65,7 @@ router.get('/students', async (req, res) => {
 
         const offset = (page - 1) * limit;
         let sql = `
-            SELECT DISTINCT
+            SELECT
                 s.id, s.student_id, s.apaar_id, s.name, s.father_name,
                 s.mother_name, s.dob, s.photo,
                 ar.session, ar.class, ar.section, ar.exam_roll_no
@@ -92,6 +92,8 @@ router.get('/students', async (req, res) => {
             params.push(`%${name}%`);
         }
 
+        // ✅ FIX: Remove DISTINCT and use GROUP BY for proper ordering
+        sql += ' GROUP BY s.id, ar.session, ar.class, ar.section, ar.exam_roll_no';
         sql += ' ORDER BY s.created_at DESC LIMIT ? OFFSET ?';
         params.push(parseInt(limit), parseInt(offset));
 
@@ -179,7 +181,6 @@ router.post('/students', async (req, res) => {
             exam_roll_no
         } = req.body;
 
-        // Validation
         if (!student_id || !name || !session || !classNum) {
             return res.status(400).json({
                 success: false,
@@ -187,7 +188,6 @@ router.post('/students', async (req, res) => {
             });
         }
 
-        // Check duplicate
         const existing = await query(
             'SELECT id FROM students WHERE student_id = ?',
             [student_id]
@@ -199,7 +199,6 @@ router.post('/students', async (req, res) => {
             });
         }
 
-        // Insert student
         const studentResult = await query(`
             INSERT INTO students
                 (student_id, apaar_id, name, father_name, mother_name, dob, photo)
@@ -208,7 +207,6 @@ router.post('/students', async (req, res) => {
 
         const studentDbId = studentResult.insertId;
 
-        // Insert academic record
         await query(`
             INSERT INTO academic_records
                 (student_id, session, class, section, exam_roll_no)
@@ -301,7 +299,6 @@ router.delete('/students/:studentId', async (req, res) => {
             });
         }
 
-        // Delete Cloudinary files
         const marksheets = await query(
             'SELECT cloudinary_public_id FROM marksheets WHERE student_id = ?',
             [students[0].id]
@@ -391,8 +388,9 @@ router.get('/class/:classId/students', async (req, res) => {
         const { session, page = 1, limit = 20 } = req.query;
         const offset = (page - 1) * limit;
 
+        // ✅ FIX: Add all non-aggregated columns to GROUP BY
         let sql = `
-            SELECT DISTINCT
+            SELECT
                 s.id, s.student_id, s.apaar_id, s.name, s.father_name,
                 s.mother_name, s.dob, s.photo,
                 ar.session, ar.class, ar.section, ar.exam_roll_no,
@@ -410,7 +408,15 @@ router.get('/class/:classId/students', async (req, res) => {
             params.push(session);
         }
 
-        sql += ' GROUP BY s.id ORDER BY s.name LIMIT ? OFFSET ?';
+        // ✅ FIX: GROUP BY all non-aggregated columns
+        sql += `
+            GROUP BY
+                s.id, s.student_id, s.apaar_id, s.name, s.father_name,
+                s.mother_name, s.dob, s.photo,
+                ar.session, ar.class, ar.section, ar.exam_roll_no
+            ORDER BY s.name
+            LIMIT ? OFFSET ?
+        `;
         params.push(parseInt(limit), parseInt(offset));
 
         const students = await query(sql, params);
@@ -441,7 +447,6 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
     try {
         const { student_id, session, class: classNum, exam_type } = req.body;
 
-        // Validation
         if (!student_id || !session || !classNum || !exam_type) {
             return res.status(400).json({
                 success: false,
@@ -464,7 +469,6 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             });
         }
 
-        // Get student
         const students = await query(
             'SELECT id FROM students WHERE student_id = ?',
             [student_id]
@@ -478,7 +482,6 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
 
         const studentDbId = students[0].id;
 
-        // Get or create academic record
         let academicRecords = await query(
             'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
             [studentDbId, session, classNum]
@@ -495,7 +498,6 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             academicRecordId = academicRecords[0].id;
         }
 
-        // Check duplicate
         const existing = await query(
             'SELECT id FROM marksheets WHERE student_id = ? AND session = ? AND class = ? AND exam_type = ?',
             [studentDbId, session, classNum, exam_type]
@@ -507,7 +509,6 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             });
         }
 
-        // Cloudinary data
         const cloudinaryData = {
             public_id: req.file.filename,
             secure_url: req.file.path,
@@ -515,7 +516,6 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             file_size: req.file.size
         };
 
-        // Insert marksheet
         await query(`
             INSERT INTO marksheets (
                 student_id, academic_record_id, session, class, exam_type,
@@ -560,6 +560,7 @@ router.get('/marksheets', async (req, res) => {
         } = req.query;
 
         const offset = (page - 1) * limit;
+        // ✅ FIX: Use uploaded_at instead of created_at
         let sql = `
             SELECT
                 m.id, m.session, m.class, m.exam_type,
@@ -595,7 +596,8 @@ router.get('/marksheets', async (req, res) => {
             params.push(is_published === 'true');
         }
 
-        sql += ' ORDER BY m.created_at DESC LIMIT ? OFFSET ?';
+        // ✅ FIX: Use uploaded_at instead of created_at
+        sql += ' ORDER BY m.uploaded_at DESC LIMIT ? OFFSET ?';
         params.push(parseInt(limit), parseInt(offset));
 
         const marksheets = await query(sql, params);
@@ -678,7 +680,6 @@ router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => 
             });
         }
 
-        // Delete old file
         if (marksheets[0].cloudinary_public_id) {
             try {
                 await cloudinary.uploader.destroy(marksheets[0].cloudinary_public_id, {
@@ -766,7 +767,6 @@ router.delete('/marksheets/:id', async (req, res) => {
 //  SECTION 4: PUBLISH / UNPUBLISH
 // ================================================================
 
-// ---------- PUBLISH Marksheet ----------
 router.post('/marksheets/:id/publish', async (req, res) => {
     try {
         const { id } = req.params;
@@ -796,7 +796,6 @@ router.post('/marksheets/:id/publish', async (req, res) => {
     }
 });
 
-// ---------- UNPUBLISH Marksheet ----------
 router.post('/marksheets/:id/unpublish', async (req, res) => {
     try {
         const { id } = req.params;
@@ -827,10 +826,9 @@ router.post('/marksheets/:id/unpublish', async (req, res) => {
 });
 
 // ================================================================
-//  SECTION 5: PUBLIC RESULT APIS (No Auth Required)
+//  SECTION 5: PUBLIC RESULT APIS
 // ================================================================
 
-// ---------- Get Available Classes ----------
 router.get('/public/classes', async (req, res) => {
     try {
         const classes = await query(`
@@ -857,7 +855,6 @@ router.get('/public/classes', async (req, res) => {
     }
 });
 
-// ---------- Get Class Results ----------
 router.get('/public/:session/:class', async (req, res) => {
     try {
         const { session, class: classNum } = req.params;
@@ -887,7 +884,6 @@ router.get('/public/:session/:class', async (req, res) => {
     }
 });
 
-// ---------- Public Student Search ----------
 router.post('/public/search', async (req, res) => {
     try {
         const { student_id, dob } = req.body;
@@ -941,7 +937,6 @@ router.post('/public/search', async (req, res) => {
     }
 });
 
-// ---------- View Published Marksheet ----------
 router.get('/public/marksheet/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -974,7 +969,6 @@ router.get('/public/marksheet/:id', async (req, res) => {
     }
 });
 
-// ---------- Download Published Marksheet ----------
 router.get('/public/marksheet/:id/download', async (req, res) => {
     try {
         const { id } = req.params;
@@ -1060,9 +1054,5 @@ router.get('/dashboard/stats', async (req, res) => {
         });
     }
 });
-
-// ================================================================
-//  EXPORT
-// ================================================================
 
 module.exports = router;
