@@ -11,7 +11,7 @@ const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, up
 const { db } = require("./config/db");
 
 // After other imports
-const fileUpload = require('express-fileupload');
+
 const resultRoutes = require('./routes/resultRoutes');
 
 // After app.use(express.urlencoded...)
