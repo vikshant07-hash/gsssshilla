@@ -1,9 +1,12 @@
+// routes/resultRoutes.js
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const cloudinary = require('../config/cloudinary');
-const db = require('../config/db'); // Your existing DB connection
+
+// ✅ Import from your existing config
+const { db } = require("../config/db");
+const cloudinary = require("../config/cloudinary").cloudinary;
 
 // Configure Cloudinary storage for multer
 const storage = new CloudinaryStorage({
@@ -27,7 +30,7 @@ const storage = new CloudinaryStorage({
 
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         if (file.mimetype === 'application/pdf') {
             cb(null, true);
@@ -38,7 +41,7 @@ const upload = multer({
 });
 
 // ============================================
-// ADMIN STUDENT MANAGEMENT
+// ADMIN STUDENT MANAGEMENT (PUBLIC - No Auth)
 // ============================================
 
 // Get all students with filters
@@ -87,16 +90,6 @@ router.get('/students', async (req, res) => {
         
         const [students] = await db.query(query, params);
         
-        // Get count for pagination
-        let countQuery = `
-            SELECT COUNT(DISTINCT s.id) as total 
-            FROM students s
-            LEFT JOIN academic_records ar ON s.id = ar.student_id
-            WHERE 1=1
-        `;
-        const countParams = [];
-        // Add same filters to count query...
-        
         res.json({
             success: true,
             data: students,
@@ -130,7 +123,6 @@ router.get('/students/:studentId', async (req, res) => {
             });
         }
         
-        // Get marksheets
         const [marksheets] = await db.query(`
             SELECT 
                 m.id, m.session, m.class, m.exam_type, 
@@ -156,16 +148,12 @@ router.get('/students/:studentId', async (req, res) => {
 
 // Create student
 router.post('/students', async (req, res) => {
-    const connection = await db.getConnection();
     try {
-        await connection.beginTransaction();
-        
         const { 
             student_id, apaar_id, name, father_name, mother_name, 
             dob, photo, session, class: classNum, section, exam_roll_no 
         } = req.body;
         
-        // Validate required fields
         if (!student_id || !name || !session || !classNum) {
             return res.status(400).json({ 
                 success: false, 
@@ -173,8 +161,7 @@ router.post('/students', async (req, res) => {
             });
         }
         
-        // Check if student_id already exists
-        const [existing] = await connection.query(
+        const [existing] = await db.query(
             'SELECT id FROM students WHERE student_id = ?', 
             [student_id]
         );
@@ -185,21 +172,17 @@ router.post('/students', async (req, res) => {
             });
         }
         
-        // Insert student
-        const [studentResult] = await connection.query(`
+        const [studentResult] = await db.query(`
             INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         `, [student_id, apaar_id, name, father_name, mother_name, dob, photo]);
         
         const studentId = studentResult.insertId;
         
-        // Insert academic record
-        await connection.query(`
+        await db.query(`
             INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
             VALUES (?, ?, ?, ?, ?)
         `, [studentId, session, classNum, section, exam_roll_no]);
-        
-        await connection.commit();
         
         res.status(201).json({
             success: true,
@@ -207,28 +190,21 @@ router.post('/students', async (req, res) => {
             data: { student_id, id: studentId }
         });
     } catch (error) {
-        await connection.rollback();
         console.error('Error creating student:', error);
         res.status(500).json({ success: false, message: 'Failed to create student' });
-    } finally {
-        connection.release();
     }
 });
 
 // Update student
 router.put('/students/:studentId', async (req, res) => {
-    const connection = await db.getConnection();
     try {
-        await connection.beginTransaction();
-        
         const { studentId } = req.params;
         const { 
             apaar_id, name, father_name, mother_name, 
             dob, photo, session, class: classNum, section, exam_roll_no 
         } = req.body;
         
-        // Check if student exists
-        const [students] = await connection.query(
+        const [students] = await db.query(
             'SELECT id FROM students WHERE student_id = ?', 
             [studentId]
         );
@@ -241,45 +217,34 @@ router.put('/students/:studentId', async (req, res) => {
         
         const studentDbId = students[0].id;
         
-        // Update student
-        await connection.query(`
+        await db.query(`
             UPDATE students 
             SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
             WHERE student_id = ?
         `, [apaar_id, name, father_name, mother_name, dob, photo, studentId]);
         
-        // Update academic record
-        await connection.query(`
+        await db.query(`
             UPDATE academic_records 
             SET session = ?, class = ?, section = ?, exam_roll_no = ?
             WHERE student_id = ?
         `, [session, classNum, section, exam_roll_no, studentDbId]);
-        
-        await connection.commit();
         
         res.json({
             success: true,
             message: 'Student updated successfully'
         });
     } catch (error) {
-        await connection.rollback();
         console.error('Error updating student:', error);
         res.status(500).json({ success: false, message: 'Failed to update student' });
-    } finally {
-        connection.release();
     }
 });
 
 // Delete student
 router.delete('/students/:studentId', async (req, res) => {
-    const connection = await db.getConnection();
     try {
-        await connection.beginTransaction();
-        
         const { studentId } = req.params;
         
-        // Get student
-        const [students] = await connection.query(
+        const [students] = await db.query(
             'SELECT id FROM students WHERE student_id = ?', 
             [studentId]
         );
@@ -290,8 +255,7 @@ router.delete('/students/:studentId', async (req, res) => {
             });
         }
         
-        // Delete marksheets from Cloudinary
-        const [marksheets] = await connection.query(
+        const [marksheets] = await db.query(
             'SELECT cloudinary_public_id FROM marksheets WHERE student_id = ?',
             [students[0].id]
         );
@@ -308,28 +272,22 @@ router.delete('/students/:studentId', async (req, res) => {
             }
         }
         
-        // Student will be deleted via CASCADE
-        await connection.query(
+        await db.query(
             'DELETE FROM students WHERE student_id = ?', 
             [studentId]
         );
         
-        await connection.commit();
-        
         res.json({
             success: true,
-            message: 'Student and all associated data deleted successfully'
+            message: 'Student deleted successfully'
         });
     } catch (error) {
-        await connection.rollback();
         console.error('Error deleting student:', error);
         res.status(500).json({ success: false, message: 'Failed to delete student' });
-    } finally {
-        connection.release();
     }
 });
 
-// Search student by ID (admin)
+// Search student by ID
 router.get('/students/search/:studentId', async (req, res) => {
     try {
         const { studentId } = req.params;
@@ -377,7 +335,6 @@ router.get('/students/search/:studentId', async (req, res) => {
 // CLASS-WISE MANAGEMENT
 // ============================================
 
-// Get class-wise students
 router.get('/class/:classId/students', async (req, res) => {
     try {
         const { classId } = req.params;
@@ -419,68 +376,15 @@ router.get('/class/:classId/students', async (req, res) => {
     }
 });
 
-// Get class-wise marksheets
-router.get('/class/:classId/marksheets', async (req, res) => {
-    try {
-        const { classId } = req.params;
-        const { session, exam_type, is_published, page = 1, limit = 20 } = req.query;
-        
-        const offset = (page - 1) * limit;
-        let query = `
-            SELECT 
-                m.id, m.session, m.class, m.exam_type, 
-                m.cloudinary_url, m.is_published, m.uploaded_at,
-                s.student_id, s.name, s.father_name,
-                ar.exam_roll_no
-            FROM marksheets m
-            JOIN students s ON m.student_id = s.id
-            JOIN academic_records ar ON m.academic_record_id = ar.id
-            WHERE m.class = ?
-        `;
-        const params = [classId];
-        
-        if (session) {
-            query += ' AND m.session = ?';
-            params.push(session);
-        }
-        if (exam_type) {
-            query += ' AND m.exam_type LIKE ?';
-            params.push(`%${exam_type}%`);
-        }
-        if (is_published !== undefined) {
-            query += ' AND m.is_published = ?';
-            params.push(is_published === 'true');
-        }
-        
-        query += ' ORDER BY m.created_at DESC LIMIT ? OFFSET ?';
-        params.push(parseInt(limit), parseInt(offset));
-        
-        const [marksheets] = await db.query(query, params);
-        
-        res.json({
-            success: true,
-            data: marksheets,
-            pagination: { page: parseInt(page), limit: parseInt(limit) }
-        });
-    } catch (error) {
-        console.error('Error fetching marksheets:', error);
-        res.status(500).json({ success: false, message: 'Failed to fetch marksheets' });
-    }
-});
-
 // ============================================
 // MARKSHEET MANAGEMENT
 // ============================================
 
 // Upload marksheet
 router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
-    const connection = await db.getConnection();
     try {
-        await connection.beginTransaction();
-        
         const { student_id, session, class: classNum, exam_type } = req.body;
         
-        // Validate required fields
         if (!student_id || !session || !classNum || !exam_type) {
             return res.status(400).json({ 
                 success: false, 
@@ -495,7 +399,6 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             });
         }
         
-        // Validate class
         const validClasses = [6, 7, 8, 9, 10, 11, 12];
         if (!validClasses.includes(parseInt(classNum))) {
             return res.status(400).json({ 
@@ -504,8 +407,7 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             });
         }
         
-        // Get student
-        const [students] = await connection.query(
+        const [students] = await db.query(
             'SELECT id FROM students WHERE student_id = ?', 
             [student_id]
         );
@@ -518,15 +420,14 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
         
         const studentDbId = students[0].id;
         
-        // Get or create academic record
-        let [academicRecords] = await connection.query(
+        let [academicRecords] = await db.query(
             'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
             [studentDbId, session, classNum]
         );
         
         let academicRecordId;
         if (academicRecords.length === 0) {
-            const [result] = await connection.query(
+            const [result] = await db.query(
                 'INSERT INTO academic_records (student_id, session, class) VALUES (?, ?, ?)',
                 [studentDbId, session, classNum]
             );
@@ -535,8 +436,7 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             academicRecordId = academicRecords[0].id;
         }
         
-        // Check if marksheet already exists for this combination
-        const [existing] = await connection.query(
+        const [existing] = await db.query(
             'SELECT id FROM marksheets WHERE student_id = ? AND session = ? AND class = ? AND exam_type = ?',
             [studentDbId, session, classNum, exam_type]
         );
@@ -548,15 +448,14 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             });
         }
         
-        // Insert marksheet with Cloudinary details
         const cloudinaryData = {
-            public_id: req.file.public_id || req.file.filename,
-            secure_url: req.file.path || req.file.secure_url,
+            public_id: req.file.filename,
+            secure_url: req.file.path,
             original_filename: req.file.originalname,
             file_size: req.file.size
         };
         
-        await connection.query(`
+        await db.query(`
             INSERT INTO marksheets (
                 student_id, academic_record_id, session, class, exam_type,
                 cloudinary_public_id, cloudinary_url, original_filename, file_size,
@@ -566,25 +465,20 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
             studentDbId, academicRecordId, session, classNum, exam_type,
             cloudinaryData.public_id, cloudinaryData.secure_url, 
             cloudinaryData.original_filename, cloudinaryData.file_size,
-            false // unpublished by default
+            false
         ]);
-        
-        await connection.commit();
         
         res.status(201).json({
             success: true,
-            message: 'Marksheet uploaded successfully',
+            message: 'Marksheet uploaded successfully (Unpublished)',
             data: {
                 cloudinary_url: cloudinaryData.secure_url,
                 status: 'unpublished'
             }
         });
     } catch (error) {
-        await connection.rollback();
         console.error('Error uploading marksheet:', error);
         res.status(500).json({ success: false, message: 'Failed to upload marksheet' });
-    } finally {
-        connection.release();
     }
 });
 
@@ -685,10 +579,7 @@ router.get('/marksheets/:id', async (req, res) => {
 
 // Replace marksheet
 router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => {
-    const connection = await db.getConnection();
     try {
-        await connection.beginTransaction();
-        
         const { id } = req.params;
         
         if (!req.file) {
@@ -698,8 +589,7 @@ router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => 
             });
         }
         
-        // Get existing marksheet
-        const [marksheets] = await connection.query(
+        const [marksheets] = await db.query(
             'SELECT cloudinary_public_id FROM marksheets WHERE id = ?',
             [id]
         );
@@ -711,7 +601,6 @@ router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => 
             });
         }
         
-        // Delete old file from Cloudinary
         if (marksheets[0].cloudinary_public_id) {
             try {
                 await cloudinary.uploader.destroy(marksheets[0].cloudinary_public_id, {
@@ -722,15 +611,14 @@ router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => 
             }
         }
         
-        // Update with new Cloudinary details
         const cloudinaryData = {
-            public_id: req.file.public_id || req.file.filename,
-            secure_url: req.file.path || req.file.secure_url,
+            public_id: req.file.filename,
+            secure_url: req.file.path,
             original_filename: req.file.originalname,
             file_size: req.file.size
         };
         
-        await connection.query(`
+        await db.query(`
             UPDATE marksheets 
             SET cloudinary_public_id = ?, cloudinary_url = ?, 
                 original_filename = ?, file_size = ?, updated_at = CURRENT_TIMESTAMP
@@ -741,32 +629,23 @@ router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => 
             id
         ]);
         
-        await connection.commit();
-        
         res.json({
             success: true,
             message: 'Marksheet replaced successfully',
             data: { cloudinary_url: cloudinaryData.secure_url }
         });
     } catch (error) {
-        await connection.rollback();
         console.error('Error replacing marksheet:', error);
         res.status(500).json({ success: false, message: 'Failed to replace marksheet' });
-    } finally {
-        connection.release();
     }
 });
 
 // Delete marksheet
 router.delete('/marksheets/:id', async (req, res) => {
-    const connection = await db.getConnection();
     try {
-        await connection.beginTransaction();
-        
         const { id } = req.params;
         
-        // Get marksheet
-        const [marksheets] = await connection.query(
+        const [marksheets] = await db.query(
             'SELECT cloudinary_public_id FROM marksheets WHERE id = ?',
             [id]
         );
@@ -778,7 +657,6 @@ router.delete('/marksheets/:id', async (req, res) => {
             });
         }
         
-        // Delete from Cloudinary
         if (marksheets[0].cloudinary_public_id) {
             try {
                 await cloudinary.uploader.destroy(marksheets[0].cloudinary_public_id, {
@@ -789,21 +667,15 @@ router.delete('/marksheets/:id', async (req, res) => {
             }
         }
         
-        // Delete from database
-        await connection.query('DELETE FROM marksheets WHERE id = ?', [id]);
-        
-        await connection.commit();
+        await db.query('DELETE FROM marksheets WHERE id = ?', [id]);
         
         res.json({
             success: true,
             message: 'Marksheet deleted successfully'
         });
     } catch (error) {
-        await connection.rollback();
         console.error('Error deleting marksheet:', error);
         res.status(500).json({ success: false, message: 'Failed to delete marksheet' });
-    } finally {
-        connection.release();
     }
 });
 
@@ -811,7 +683,6 @@ router.delete('/marksheets/:id', async (req, res) => {
 // PUBLISH / UNPUBLISH
 // ============================================
 
-// Publish marksheet
 router.post('/marksheets/:id/publish', async (req, res) => {
     try {
         const { id } = req.params;
@@ -838,7 +709,6 @@ router.post('/marksheets/:id/publish', async (req, res) => {
     }
 });
 
-// Unpublish marksheet
 router.post('/marksheets/:id/unpublish', async (req, res) => {
     try {
         const { id } = req.params;
@@ -866,10 +736,9 @@ router.post('/marksheets/:id/unpublish', async (req, res) => {
 });
 
 // ============================================
-// PUBLIC RESULT APIS
+// PUBLIC RESULT APIS (NO AUTH)
 // ============================================
 
-// Get available classes with published results
 router.get('/public/classes', async (req, res) => {
     try {
         const [classes] = await db.query(`
@@ -893,7 +762,6 @@ router.get('/public/classes', async (req, res) => {
     }
 });
 
-// Get published results for a session and class
 router.get('/public/:session/:class', async (req, res) => {
     try {
         const { session, class: classNum } = req.params;
@@ -920,7 +788,6 @@ router.get('/public/:session/:class', async (req, res) => {
     }
 });
 
-// Public student search (Student ID + DOB)
 router.post('/public/search', async (req, res) => {
     try {
         const { student_id, dob } = req.body;
@@ -932,7 +799,6 @@ router.post('/public/search', async (req, res) => {
             });
         }
         
-        // Find student
         const [students] = await db.query(`
             SELECT 
                 s.id, s.student_id, s.apaar_id, s.name, s.father_name, 
@@ -950,7 +816,6 @@ router.post('/public/search', async (req, res) => {
             });
         }
         
-        // Get published marksheets
         const [marksheets] = await db.query(`
             SELECT 
                 m.id, m.session, m.class, m.exam_type, 
@@ -973,7 +838,6 @@ router.post('/public/search', async (req, res) => {
     }
 });
 
-// View published marksheet
 router.get('/public/marksheet/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -1003,7 +867,6 @@ router.get('/public/marksheet/:id', async (req, res) => {
     }
 });
 
-// Download marksheet
 router.get('/public/marksheet/:id/download', async (req, res) => {
     try {
         const { id } = req.params;
@@ -1021,7 +884,6 @@ router.get('/public/marksheet/:id/download', async (req, res) => {
             });
         }
         
-        // Redirect to Cloudinary download URL
         const downloadUrl = cloudinary.url(marksheets[0].cloudinary_public_id, {
             resource_type: 'raw',
             flags: 'attachment',
@@ -1046,7 +908,6 @@ router.get('/public/marksheet/:id/download', async (req, res) => {
 
 router.get('/dashboard/stats', async (req, res) => {
     try {
-        // Overall stats
         const [overallStats] = await db.query(`
             SELECT 
                 COUNT(DISTINCT student_id) as total_students,
@@ -1056,7 +917,6 @@ router.get('/dashboard/stats', async (req, res) => {
             FROM marksheets
         `);
         
-        // Class-wise stats
         const [classStats] = await db.query(`
             SELECT 
                 class,
@@ -1082,5 +942,5 @@ router.get('/dashboard/stats', async (req, res) => {
     }
 });
 
-module.exports = { db: pool.promise() };
-
+// ✅ CORRECT EXPORT - SIRF YAHI LINE
+module.exports = router;
