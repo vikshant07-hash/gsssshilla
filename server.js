@@ -10,19 +10,10 @@ const fileUpload = require("express-fileupload");
 const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, uploadDownload } = require("./config/cloudinary");
 const { db } = require("./config/db");
 
-// After other imports
 
-const resultRoutes = require('./routes/resultRoutes');
-
-// After app.use(express.urlencoded...)
-app.use(fileUpload({
-    useTempFiles: true,
-    tempFileDir: '/tmp/',
-    limits: { fileSize: 50 * 1024 * 1024 }
-}));
 
 // Add result routes (before auth middleware)
-app.use('/api/result', resultRoutes);
+
 // 🔐 Import Auth Middleware
 const authMiddleware = require('./middleware/auth');
 
