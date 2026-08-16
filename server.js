@@ -11,11 +11,7 @@ const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, up
 const { db } = require("./config/db");
 
 // In your main app.js or server.js
-const resultRoutes = require('./routes/resultRoutes');
 
-// Mount the routes
-app.use('/api/admin/results', resultRoutes); // Admin routes
-app.use('/api/results', resultRoutes); // Public routes
 
 
 
@@ -106,7 +102,11 @@ const checkSession = (req, res, next) => {
 // 🟢 PART 1: ALL PUBLIC ROUTES (NO AUTH REQUIRED)
 // ============================================================
 // ============================================================
+const resultRoutes = require('./routes/resultRoutes');
 
+// Mount the routes
+app.use('/api/admin/results', resultRoutes); // Admin routes
+app.use('/api/results', resultRoutes); // Public routes
 // 1. Home route
 app.get("/", (req, res) => {
     res.json({
