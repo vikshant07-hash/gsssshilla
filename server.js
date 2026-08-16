@@ -5,7 +5,7 @@ require("dotenv").config();
 const path = require("path");
 const session = require('express-session');
 const fs = require("fs-extra");
-const fs = require("express-fileupload");
+const fileUpload = require("express-fileupload");
 
 const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, uploadDownload } = require("./config/cloudinary");
 const { db } = require("./config/db");
