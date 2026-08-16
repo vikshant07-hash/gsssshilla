@@ -10,6 +10,13 @@ const fileUpload = require("express-fileupload");
 const { cloudinary, uploadSlider, uploadRecent, uploadGallery, uploadFaculty, uploadDownload } = require("./config/cloudinary");
 const { db } = require("./config/db");
 
+// In your main app.js or server.js
+const resultRoutes = require('./routes/resultRoutes');
+
+// Mount the routes
+app.use('/api/admin/results', resultRoutes); // Admin routes
+app.use('/api/results', resultRoutes); // Public routes
+
 
 
 // Add result routes (before auth middleware)
