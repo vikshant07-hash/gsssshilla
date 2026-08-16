@@ -152,7 +152,6 @@ app.post("/contact", (req, res) => {
 });
 
 
-app.use('/api/result', resultRoutes);
 
 // 4. Public analytics tracking
 app.get("/analytics/track", (req, res) => {
