@@ -1,3 +1,11 @@
+// routes/resultRoutes.js - Top par
+console.log('✅ Result Routes Loaded');
+console.log('📡 DB Config:', {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    database: process.env.DB_NAME
+});
+
 // routes/resultRoutes.js
 const express = require('express');
 const router = express.Router();
