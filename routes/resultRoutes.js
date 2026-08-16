@@ -1,607 +1,1085 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../config/db');
-const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinary = require('../config/cloudinary');
+const db = require('../config/database'); // Your existing DB connection
 
-// Cloudinary config
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET
-});
-
-// ============================================================
-// ✅ ROOT ROUTE - API INFO (NO AUTH REQUIRED)
-// ============================================================
-router.get('/', (req, res) => {
-    res.json({ 
-        success: true, 
-        message: '🎯 Result API is working',
-        endpoints: {
-            students: {
-                getAll: 'GET /students',
-                getByClass: 'GET /students/class/:class',
-                getSingle: 'GET /students/:id',
-                create: 'POST /students',
-                update: 'PUT /students/:id',
-                delete: 'DELETE /students/:id'
-            },
-            results: {
-                upload: 'POST /upload',
-                status: 'GET /status/:studentId',
-                classResults: 'GET /class/:class',
-                publish: 'POST /publish',
-                unpublish: 'POST /unpublish',
-                delete: 'DELETE /:studentId'
-            },
-            setup: 'POST /setup'
+// Configure Cloudinary storage for multer
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: (req, file) => {
+            const session = req.body.session || '2025-26';
+            const classNum = req.body.class || 'default';
+            return `school-results/marksheets/${session}/class-${classNum}`;
         },
-        status: '✅ No authentication required for Result API'
-    });
-});
-
-// ============================================================
-// STUDENT ROUTES - Without Photo
-// ============================================================
-
-// GET all students (with class filter)
-router.get('/students', (req, res) => {
-    const { class: classFilter } = req.query;
-    let query = 'SELECT * FROM students';
-    let params = [];
-    if (classFilter) {
-        query += ' WHERE class = ?';
-        params.push(classFilter);
+        resource_type: 'raw',
+        public_id: (req, file) => {
+            const studentId = req.body.student_id || 'unknown';
+            const examType = req.body.exam_type || 'exam';
+            const timestamp = Date.now();
+            return `${studentId}-${examType}-${timestamp}`;
+        },
+        format: 'pdf'
     }
-    query += ' ORDER BY student_name ASC';
-    db.query(query, params, (err, results) => {
-        if (err) {
-            console.error('❌ Error fetching students:', err);
-            return res.status(500).json({ success: false, message: err.message });
-        }
-        res.json({ success: true, data: results || [] });
-    });
 });
 
-// GET students by class with result status
-router.get('/students/class/:class', (req, res) => {
-    const { class: className } = req.params;
-    const query = `
-        SELECT s.*, 
-               r.id as result_id, 
-               r.marksheet_url, 
-               r.is_published,
-               r.uploaded_at,
-               r.published_at,
-               CASE 
-                   WHEN r.id IS NOT NULL AND r.is_published = 1 THEN 'published'
-                   WHEN r.id IS NOT NULL THEN 'uploaded'
-                   ELSE 'pending'
-               END as result_status_display
-        FROM students s
-        LEFT JOIN results r ON s.id = r.student_id
-        WHERE s.class = ?
-        ORDER BY s.student_name ASC
-    `;
-    db.query(query, [className], (err, results) => {
-        if (err) {
-            console.error('❌ Error fetching class students:', err);
-            return res.status(500).json({ success: false, message: err.message });
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'application/pdf') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only PDF files are allowed'), false);
         }
-        res.json({ success: true, data: results || [] });
-    });
+    }
 });
 
-// GET single student
-router.get('/students/:id', (req, res) => {
-    const { id } = req.params;
-    db.query('SELECT * FROM students WHERE id = ?', [id], (err, results) => {
-        if (err) {
-            console.error('❌ Error fetching student:', err);
-            return res.status(500).json({ success: false, message: err.message });
-        }
-        if (!results || results.length === 0) {
-            return res.status(404).json({ success: false, message: 'Student not found' });
-        }
-        res.json({ success: true, data: results[0] });
-    });
-});
+// ============================================
+// ADMIN STUDENT MANAGEMENT
+// ============================================
 
-// POST create student (Without Photo)
-router.post('/students', (req, res) => {
-    const {
-        studentName, fatherName, motherName, studentId, apaarId,
-        class: className, aaharNumber, examRollNo, dateOfBirth,
-        session, examType, stream
-    } = req.body;
-
-    if (!studentName || !fatherName || !motherName || !studentId || !apaarId ||
-        !className || !aaharNumber || !examRollNo || !dateOfBirth ||
-        !session || !examType) {
-        return res.status(400).json({ 
-            success: false, 
-            message: 'All fields are required' 
+// Get all students with filters
+router.get('/students', async (req, res) => {
+    try {
+        const { 
+            class: classNum, 
+            session, 
+            student_id, 
+            name,
+            page = 1, 
+            limit = 20 
+        } = req.query;
+        
+        const offset = (page - 1) * limit;
+        let query = `
+            SELECT DISTINCT 
+                s.id, s.student_id, s.apaar_id, s.name, s.father_name, 
+                s.mother_name, s.dob, s.photo,
+                ar.session, ar.class, ar.section, ar.exam_roll_no
+            FROM students s
+            LEFT JOIN academic_records ar ON s.id = ar.student_id
+            WHERE 1=1
+        `;
+        const params = [];
+        
+        if (classNum) {
+            query += ' AND ar.class = ?';
+            params.push(classNum);
+        }
+        if (session) {
+            query += ' AND ar.session = ?';
+            params.push(session);
+        }
+        if (student_id) {
+            query += ' AND s.student_id LIKE ?';
+            params.push(`%${student_id}%`);
+        }
+        if (name) {
+            query += ' AND s.name LIKE ?';
+            params.push(`%${name}%`);
+        }
+        
+        query += ' ORDER BY s.created_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const [students] = await db.query(query, params);
+        
+        // Get count for pagination
+        let countQuery = `
+            SELECT COUNT(DISTINCT s.id) as total 
+            FROM students s
+            LEFT JOIN academic_records ar ON s.id = ar.student_id
+            WHERE 1=1
+        `;
+        const countParams = [];
+        // Add same filters to count query...
+        
+        res.json({
+            success: true,
+            data: students,
+            pagination: { page: parseInt(page), limit: parseInt(limit) }
         });
+    } catch (error) {
+        console.error('Error fetching students:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch students' });
     }
+});
 
-    db.query('SELECT id FROM students WHERE student_id = ?', [studentId], (err, results) => {
-        if (err) {
-            console.error('❌ Error checking duplicate:', err);
-            return res.status(500).json({ success: false, message: err.message });
+// Get single student by ID
+router.get('/students/:studentId', async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        
+        const [students] = await db.query(`
+            SELECT 
+                s.id, s.student_id, s.apaar_id, s.name, s.father_name, 
+                s.mother_name, s.dob, s.photo,
+                ar.session, ar.class, ar.section, ar.exam_roll_no
+            FROM students s
+            LEFT JOIN academic_records ar ON s.id = ar.student_id
+            WHERE s.student_id = ?
+        `, [studentId]);
+        
+        if (students.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found' 
+            });
         }
-        if (results && results.length > 0) {
+        
+        // Get marksheets
+        const [marksheets] = await db.query(`
+            SELECT 
+                m.id, m.session, m.class, m.exam_type, 
+                m.cloudinary_url, m.is_published, m.uploaded_at,
+                m.original_filename, m.file_size
+            FROM marksheets m
+            WHERE m.student_id = ?
+            ORDER BY m.session DESC, m.exam_type
+        `, [students[0].id]);
+        
+        res.json({
+            success: true,
+            data: {
+                student: students[0],
+                marksheets: marksheets
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching student:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch student' });
+    }
+});
+
+// Create student
+router.post('/students', async (req, res) => {
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        const { 
+            student_id, apaar_id, name, father_name, mother_name, 
+            dob, photo, session, class: classNum, section, exam_roll_no 
+        } = req.body;
+        
+        // Validate required fields
+        if (!student_id || !name || !session || !classNum) {
             return res.status(400).json({ 
+                success: false, 
+                message: 'Student ID, Name, Session, and Class are required' 
+            });
+        }
+        
+        // Check if student_id already exists
+        const [existing] = await connection.query(
+            'SELECT id FROM students WHERE student_id = ?', 
+            [student_id]
+        );
+        if (existing.length > 0) {
+            return res.status(409).json({ 
                 success: false, 
                 message: 'Student ID already exists' 
             });
         }
-
-        const query = `
-            INSERT INTO students (
-                student_name, father_name, mother_name, student_id, apaar_id,
-                class, aahar_number, exam_roll_no, date_of_birth,
-                session, exam_type, stream, result_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-        `;
-        db.query(query, [
-            studentName, fatherName, motherName, studentId, apaarId,
-            className, aaharNumber, examRollNo, dateOfBirth,
-            session, examType, stream || ''
-        ], (insertErr, result) => {
-            if (insertErr) {
-                console.error('❌ Error inserting student:', insertErr);
-                return res.status(500).json({ success: false, message: insertErr.message });
-            }
-            db.query('SELECT * FROM students WHERE id = ?', [result.insertId], (fetchErr, newStudent) => {
-                if (fetchErr) {
-                    console.error('❌ Error fetching new student:', fetchErr);
-                    return res.status(500).json({ success: false, message: fetchErr.message });
-                }
-                res.status(201).json({ 
-                    success: true, 
-                    data: newStudent[0],
-                    message: 'Student added successfully' 
-                });
-            });
+        
+        // Insert student
+        const [studentResult] = await connection.query(`
+            INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [student_id, apaar_id, name, father_name, mother_name, dob, photo]);
+        
+        const studentId = studentResult.insertId;
+        
+        // Insert academic record
+        await connection.query(`
+            INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
+            VALUES (?, ?, ?, ?, ?)
+        `, [studentId, session, classNum, section, exam_roll_no]);
+        
+        await connection.commit();
+        
+        res.status(201).json({
+            success: true,
+            message: 'Student created successfully',
+            data: { student_id, id: studentId }
         });
-    });
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error creating student:', error);
+        res.status(500).json({ success: false, message: 'Failed to create student' });
+    } finally {
+        connection.release();
+    }
 });
 
-// PUT update student (Without Photo)
-router.put('/students/:id', (req, res) => {
-    const { id } = req.params;
-    const updates = req.body;
-    db.query('SELECT * FROM students WHERE id = ?', [id], (err, results) => {
-        if (err) {
-            console.error('❌ Error checking student:', err);
-            return res.status(500).json({ success: false, message: err.message });
-        }
-        if (!results || results.length === 0) {
-            return res.status(404).json({ success: false, message: 'Student not found' });
-        }
-        const allowedFields = [
-            'student_name', 'father_name', 'mother_name', 'student_id',
-            'apaar_id', 'class', 'aahar_number', 'exam_roll_no',
-            'date_of_birth', 'session', 'exam_type', 'stream'
-        ];
-        const fields = [];
-        const values = [];
-        for (const [key, value] of Object.entries(updates)) {
-            if (allowedFields.includes(key) && value !== undefined) {
-                fields.push(`${key} = ?`);
-                values.push(value);
-            }
-        }
-        if (fields.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'No valid fields to update' 
-            });
-        }
-        values.push(id);
-        const query = `UPDATE students SET ${fields.join(', ')} WHERE id = ?`;
-        db.query(query, values, (updateErr) => {
-            if (updateErr) {
-                console.error('❌ Error updating student:', updateErr);
-                return res.status(500).json({ success: false, message: updateErr.message });
-            }
-            db.query('SELECT * FROM students WHERE id = ?', [id], (fetchErr, updated) => {
-                if (fetchErr) {
-                    console.error('❌ Error fetching updated student:', fetchErr);
-                    return res.status(500).json({ success: false, message: fetchErr.message });
-                }
-                res.json({ 
-                    success: true, 
-                    data: updated[0],
-                    message: 'Student updated successfully' 
-                });
-            });
-        });
-    });
-});
-
-// DELETE student
-router.delete('/students/:id', (req, res) => {
-    const { id } = req.params;
-    db.query('SELECT * FROM students WHERE id = ?', [id], (err, results) => {
-        if (err) {
-            console.error('❌ Error checking student:', err);
-            return res.status(500).json({ success: false, message: err.message });
-        }
-        if (!results || results.length === 0) {
-            return res.status(404).json({ success: false, message: 'Student not found' });
-        }
-        db.query('DELETE FROM students WHERE id = ?', [id], (deleteErr) => {
-            if (deleteErr) {
-                console.error('❌ Error deleting student:', deleteErr);
-                return res.status(500).json({ success: false, message: deleteErr.message });
-            }
-            res.json({ success: true, message: 'Student deleted successfully' });
-        });
-    });
-});
-
-// ============================================================
-// RESULT ROUTES
-// ============================================================
-
-// Upload marksheet (PDF)
-router.post('/upload', async (req, res) => {
+// Update student
+router.put('/students/:studentId', async (req, res) => {
+    const connection = await db.getConnection();
     try {
-        const { studentId } = req.body;
-        if (!studentId) {
-            return res.status(400).json({ success: false, message: 'Student ID is required' });
+        await connection.beginTransaction();
+        
+        const { studentId } = req.params;
+        const { 
+            apaar_id, name, father_name, mother_name, 
+            dob, photo, session, class: classNum, section, exam_roll_no 
+        } = req.body;
+        
+        // Check if student exists
+        const [students] = await connection.query(
+            'SELECT id FROM students WHERE student_id = ?', 
+            [studentId]
+        );
+        if (students.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found' 
+            });
         }
-        if (!req.files || !req.files.marksheet) {
-            return res.status(400).json({ success: false, message: 'No file uploaded' });
+        
+        const studentDbId = students[0].id;
+        
+        // Update student
+        await connection.query(`
+            UPDATE students 
+            SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
+            WHERE student_id = ?
+        `, [apaar_id, name, father_name, mother_name, dob, photo, studentId]);
+        
+        // Update academic record
+        await connection.query(`
+            UPDATE academic_records 
+            SET session = ?, class = ?, section = ?, exam_roll_no = ?
+            WHERE student_id = ?
+        `, [session, classNum, section, exam_roll_no, studentDbId]);
+        
+        await connection.commit();
+        
+        res.json({
+            success: true,
+            message: 'Student updated successfully'
+        });
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error updating student:', error);
+        res.status(500).json({ success: false, message: 'Failed to update student' });
+    } finally {
+        connection.release();
+    }
+});
+
+// Delete student
+router.delete('/students/:studentId', async (req, res) => {
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        const { studentId } = req.params;
+        
+        // Get student
+        const [students] = await connection.query(
+            'SELECT id FROM students WHERE student_id = ?', 
+            [studentId]
+        );
+        if (students.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found' 
+            });
         }
-        const file = req.files.marksheet;
-        if (file.mimetype !== 'application/pdf') {
-            return res.status(400).json({ success: false, message: 'Only PDF files are allowed' });
-        }
-        db.query('SELECT * FROM students WHERE id = ?', [studentId], async (err, studentResults) => {
-            if (err) {
-                console.error('❌ Error checking student:', err);
-                return res.status(500).json({ success: false, message: err.message });
+        
+        // Delete marksheets from Cloudinary
+        const [marksheets] = await connection.query(
+            'SELECT cloudinary_public_id FROM marksheets WHERE student_id = ?',
+            [students[0].id]
+        );
+        
+        for (const marksheet of marksheets) {
+            if (marksheet.cloudinary_public_id) {
+                try {
+                    await cloudinary.uploader.destroy(marksheet.cloudinary_public_id, {
+                        resource_type: 'raw'
+                    });
+                } catch (err) {
+                    console.error('Failed to delete Cloudinary file:', err);
+                }
             }
-            if (!studentResults || studentResults.length === 0) {
-                return res.status(404).json({ success: false, message: 'Student not found' });
-            }
-            try {
-                const result = await cloudinary.uploader.upload(file.tempFilePath, {
-                    folder: 'results',
-                    resource_type: 'auto',
-                    allowed_formats: ['pdf']
-                });
-                db.query('SELECT id FROM results WHERE student_id = ?', [studentId], (err2, existingResult) => {
-                    if (err2) {
-                        console.error('❌ Error checking existing result:', err2);
-                        return res.status(500).json({ success: false, message: err2.message });
-                    }
-                    if (existingResult && existingResult.length > 0) {
-                        db.query(
-                            `UPDATE results SET 
-                             marksheet_url = ?, 
-                             public_id = ?, 
-                             uploaded_at = CURRENT_TIMESTAMP, 
-                             is_published = false,
-                             published_at = NULL
-                             WHERE student_id = ?`,
-                            [result.secure_url, result.public_id, studentId],
-                            (updateErr) => {
-                                if (updateErr) {
-                                    console.error('❌ Error updating result:', updateErr);
-                                    return res.status(500).json({ success: false, message: updateErr.message });
-                                }
-                                db.query('UPDATE students SET result_status = "uploaded" WHERE id = ?', [studentId]);
-                                db.query('SELECT * FROM results WHERE student_id = ?', [studentId], (fetchErr, updated) => {
-                                    if (fetchErr) {
-                                        console.error('❌ Error fetching updated result:', fetchErr);
-                                        return res.status(500).json({ success: false, message: fetchErr.message });
-                                    }
-                                    res.json({ 
-                                        success: true, 
-                                        data: updated[0],
-                                        message: 'Marksheet updated successfully' 
-                                    });
-                                });
-                            }
-                        );
-                    } else {
-                        db.query(
-                            `INSERT INTO results (student_id, marksheet_url, public_id) 
-                             VALUES (?, ?, ?)`,
-                            [studentId, result.secure_url, result.public_id],
-                            (insertErr, insertResult) => {
-                                if (insertErr) {
-                                    console.error('❌ Error inserting result:', insertErr);
-                                    return res.status(500).json({ success: false, message: insertErr.message });
-                                }
-                                db.query('UPDATE students SET result_status = "uploaded" WHERE id = ?', [studentId]);
-                                db.query('SELECT * FROM results WHERE id = ?', [insertResult.insertId], (fetchErr, newResult) => {
-                                    if (fetchErr) {
-                                        console.error('❌ Error fetching new result:', fetchErr);
-                                        return res.status(500).json({ success: false, message: fetchErr.message });
-                                    }
-                                    res.status(201).json({ 
-                                        success: true, 
-                                        data: newResult[0],
-                                        message: 'Marksheet uploaded successfully' 
-                                    });
-                                });
-                            }
-                        );
-                    }
-                });
-            } catch (cloudinaryErr) {
-                console.error('❌ Cloudinary upload error:', cloudinaryErr);
-                return res.status(500).json({ 
-                    success: false, 
-                    message: 'Failed to upload to Cloudinary: ' + cloudinaryErr.message 
-                });
+        }
+        
+        // Student will be deleted via CASCADE
+        await connection.query(
+            'DELETE FROM students WHERE student_id = ?', 
+            [studentId]
+        );
+        
+        await connection.commit();
+        
+        res.json({
+            success: true,
+            message: 'Student and all associated data deleted successfully'
+        });
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error deleting student:', error);
+        res.status(500).json({ success: false, message: 'Failed to delete student' });
+    } finally {
+        connection.release();
+    }
+});
+
+// Search student by ID (admin)
+router.get('/students/search/:studentId', async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        
+        const [students] = await db.query(`
+            SELECT 
+                s.id, s.student_id, s.apaar_id, s.name, s.father_name, 
+                s.mother_name, s.dob, s.photo,
+                ar.session, ar.class, ar.section, ar.exam_roll_no
+            FROM students s
+            LEFT JOIN academic_records ar ON s.id = ar.student_id
+            WHERE s.student_id = ?
+        `, [studentId]);
+        
+        if (students.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found' 
+            });
+        }
+        
+        const [marksheets] = await db.query(`
+            SELECT 
+                m.id, m.session, m.class, m.exam_type, 
+                m.cloudinary_url, m.is_published, m.uploaded_at
+            FROM marksheets m
+            WHERE m.student_id = ?
+            ORDER BY m.session DESC, m.exam_type
+        `, [students[0].id]);
+        
+        res.json({
+            success: true,
+            data: {
+                student: students[0],
+                marksheets: marksheets
             }
         });
     } catch (error) {
-        console.error('❌ Upload error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error searching student:', error);
+        res.status(500).json({ success: false, message: 'Failed to search student' });
     }
 });
 
-// Get result status
-router.get('/status/:studentId', (req, res) => {
-    const { studentId } = req.params;
-    const query = `
-        SELECT s.result_status, 
-               r.id as result_id,
-               r.marksheet_url, 
-               r.is_published, 
-               r.uploaded_at,
-               r.published_at
-        FROM students s 
-        LEFT JOIN results r ON s.id = r.student_id 
-        WHERE s.id = ?
-    `;
-    db.query(query, [studentId], (err, results) => {
-        if (err) {
-            console.error('❌ Error fetching status:', err);
-            return res.status(500).json({ success: false, message: err.message });
-        }
-        if (!results || results.length === 0) {
-            return res.status(404).json({ success: false, message: 'Student not found' });
-        }
-        res.json({ success: true, data: results[0] });
-    });
-});
+// ============================================
+// CLASS-WISE MANAGEMENT
+// ============================================
 
-// Get all results for a class
-router.get('/class/:class', (req, res) => {
-    const { class: className } = req.params;
-    const query = `
-        SELECT s.*, 
-               r.id as result_id,
-               r.marksheet_url, 
-               r.is_published, 
-               r.uploaded_at, 
-               r.published_at,
-               CASE 
-                   WHEN r.id IS NOT NULL AND r.is_published = 1 THEN 'published'
-                   WHEN r.id IS NOT NULL THEN 'uploaded'
-                   ELSE 'pending'
-               END as result_status_display
-        FROM students s 
-        LEFT JOIN results r ON s.id = r.student_id 
-        WHERE s.class = ?
-        ORDER BY s.student_name ASC
-    `;
-    db.query(query, [className], (err, results) => {
-        if (err) {
-            console.error('❌ Error fetching class results:', err);
-            return res.status(500).json({ success: false, message: err.message });
+// Get class-wise students
+router.get('/class/:classId/students', async (req, res) => {
+    try {
+        const { classId } = req.params;
+        const { session, page = 1, limit = 20 } = req.query;
+        
+        const offset = (page - 1) * limit;
+        let query = `
+            SELECT DISTINCT 
+                s.id, s.student_id, s.apaar_id, s.name, s.father_name, 
+                s.mother_name, s.dob, s.photo,
+                ar.session, ar.class, ar.section, ar.exam_roll_no,
+                COUNT(m.id) as marksheet_count,
+                SUM(CASE WHEN m.is_published = TRUE THEN 1 ELSE 0 END) as published_count
+            FROM students s
+            LEFT JOIN academic_records ar ON s.id = ar.student_id
+            LEFT JOIN marksheets m ON s.id = m.student_id
+            WHERE ar.class = ?
+        `;
+        const params = [classId];
+        
+        if (session) {
+            query += ' AND ar.session = ?';
+            params.push(session);
         }
-        res.json({ success: true, data: results || [] });
-    });
-});
-
-// Publish results for a class
-router.post('/publish', (req, res) => {
-    const { class: className } = req.body;
-    if (!className) {
-        return res.status(400).json({ success: false, message: 'Class is required' });
-    }
-    db.query(
-        `SELECT s.id, r.id as result_id 
-         FROM students s 
-         INNER JOIN results r ON s.id = r.student_id 
-         WHERE s.class = ? AND s.result_status = 'uploaded'`,
-        [className],
-        (err, students) => {
-            if (err) {
-                console.error('❌ Error fetching students:', err);
-                return res.status(500).json({ success: false, message: err.message });
-            }
-            if (!students || students.length === 0) {
-                return res.status(404).json({ 
-                    success: false, 
-                    message: 'No uploaded results found for this class' 
-                });
-            }
-            const resultIds = students.map(s => s.result_id);
-            const placeholders = resultIds.map(() => '?').join(',');
-            db.query(
-                `UPDATE results SET is_published = true, published_at = CURRENT_TIMESTAMP 
-                 WHERE id IN (${placeholders})`,
-                resultIds,
-                (updateErr) => {
-                    if (updateErr) {
-                        console.error('❌ Error publishing results:', updateErr);
-                        return res.status(500).json({ success: false, message: updateErr.message });
-                    }
-                    const studentIds = students.map(s => s.id);
-                    const studentPlaceholders = studentIds.map(() => '?').join(',');
-                    db.query(
-                        `UPDATE students SET result_status = 'published' 
-                         WHERE id IN (${studentPlaceholders})`,
-                        studentIds,
-                        (statusErr) => {
-                            if (statusErr) console.error('⚠️ Status update error:', statusErr);
-                            res.json({ 
-                                success: true, 
-                                message: `Results published for ${students.length} students in class ${className}` 
-                            });
-                        }
-                    );
-                }
-            );
-        }
-    );
-});
-
-// Unpublish results for a class
-router.post('/unpublish', (req, res) => {
-    const { class: className } = req.body;
-    if (!className) {
-        return res.status(400).json({ success: false, message: 'Class is required' });
-    }
-    db.query(
-        `SELECT s.id, r.id as result_id 
-         FROM students s 
-         INNER JOIN results r ON s.id = r.student_id 
-         WHERE s.class = ? AND s.result_status = 'published'`,
-        [className],
-        (err, students) => {
-            if (err) {
-                console.error('❌ Error fetching students:', err);
-                return res.status(500).json({ success: false, message: err.message });
-            }
-            if (!students || students.length === 0) {
-                return res.status(404).json({ 
-                    success: false, 
-                    message: 'No published results found for this class' 
-                });
-            }
-            const resultIds = students.map(s => s.result_id);
-            const placeholders = resultIds.map(() => '?').join(',');
-            db.query(
-                `UPDATE results SET is_published = false, published_at = NULL 
-                 WHERE id IN (${placeholders})`,
-                resultIds,
-                (updateErr) => {
-                    if (updateErr) {
-                        console.error('❌ Error unpublishing results:', updateErr);
-                        return res.status(500).json({ success: false, message: updateErr.message });
-                    }
-                    const studentIds = students.map(s => s.id);
-                    const studentPlaceholders = studentIds.map(() => '?').join(',');
-                    db.query(
-                        `UPDATE students SET result_status = 'uploaded' 
-                         WHERE id IN (${studentPlaceholders})`,
-                        studentIds,
-                        (statusErr) => {
-                            if (statusErr) console.error('⚠️ Status update error:', statusErr);
-                            res.json({ 
-                                success: true, 
-                                message: `Results unpublished for ${students.length} students in class ${className}` 
-                            });
-                        }
-                    );
-                }
-            );
-        }
-    );
-});
-
-// Delete result
-router.delete('/:studentId', (req, res) => {
-    const { studentId } = req.params;
-    db.query('SELECT * FROM results WHERE student_id = ?', [studentId], async (err, results) => {
-        if (err) {
-            console.error('❌ Error fetching result:', err);
-            return res.status(500).json({ success: false, message: err.message });
-        }
-        if (!results || results.length === 0) {
-            return res.status(404).json({ success: false, message: 'Result not found' });
-        }
-        const result = results[0];
-        try {
-            await cloudinary.uploader.destroy(result.public_id);
-        } catch (cloudinaryErr) {
-            console.warn('⚠️ Cloudinary delete warning:', cloudinaryErr.message);
-        }
-        db.query('DELETE FROM results WHERE student_id = ?', [studentId], (deleteErr) => {
-            if (deleteErr) {
-                console.error('❌ Error deleting result:', deleteErr);
-                return res.status(500).json({ success: false, message: deleteErr.message });
-            }
-            db.query('UPDATE students SET result_status = "pending" WHERE id = ?', [studentId]);
-            res.json({ success: true, message: 'Result deleted successfully' });
+        
+        query += ' GROUP BY s.id ORDER BY s.name LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const [students] = await db.query(query, params);
+        
+        res.json({
+            success: true,
+            data: students,
+            pagination: { page: parseInt(page), limit: parseInt(limit) }
         });
-    });
+    } catch (error) {
+        console.error('Error fetching class students:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch students' });
+    }
 });
 
-// Setup tables
-router.post('/setup', (req, res) => {
-    const queries = [
-        `CREATE TABLE IF NOT EXISTS students (
-            id INT PRIMARY KEY AUTO_INCREMENT,
-            student_name VARCHAR(100) NOT NULL,
-            father_name VARCHAR(100) NOT NULL,
-            mother_name VARCHAR(100) NOT NULL,
-            student_id VARCHAR(50) UNIQUE NOT NULL,
-            apaar_id VARCHAR(50) NOT NULL,
-            class VARCHAR(10) NOT NULL,
-            aahar_number VARCHAR(20) NOT NULL,
-            exam_roll_no VARCHAR(50) NOT NULL,
-            date_of_birth DATE NOT NULL,
-            session VARCHAR(20) NOT NULL,
-            exam_type ENUM('midterm', 'final', 'other') NOT NULL,
-            stream VARCHAR(20) DEFAULT '',
-            result_status ENUM('pending', 'uploaded', 'published') DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            INDEX idx_class (class),
-            INDEX idx_student_id (student_id),
-            INDEX idx_result_status (result_status)
-        )`,
-        `CREATE TABLE IF NOT EXISTS results (
-            id INT PRIMARY KEY AUTO_INCREMENT,
-            student_id INT NOT NULL,
-            marksheet_url VARCHAR(500) NOT NULL,
-            public_id VARCHAR(200) NOT NULL,
-            is_published BOOLEAN DEFAULT FALSE,
-            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            published_at TIMESTAMP NULL,
-            FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
-            INDEX idx_student_id (student_id),
-            INDEX idx_is_published (is_published)
-        )`
-    ];
-    let completed = 0;
-    let errors = [];
-    queries.forEach((query, index) => {
-        db.query(query, (err) => {
-            if (err) {
-                console.error(`❌ Error creating table ${index + 1}:`, err.message);
-                errors.push(`Table ${index + 1}: ${err.message}`);
-            } else {
-                console.log(`✅ Table ${index + 1} created/verified`);
-            }
-            completed++;
-            if (completed === queries.length) {
-                if (errors.length > 0) {
-                    res.status(500).json({ 
-                        success: false, 
-                        message: 'Some tables failed to create', 
-                        errors 
-                    });
-                } else {
-                    res.json({ 
-                        success: true, 
-                        message: 'All tables created successfully!' 
-                    });
-                }
+// Get class-wise marksheets
+router.get('/class/:classId/marksheets', async (req, res) => {
+    try {
+        const { classId } = req.params;
+        const { session, exam_type, is_published, page = 1, limit = 20 } = req.query;
+        
+        const offset = (page - 1) * limit;
+        let query = `
+            SELECT 
+                m.id, m.session, m.class, m.exam_type, 
+                m.cloudinary_url, m.is_published, m.uploaded_at,
+                s.student_id, s.name, s.father_name,
+                ar.exam_roll_no
+            FROM marksheets m
+            JOIN students s ON m.student_id = s.id
+            JOIN academic_records ar ON m.academic_record_id = ar.id
+            WHERE m.class = ?
+        `;
+        const params = [classId];
+        
+        if (session) {
+            query += ' AND m.session = ?';
+            params.push(session);
+        }
+        if (exam_type) {
+            query += ' AND m.exam_type LIKE ?';
+            params.push(`%${exam_type}%`);
+        }
+        if (is_published !== undefined) {
+            query += ' AND m.is_published = ?';
+            params.push(is_published === 'true');
+        }
+        
+        query += ' ORDER BY m.created_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const [marksheets] = await db.query(query, params);
+        
+        res.json({
+            success: true,
+            data: marksheets,
+            pagination: { page: parseInt(page), limit: parseInt(limit) }
+        });
+    } catch (error) {
+        console.error('Error fetching marksheets:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch marksheets' });
+    }
+});
+
+// ============================================
+// MARKSHEET MANAGEMENT
+// ============================================
+
+// Upload marksheet
+router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        const { student_id, session, class: classNum, exam_type } = req.body;
+        
+        // Validate required fields
+        if (!student_id || !session || !classNum || !exam_type) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Student ID, Session, Class, and Exam Type are required' 
+            });
+        }
+        
+        if (!req.file) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'PDF file is required' 
+            });
+        }
+        
+        // Validate class
+        const validClasses = [6, 7, 8, 9, 10, 11, 12];
+        if (!validClasses.includes(parseInt(classNum))) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid class. Must be 6-12' 
+            });
+        }
+        
+        // Get student
+        const [students] = await connection.query(
+            'SELECT id FROM students WHERE student_id = ?', 
+            [student_id]
+        );
+        if (students.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found' 
+            });
+        }
+        
+        const studentDbId = students[0].id;
+        
+        // Get or create academic record
+        let [academicRecords] = await connection.query(
+            'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
+            [studentDbId, session, classNum]
+        );
+        
+        let academicRecordId;
+        if (academicRecords.length === 0) {
+            const [result] = await connection.query(
+                'INSERT INTO academic_records (student_id, session, class) VALUES (?, ?, ?)',
+                [studentDbId, session, classNum]
+            );
+            academicRecordId = result.insertId;
+        } else {
+            academicRecordId = academicRecords[0].id;
+        }
+        
+        // Check if marksheet already exists for this combination
+        const [existing] = await connection.query(
+            'SELECT id FROM marksheets WHERE student_id = ? AND session = ? AND class = ? AND exam_type = ?',
+            [studentDbId, session, classNum, exam_type]
+        );
+        
+        if (existing.length > 0) {
+            return res.status(409).json({ 
+                success: false, 
+                message: 'Marksheet already exists for this student, session, class, and exam type' 
+            });
+        }
+        
+        // Insert marksheet with Cloudinary details
+        const cloudinaryData = {
+            public_id: req.file.public_id || req.file.filename,
+            secure_url: req.file.path || req.file.secure_url,
+            original_filename: req.file.originalname,
+            file_size: req.file.size
+        };
+        
+        await connection.query(`
+            INSERT INTO marksheets (
+                student_id, academic_record_id, session, class, exam_type,
+                cloudinary_public_id, cloudinary_url, original_filename, file_size,
+                is_published
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+            studentDbId, academicRecordId, session, classNum, exam_type,
+            cloudinaryData.public_id, cloudinaryData.secure_url, 
+            cloudinaryData.original_filename, cloudinaryData.file_size,
+            false // unpublished by default
+        ]);
+        
+        await connection.commit();
+        
+        res.status(201).json({
+            success: true,
+            message: 'Marksheet uploaded successfully',
+            data: {
+                cloudinary_url: cloudinaryData.secure_url,
+                status: 'unpublished'
             }
         });
-    });
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error uploading marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to upload marksheet' });
+    } finally {
+        connection.release();
+    }
+});
+
+// Get all marksheets
+router.get('/marksheets', async (req, res) => {
+    try {
+        const { 
+            student_id, session, class: classNum, exam_type, 
+            is_published, page = 1, limit = 20 
+        } = req.query;
+        
+        const offset = (page - 1) * limit;
+        let query = `
+            SELECT 
+                m.id, m.session, m.class, m.exam_type, 
+                m.cloudinary_url, m.is_published, m.uploaded_at,
+                m.original_filename, m.file_size,
+                s.student_id, s.name, s.father_name,
+                ar.exam_roll_no
+            FROM marksheets m
+            JOIN students s ON m.student_id = s.id
+            JOIN academic_records ar ON m.academic_record_id = ar.id
+            WHERE 1=1
+        `;
+        const params = [];
+        
+        if (student_id) {
+            query += ' AND s.student_id LIKE ?';
+            params.push(`%${student_id}%`);
+        }
+        if (session) {
+            query += ' AND m.session = ?';
+            params.push(session);
+        }
+        if (classNum) {
+            query += ' AND m.class = ?';
+            params.push(classNum);
+        }
+        if (exam_type) {
+            query += ' AND m.exam_type LIKE ?';
+            params.push(`%${exam_type}%`);
+        }
+        if (is_published !== undefined) {
+            query += ' AND m.is_published = ?';
+            params.push(is_published === 'true');
+        }
+        
+        query += ' ORDER BY m.created_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const [marksheets] = await db.query(query, params);
+        
+        res.json({
+            success: true,
+            data: marksheets,
+            pagination: { page: parseInt(page), limit: parseInt(limit) }
+        });
+    } catch (error) {
+        console.error('Error fetching marksheets:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch marksheets' });
+    }
+});
+
+// Get single marksheet
+router.get('/marksheets/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const [marksheets] = await db.query(`
+            SELECT 
+                m.id, m.session, m.class, m.exam_type, 
+                m.cloudinary_url, m.is_published, m.uploaded_at,
+                m.original_filename, m.file_size,
+                s.student_id, s.name, s.father_name, s.mother_name, s.dob,
+                ar.exam_roll_no
+            FROM marksheets m
+            JOIN students s ON m.student_id = s.id
+            JOIN academic_records ar ON m.academic_record_id = ar.id
+            WHERE m.id = ?
+        `, [id]);
+        
+        if (marksheets.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Marksheet not found' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: marksheets[0]
+        });
+    } catch (error) {
+        console.error('Error fetching marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch marksheet' });
+    }
+});
+
+// Replace marksheet
+router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => {
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        const { id } = req.params;
+        
+        if (!req.file) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'PDF file is required' 
+            });
+        }
+        
+        // Get existing marksheet
+        const [marksheets] = await connection.query(
+            'SELECT cloudinary_public_id FROM marksheets WHERE id = ?',
+            [id]
+        );
+        
+        if (marksheets.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Marksheet not found' 
+            });
+        }
+        
+        // Delete old file from Cloudinary
+        if (marksheets[0].cloudinary_public_id) {
+            try {
+                await cloudinary.uploader.destroy(marksheets[0].cloudinary_public_id, {
+                    resource_type: 'raw'
+                });
+            } catch (err) {
+                console.error('Failed to delete old Cloudinary file:', err);
+            }
+        }
+        
+        // Update with new Cloudinary details
+        const cloudinaryData = {
+            public_id: req.file.public_id || req.file.filename,
+            secure_url: req.file.path || req.file.secure_url,
+            original_filename: req.file.originalname,
+            file_size: req.file.size
+        };
+        
+        await connection.query(`
+            UPDATE marksheets 
+            SET cloudinary_public_id = ?, cloudinary_url = ?, 
+                original_filename = ?, file_size = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [
+            cloudinaryData.public_id, cloudinaryData.secure_url,
+            cloudinaryData.original_filename, cloudinaryData.file_size,
+            id
+        ]);
+        
+        await connection.commit();
+        
+        res.json({
+            success: true,
+            message: 'Marksheet replaced successfully',
+            data: { cloudinary_url: cloudinaryData.secure_url }
+        });
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error replacing marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to replace marksheet' });
+    } finally {
+        connection.release();
+    }
+});
+
+// Delete marksheet
+router.delete('/marksheets/:id', async (req, res) => {
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        const { id } = req.params;
+        
+        // Get marksheet
+        const [marksheets] = await connection.query(
+            'SELECT cloudinary_public_id FROM marksheets WHERE id = ?',
+            [id]
+        );
+        
+        if (marksheets.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Marksheet not found' 
+            });
+        }
+        
+        // Delete from Cloudinary
+        if (marksheets[0].cloudinary_public_id) {
+            try {
+                await cloudinary.uploader.destroy(marksheets[0].cloudinary_public_id, {
+                    resource_type: 'raw'
+                });
+            } catch (err) {
+                console.error('Failed to delete Cloudinary file:', err);
+            }
+        }
+        
+        // Delete from database
+        await connection.query('DELETE FROM marksheets WHERE id = ?', [id]);
+        
+        await connection.commit();
+        
+        res.json({
+            success: true,
+            message: 'Marksheet deleted successfully'
+        });
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error deleting marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to delete marksheet' });
+    } finally {
+        connection.release();
+    }
+});
+
+// ============================================
+// PUBLISH / UNPUBLISH
+// ============================================
+
+// Publish marksheet
+router.post('/marksheets/:id/publish', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const [result] = await db.query(
+            'UPDATE marksheets SET is_published = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [id]
+        );
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Marksheet not found' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Marksheet published successfully'
+        });
+    } catch (error) {
+        console.error('Error publishing marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to publish marksheet' });
+    }
+});
+
+// Unpublish marksheet
+router.post('/marksheets/:id/unpublish', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const [result] = await db.query(
+            'UPDATE marksheets SET is_published = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [id]
+        );
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Marksheet not found' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Marksheet unpublished successfully'
+        });
+    } catch (error) {
+        console.error('Error unpublishing marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to unpublish marksheet' });
+    }
+});
+
+// ============================================
+// PUBLIC RESULT APIS
+// ============================================
+
+// Get available classes with published results
+router.get('/public/classes', async (req, res) => {
+    try {
+        const [classes] = await db.query(`
+            SELECT 
+                class,
+                COUNT(*) as total_published
+            FROM marksheets
+            WHERE is_published = TRUE
+            GROUP BY class
+            HAVING COUNT(*) > 0
+            ORDER BY class
+        `);
+        
+        res.json({
+            success: true,
+            data: classes
+        });
+    } catch (error) {
+        console.error('Error fetching classes:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch classes' });
+    }
+});
+
+// Get published results for a session and class
+router.get('/public/:session/:class', async (req, res) => {
+    try {
+        const { session, class: classNum } = req.params;
+        
+        const [results] = await db.query(`
+            SELECT 
+                m.id, m.exam_type, m.cloudinary_url,
+                s.student_id, s.name, s.father_name, s.mother_name,
+                ar.exam_roll_no
+            FROM marksheets m
+            JOIN students s ON m.student_id = s.id
+            JOIN academic_records ar ON m.academic_record_id = ar.id
+            WHERE m.session = ? AND m.class = ? AND m.is_published = TRUE
+            ORDER BY s.name
+        `, [session, classNum]);
+        
+        res.json({
+            success: true,
+            data: results
+        });
+    } catch (error) {
+        console.error('Error fetching public results:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch results' });
+    }
+});
+
+// Public student search (Student ID + DOB)
+router.post('/public/search', async (req, res) => {
+    try {
+        const { student_id, dob } = req.body;
+        
+        if (!student_id || !dob) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Student ID and Date of Birth are required' 
+            });
+        }
+        
+        // Find student
+        const [students] = await db.query(`
+            SELECT 
+                s.id, s.student_id, s.apaar_id, s.name, s.father_name, 
+                s.mother_name, s.dob, s.photo,
+                ar.session, ar.class, ar.section, ar.exam_roll_no
+            FROM students s
+            LEFT JOIN academic_records ar ON s.id = ar.student_id
+            WHERE s.student_id = ? AND DATE(s.dob) = DATE(?)
+        `, [student_id, dob]);
+        
+        if (students.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'No student found with the provided Student ID and DOB' 
+            });
+        }
+        
+        // Get published marksheets
+        const [marksheets] = await db.query(`
+            SELECT 
+                m.id, m.session, m.class, m.exam_type, 
+                m.cloudinary_url, m.uploaded_at
+            FROM marksheets m
+            WHERE m.student_id = ? AND m.is_published = TRUE
+            ORDER BY m.session DESC, m.exam_type
+        `, [students[0].id]);
+        
+        res.json({
+            success: true,
+            data: {
+                student: students[0],
+                marksheets: marksheets
+            }
+        });
+    } catch (error) {
+        console.error('Error searching public results:', error);
+        res.status(500).json({ success: false, message: 'Failed to search results' });
+    }
+});
+
+// View published marksheet
+router.get('/public/marksheet/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const [marksheets] = await db.query(`
+            SELECT cloudinary_url, is_published 
+            FROM marksheets 
+            WHERE id = ? AND is_published = TRUE
+        `, [id]);
+        
+        if (marksheets.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Marksheet not found or not published' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: {
+                url: marksheets[0].cloudinary_url
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch marksheet' });
+    }
+});
+
+// Download marksheet
+router.get('/public/marksheet/:id/download', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const [marksheets] = await db.query(`
+            SELECT cloudinary_public_id, original_filename, is_published 
+            FROM marksheets 
+            WHERE id = ? AND is_published = TRUE
+        `, [id]);
+        
+        if (marksheets.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Marksheet not found or not published' 
+            });
+        }
+        
+        // Redirect to Cloudinary download URL
+        const downloadUrl = cloudinary.url(marksheets[0].cloudinary_public_id, {
+            resource_type: 'raw',
+            flags: 'attachment',
+            filename: marksheets[0].original_filename || 'marksheet.pdf'
+        });
+        
+        res.json({
+            success: true,
+            data: {
+                download_url: downloadUrl
+            }
+        });
+    } catch (error) {
+        console.error('Error downloading marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to download marksheet' });
+    }
+});
+
+// ============================================
+// ADMIN DASHBOARD STATISTICS
+// ============================================
+
+router.get('/dashboard/stats', async (req, res) => {
+    try {
+        // Overall stats
+        const [overallStats] = await db.query(`
+            SELECT 
+                COUNT(DISTINCT student_id) as total_students,
+                COUNT(*) as total_marksheets,
+                SUM(CASE WHEN is_published = TRUE THEN 1 ELSE 0 END) as published_results,
+                SUM(CASE WHEN is_published = FALSE THEN 1 ELSE 0 END) as unpublished_results
+            FROM marksheets
+        `);
+        
+        // Class-wise stats
+        const [classStats] = await db.query(`
+            SELECT 
+                class,
+                COUNT(DISTINCT student_id) as students,
+                COUNT(*) as marksheets,
+                SUM(CASE WHEN is_published = TRUE THEN 1 ELSE 0 END) as published,
+                SUM(CASE WHEN is_published = FALSE THEN 1 ELSE 0 END) as unpublished
+            FROM marksheets
+            GROUP BY class
+            ORDER BY class
+        `);
+        
+        res.json({
+            success: true,
+            data: {
+                overall: overallStats[0] || { total_students: 0, total_marksheets: 0, published_results: 0, unpublished_results: 0 },
+                class_wise: classStats
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching stats:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch statistics' });
+    }
 });
 
 module.exports = router;
