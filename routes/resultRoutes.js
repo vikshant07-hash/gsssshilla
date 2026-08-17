@@ -1,18 +1,15 @@
-// routes/resultRoutes.js
-// ================================================================
-//  COMPLETE RESULT MANAGEMENT ROUTES - PRODUCTION READY
-// ================================================================
+// routes/resultRoutes.js - COMPLETE FIXED VERSION
+// WITHOUT getConnection - Only uses query function
 
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const { query, getConnection } = require('../config/db');
+
+// ✅ Only import 'query' from db.js
+const { query } = require('../config/db');
 const cloudinary = require('../config/cloudinary').cloudinary;
 
-// ================================================================
-//  CONSTANTS
-// ================================================================
 const VALID_CLASSES = [6, 7, 8, 9, 10, 11, 12];
 const VALID_EXAM_TYPES = [
     'Annual Examination',
@@ -60,18 +57,10 @@ function normalizeExamType(value, { required = false } = {}) {
     return trimmed;
 }
 
-function formatDate(date) {
-    if (!date) return null;
-    const d = new Date(date);
-    if (isNaN(d.getTime())) return null;
-    return d.toISOString().split('T')[0];
-}
-
 function sendError(res, error, fallbackMessage) {
     console.error('❌ Error:', error);
     const message = error.message || fallbackMessage || 'Something went wrong';
-    const status = error.statusCode || 500;
-    return res.status(status).json({ success: false, message });
+    return res.status(500).json({ success: false, message });
 }
 
 // ================================================================
@@ -146,7 +135,6 @@ router.get('/students', asyncHandler(async (req, res) => {
     if (student_id) { sql += ' AND s.student_id LIKE ?'; params.push(`%${student_id}%`); }
     if (name) { sql += ' AND s.name LIKE ?'; params.push(`%${name}%`); }
 
-    // Count total
     const countSql = sql.replace(
         /SELECT[\s\S]*?FROM students s/,
         'SELECT COUNT(DISTINCT s.id) as total FROM students s'
@@ -163,12 +151,7 @@ router.get('/students', asyncHandler(async (req, res) => {
     res.json({
         success: true,
         data: students,
-        pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.max(Math.ceil(total / limit), 1)
-        }
+        pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) }
     });
 }));
 
@@ -208,7 +191,7 @@ router.get('/students/:studentId', asyncHandler(async (req, res) => {
     });
 }));
 
-// CREATE Student
+// CREATE Student - ✅ No transaction, only query
 router.post('/students', asyncHandler(async (req, res) => {
     const {
         student_id, apaar_id, name, father_name, mother_name,
@@ -228,49 +211,34 @@ router.post('/students', asyncHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: 'Session is required' });
     }
 
-    const conn = await getConnection();
-    try {
-        await conn.beginTransaction();
-
-        // Check existing
-        const [existing] = await conn.query(
-            'SELECT id FROM students WHERE student_id = ?', [student_id]
-        );
-        if (existing.length > 0) {
-            await conn.rollback();
-            return res.status(409).json({ success: false, message: 'Student ID already exists' });
-        }
-
-        // Insert student
-        const [studentResult] = await conn.query(`
-            INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null]);
-
-        const studentDbId = studentResult.insertId;
-
-        // Insert academic record
-        await conn.query(`
-            INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
-            VALUES (?, ?, ?, ?, ?)
-        `, [studentDbId, session, classNum, section || null, exam_roll_no || null]);
-
-        await conn.commit();
-
-        res.status(201).json({
-            success: true,
-            message: 'Student created successfully',
-            data: { student_id, id: studentDbId }
-        });
-    } catch (error) {
-        await conn.rollback();
-        throw error;
-    } finally {
-        conn.release();
+    // Check existing
+    const existing = await query('SELECT id FROM students WHERE student_id = ?', [student_id]);
+    if (existing.length > 0) {
+        return res.status(409).json({ success: false, message: 'Student ID already exists' });
     }
+
+    // Insert student
+    const studentResult = await query(`
+        INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null]);
+
+    const studentDbId = studentResult.insertId;
+
+    // Insert academic record
+    await query(`
+        INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
+        VALUES (?, ?, ?, ?, ?)
+    `, [studentDbId, session, classNum, section || null, exam_roll_no || null]);
+
+    res.status(201).json({
+        success: true,
+        message: 'Student created successfully',
+        data: { student_id, id: studentDbId }
+    });
 }));
 
-// UPDATE Student
+// UPDATE Student - ✅ No transaction, only query
 router.put('/students/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const { apaar_id, name, father_name, mother_name, dob, photo, section, exam_roll_no } = req.body;
@@ -283,44 +251,33 @@ router.put('/students/:studentId', asyncHandler(async (req, res) => {
     }
     const studentDbId = students[0].id;
 
-    const conn = await getConnection();
-    try {
-        await conn.beginTransaction();
+    // Update student
+    await query(`
+        UPDATE students
+        SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
+        WHERE student_id = ?
+    `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null, studentId]);
 
-        // Update student
-        await conn.query(`
-            UPDATE students
-            SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
-            WHERE student_id = ?
-        `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null, studentId]);
-
-        // Update academic record
-        if (session !== null && classNum !== null) {
-            const [existingAr] = await conn.query(
-                'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
-                [studentDbId, session, classNum]
+    // Update academic record
+    if (session !== null && classNum !== null) {
+        const existingAr = await query(
+            'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
+            [studentDbId, session, classNum]
+        );
+        if (existingAr.length > 0) {
+            await query(
+                'UPDATE academic_records SET section = ?, exam_roll_no = ? WHERE id = ?',
+                [section || null, exam_roll_no || null, existingAr[0].id]
             );
-            if (existingAr.length > 0) {
-                await conn.query(
-                    'UPDATE academic_records SET section = ?, exam_roll_no = ? WHERE id = ?',
-                    [section || null, exam_roll_no || null, existingAr[0].id]
-                );
-            } else {
-                await conn.query(
-                    'INSERT INTO academic_records (student_id, session, class, section, exam_roll_no) VALUES (?, ?, ?, ?, ?)',
-                    [studentDbId, session, classNum, section || null, exam_roll_no || null]
-                );
-            }
+        } else {
+            await query(
+                'INSERT INTO academic_records (student_id, session, class, section, exam_roll_no) VALUES (?, ?, ?, ?, ?)',
+                [studentDbId, session, classNum, section || null, exam_roll_no || null]
+            );
         }
-
-        await conn.commit();
-        res.json({ success: true, message: 'Student updated successfully' });
-    } catch (error) {
-        await conn.rollback();
-        throw error;
-    } finally {
-        conn.release();
     }
+
+    res.json({ success: true, message: 'Student updated successfully' });
 }));
 
 // DELETE Student
@@ -337,10 +294,8 @@ router.delete('/students/:studentId', asyncHandler(async (req, res) => {
         [students[0].id]
     );
 
-    // Delete student (cascade will delete marksheets)
     await query('DELETE FROM students WHERE student_id = ?', [studentId]);
 
-    // Clean up Cloudinary
     for (const m of marksheets) {
         if (m.cloudinary_public_id) {
             try {
@@ -405,7 +360,6 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
         baseParams.push(session);
     }
 
-    // Count
     const countResult = await query(`
         SELECT COUNT(DISTINCT s.id) as total
         FROM students s
@@ -414,7 +368,6 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
     `, baseParams);
     const total = countResult[0]?.total || 0;
 
-    // Data
     const sql = `
         SELECT
             s.id, s.student_id, s.apaar_id, s.name, s.father_name,
@@ -469,7 +422,6 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     }
     const studentDbId = students[0].id;
 
-    // Ensure academic record exists
     let academicRecords = await query(
         'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
         [studentDbId, session, classNum]
@@ -485,7 +437,6 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
         academicRecordId = academicRecords[0].id;
     }
 
-    // Check duplicate
     const existing = await query(
         'SELECT id FROM marksheets WHERE student_id = ? AND session = ? AND class = ? AND exam_type = ?',
         [studentDbId, session, classNum, exam_type]
@@ -557,7 +508,6 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
         params.push(is_published === 'true' || is_published === '1' ? 1 : 0);
     }
 
-    // Count
     const countSql = sql.replace(
         /SELECT[\s\S]*?FROM marksheets m/,
         'SELECT COUNT(*) as total FROM marksheets m'
@@ -632,7 +582,6 @@ router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res
         WHERE id = ?
     `, [cloudinaryData.public_id, cloudinaryData.secure_url, cloudinaryData.original_filename, cloudinaryData.file_size, id]);
 
-    // Delete old file
     if (oldPublicId) {
         try {
             await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'raw' });
