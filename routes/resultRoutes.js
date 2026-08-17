@@ -1,5 +1,7 @@
-// routes/resultRoutes.js - COMPLETE FIXED VERSION
-// WITHOUT getConnection - Only uses query function
+// ================================================================
+//  COMPLETE RESULT MANAGEMENT ROUTES - FULLY FIXED
+//  No getConnection, No class validation on public view
+// ================================================================
 
 const express = require('express');
 const router = express.Router();
@@ -60,7 +62,8 @@ function normalizeExamType(value, { required = false } = {}) {
 function sendError(res, error, fallbackMessage) {
     console.error('❌ Error:', error);
     const message = error.message || fallbackMessage || 'Something went wrong';
-    return res.status(500).json({ success: false, message });
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, message });
 }
 
 // ================================================================
@@ -135,6 +138,7 @@ router.get('/students', asyncHandler(async (req, res) => {
     if (student_id) { sql += ' AND s.student_id LIKE ?'; params.push(`%${student_id}%`); }
     if (name) { sql += ' AND s.name LIKE ?'; params.push(`%${name}%`); }
 
+    // Count total
     const countSql = sql.replace(
         /SELECT[\s\S]*?FROM students s/,
         'SELECT COUNT(DISTINCT s.id) as total FROM students s'
@@ -191,7 +195,7 @@ router.get('/students/:studentId', asyncHandler(async (req, res) => {
     });
 }));
 
-// CREATE Student - ✅ No transaction, only query
+// CREATE Student
 router.post('/students', asyncHandler(async (req, res) => {
     const {
         student_id, apaar_id, name, father_name, mother_name,
@@ -238,7 +242,7 @@ router.post('/students', asyncHandler(async (req, res) => {
     });
 }));
 
-// UPDATE Student - ✅ No transaction, only query
+// UPDATE Student
 router.put('/students/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const { apaar_id, name, father_name, mother_name, dob, photo, section, exam_roll_no } = req.body;
@@ -782,34 +786,62 @@ router.post('/public/search', asyncHandler(async (req, res) => {
     res.json({ success: true, data: { student: students[0], marksheets } });
 }));
 
+// ================================================================
+//  PUBLIC MARKSHEET VIEW - ✅ FIXED (No class validation)
+// ================================================================
+
+// ✅ VIEW marksheet - Direct redirect to Cloudinary URL
 router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    
+    if (isNaN(id) || id <= 0) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid marksheet ID' 
+        });
     }
 
     const marksheets = await query(
-        'SELECT cloudinary_url, is_published FROM marksheets WHERE id = ? AND is_published = 1',
+        `SELECT cloudinary_url, is_published 
+         FROM marksheets 
+         WHERE id = ? AND is_published = 1`,
         [id]
     );
+    
     if (marksheets.length === 0) {
-        return res.status(404).json({ success: false, message: 'Marksheet not found or not published' });
+        return res.status(404).json({ 
+            success: false, 
+            message: 'Marksheet not found or not published' 
+        });
     }
-    res.json({ success: true, data: { url: marksheets[0].cloudinary_url } });
+    
+    // ✅ Direct redirect to Cloudinary
+    return res.redirect(marksheets[0].cloudinary_url);
 }));
 
+// ✅ DOWNLOAD marksheet - Redirect to Cloudinary download URL
 router.get('/public/marksheet/:id/download', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    
+    if (isNaN(id) || id <= 0) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid marksheet ID' 
+        });
     }
 
     const marksheets = await query(
-        'SELECT cloudinary_public_id, original_filename, is_published FROM marksheets WHERE id = ? AND is_published = 1',
+        `SELECT cloudinary_public_id, original_filename, is_published 
+         FROM marksheets 
+         WHERE id = ? AND is_published = 1`,
         [id]
     );
+    
     if (marksheets.length === 0) {
-        return res.status(404).json({ success: false, message: 'Marksheet not found or not published' });
+        return res.status(404).json({ 
+            success: false, 
+            message: 'Marksheet not found or not published' 
+        });
     }
 
     const downloadUrl = cloudinary.url(marksheets[0].cloudinary_public_id, {
@@ -818,7 +850,8 @@ router.get('/public/marksheet/:id/download', asyncHandler(async (req, res) => {
         filename: marksheets[0].original_filename || 'marksheet.pdf'
     });
 
-    res.json({ success: true, data: { download_url: downloadUrl } });
+    // ✅ Direct redirect to Cloudinary download
+    return res.redirect(downloadUrl);
 }));
 
 // ================================================================
