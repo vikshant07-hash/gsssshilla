@@ -1,29 +1,6 @@
 // ================================================================
-//  RESULT MANAGEMENT ROUTES — PRODUCTION-READY VERSION
-//
-//  Key fixes vs the earlier version:
-//   1. `session` / `class` filters are normalized (trimmed, cast to
-//      correct type) before being used in SQL — this was the root
-//      cause of "{success:true, data:[]}" even though records
-//      existed (frontend sent "2025-26" with a stray space / the
-//      class filter was compared as a string against a numeric
-//      column in some drivers).
-//   2. Empty-string query params ("" from a "All Sessions"/blank
-//      dropdown) are now treated as "no filter", not as a literal
-//      empty-string match.
-//   3. Student creation (`students` + `academic_records` insert) is
-//      wrapped in a real DB transaction — previously if the second
-//      insert failed, you'd end up with a student row with no
-//      academic record, which then silently disappears from every
-//      class-filtered listing.
-//   4. Consistent input validation with clear 400 responses instead
-//      of letting bad data reach the DB.
-//   5. `is_published` is normalized to 0/1 consistently.
-//   6. `count` endpoint added for pagination totals (the original
-//      pagination block never returned `total`/`totalPages`, so the
-//      frontend's renderPagination() always no-op'd).
-//   7. Centralized `asyncHandler` wrapper so no route can crash the
-//      process on an unhandled rejection.
+//  RESULT MANAGEMENT ROUTES — UPDATED VERSION
+//  (No getConnection - uses simple query function)
 // ================================================================
 
 const express = require('express');
@@ -31,7 +8,7 @@ const router = express.Router();
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
-const { query, getConnection } = require('../config/db'); // getConnection needed for transactions
+const { query } = require('../config/db');
 const cloudinary = require('../config/cloudinary').cloudinary;
 
 const VALID_CLASSES = [6, 7, 8, 9, 10, 11, 12];
@@ -45,68 +22,51 @@ const VALID_EXAM_TYPES = [
     'Unit Test'
 ];
 
-// ----------------------------------------------------------------
+// ================================================================
 //  HELPERS
-// ----------------------------------------------------------------
+// ================================================================
 
-// Wrap async route handlers so thrown errors always hit Express's
-// error pipeline instead of crashing the process / hanging the request.
 const asyncHandler = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
-// Normalizes a "session" query/body value: trims whitespace,
-// returns null for blank/undefined so callers can skip the filter.
 function normalizeSession(value) {
     if (value === undefined || value === null) return null;
     const trimmed = String(value).trim();
     return trimmed === '' ? null : trimmed;
 }
 
-// Normalizes a "class" query/body value to an integer 6-12, or
-// null if not provided. Throws a descriptive error if invalid.
 function normalizeClass(value, { required = false } = {}) {
     if (value === undefined || value === null || String(value).trim() === '') {
-        if (required) throw new ValidationError('Class is required');
+        if (required) throw new Error('Class is required');
         return null;
     }
     const num = parseInt(value, 10);
     if (Number.isNaN(num) || !VALID_CLASSES.includes(num)) {
-        throw new ValidationError('Invalid class. Must be one of: ' + VALID_CLASSES.join(', '));
+        throw new Error('Invalid class. Must be 6-12');
     }
     return num;
 }
 
 function normalizeExamType(value, { required = false } = {}) {
     if (value === undefined || value === null || String(value).trim() === '') {
-        if (required) throw new ValidationError('Exam type is required');
+        if (required) throw new Error('Exam type is required');
         return null;
     }
     const trimmed = String(value).trim();
     if (!VALID_EXAM_TYPES.includes(trimmed)) {
-        throw new ValidationError('Invalid exam type');
+        throw new Error('Invalid exam type');
     }
     return trimmed;
 }
 
-class ValidationError extends Error {
-    constructor(message) {
-        super(message);
-        this.name = 'ValidationError';
-        this.statusCode = 400;
-    }
-}
-
 function sendError(res, error, fallbackMessage) {
-    if (error instanceof ValidationError) {
-        return res.status(400).json({ success: false, message: error.message });
-    }
     console.error('❌', fallbackMessage, error);
     return res.status(500).json({ success: false, message: fallbackMessage });
 }
 
-// ----------------------------------------------------------------
+// ================================================================
 //  CLOUDINARY STORAGE
-// ----------------------------------------------------------------
+// ================================================================
 
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
@@ -126,25 +86,23 @@ const storage = new CloudinaryStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         if (file.mimetype === 'application/pdf') {
             cb(null, true);
         } else {
-            cb(new ValidationError('Only PDF files are allowed'), false);
+            cb(new Error('Only PDF files are allowed'), false);
         }
     }
 });
 
-// Multer errors (file too large, wrong type) need their own handler
-// so they come back as clean JSON instead of an HTML stack trace.
 function handleUpload(req, res, next) {
     upload.single('pdf')(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             return res.status(400).json({ success: false, message: 'Upload error: ' + err.message });
         }
         if (err) {
-            return sendError(res, err, 'Failed to process upload');
+            return res.status(400).json({ success: false, message: err.message || 'Upload failed' });
         }
         next();
     });
@@ -178,7 +136,7 @@ router.get('/students', asyncHandler(async (req, res) => {
     if (student_id) { sql += ' AND s.student_id LIKE ?'; params.push(`%${student_id}%`); }
     if (name) { sql += ' AND s.name LIKE ?'; params.push(`%${name}%`); }
 
-    // Count total (for pagination) using the same filters
+    // Count total
     const countSql = sql.replace(
         `SELECT
             s.id, s.student_id, s.apaar_id, s.name, s.father_name,
@@ -198,12 +156,7 @@ router.get('/students', asyncHandler(async (req, res) => {
     res.json({
         success: true,
         data: students,
-        pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.max(Math.ceil(total / limit), 1)
-        }
+        pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) }
     });
 }));
 
@@ -251,47 +204,41 @@ router.post('/students', asyncHandler(async (req, res) => {
     const session = normalizeSession(req.body.session);
     const classNum = normalizeClass(req.body.class, { required: true });
 
-    if (!student_id || !String(student_id).trim()) throw new ValidationError('Student ID is required');
-    if (!name || !String(name).trim()) throw new ValidationError('Name is required');
-    if (!session) throw new ValidationError('Session is required');
-
-    const conn = await getConnection();
-    try {
-        await conn.beginTransaction();
-
-        const [existing] = await conn.query(
-            'SELECT id FROM students WHERE student_id = ?', [student_id]
-        );
-        if (existing.length > 0) {
-            await conn.rollback();
-            return res.status(409).json({ success: false, message: 'Student ID already exists' });
-        }
-
-        const [studentResult] = await conn.query(`
-            INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null]);
-
-        const studentDbId = studentResult.insertId;
-
-        await conn.query(`
-            INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
-            VALUES (?, ?, ?, ?, ?)
-        `, [studentDbId, session, classNum, section || null, exam_roll_no || null]);
-
-        await conn.commit();
-
-        res.status(201).json({
-            success: true,
-            message: 'Student created successfully',
-            data: { student_id, id: studentDbId }
-        });
-    } catch (error) {
-        await conn.rollback();
-        throw error;
-    } finally {
-        conn.release();
+    if (!student_id || !String(student_id).trim()) {
+        return res.status(400).json({ success: false, message: 'Student ID is required' });
     }
+    if (!name || !String(name).trim()) {
+        return res.status(400).json({ success: false, message: 'Name is required' });
+    }
+    if (!session) {
+        return res.status(400).json({ success: false, message: 'Session is required' });
+    }
+
+    // Check existing
+    const existing = await query('SELECT id FROM students WHERE student_id = ?', [student_id]);
+    if (existing.length > 0) {
+        return res.status(409).json({ success: false, message: 'Student ID already exists' });
+    }
+
+    // Insert student
+    const studentResult = await query(`
+        INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null]);
+
+    const studentDbId = studentResult.insertId;
+
+    // Insert academic record
+    await query(`
+        INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
+        VALUES (?, ?, ?, ?, ?)
+    `, [studentDbId, session, classNum, section || null, exam_roll_no || null]);
+
+    res.status(201).json({
+        success: true,
+        message: 'Student created successfully',
+        data: { student_id, id: studentDbId }
+    });
 }));
 
 router.put('/students/:studentId', asyncHandler(async (req, res) => {
@@ -306,44 +253,33 @@ router.put('/students/:studentId', asyncHandler(async (req, res) => {
     }
     const studentDbId = students[0].id;
 
-    const conn = await getConnection();
-    try {
-        await conn.beginTransaction();
+    // Update student
+    await query(`
+        UPDATE students
+        SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
+        WHERE student_id = ?
+    `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null, studentId]);
 
-        await conn.query(`
-            UPDATE students
-            SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
-            WHERE student_id = ?
-        `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null, studentId]);
-
-        if (session !== null && classNum !== null) {
-            // Upsert academic record for this session+class instead of blind UPDATE,
-            // which previously could silently affect 0 rows if no matching record existed.
-            const existingAr = await conn.query(
-                'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
-                [studentDbId, session, classNum]
+    // Update academic record if session and class provided
+    if (session !== null && classNum !== null) {
+        const existingAr = await query(
+            'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
+            [studentDbId, session, classNum]
+        );
+        if (existingAr.length > 0) {
+            await query(
+                'UPDATE academic_records SET section = ?, exam_roll_no = ? WHERE id = ?',
+                [section || null, exam_roll_no || null, existingAr[0].id]
             );
-            if (existingAr[0].length > 0) {
-                await conn.query(
-                    'UPDATE academic_records SET section = ?, exam_roll_no = ? WHERE id = ?',
-                    [section || null, exam_roll_no || null, existingAr[0][0].id]
-                );
-            } else {
-                await conn.query(
-                    'INSERT INTO academic_records (student_id, session, class, section, exam_roll_no) VALUES (?, ?, ?, ?, ?)',
-                    [studentDbId, session, classNum, section || null, exam_roll_no || null]
-                );
-            }
+        } else {
+            await query(
+                'INSERT INTO academic_records (student_id, session, class, section, exam_roll_no) VALUES (?, ?, ?, ?, ?)',
+                [studentDbId, session, classNum, section || null, exam_roll_no || null]
+            );
         }
-
-        await conn.commit();
-        res.json({ success: true, message: 'Student updated successfully' });
-    } catch (error) {
-        await conn.rollback();
-        throw error;
-    } finally {
-        conn.release();
     }
+
+    res.json({ success: true, message: 'Student updated successfully' });
 }));
 
 router.delete('/students/:studentId', asyncHandler(async (req, res) => {
@@ -355,15 +291,14 @@ router.delete('/students/:studentId', asyncHandler(async (req, res) => {
     }
 
     const marksheets = await query(
-        'SELECT cloudinary_public_id FROM marksheets WHERE student_id = ?', [students[0].id]
+        'SELECT cloudinary_public_id FROM marksheets WHERE student_id = ?',
+        [students[0].id]
     );
 
-    // Delete DB row first via FK CASCADE (schema.sql), then clean up Cloudinary.
-    // Doing DB delete first means a failed Cloudinary cleanup never leaves the
-    // record visible in the app (previously Cloudinary errors were swallowed
-    // but happened *before* the DB delete, so partial failures were possible).
+    // Delete student (cascade will delete marksheets)
     await query('DELETE FROM students WHERE student_id = ?', [studentId]);
 
+    // Delete Cloudinary files
     for (const m of marksheets) {
         if (m.cloudinary_public_id) {
             try {
@@ -375,6 +310,38 @@ router.delete('/students/:studentId', asyncHandler(async (req, res) => {
     }
 
     res.json({ success: true, message: 'Student deleted successfully' });
+}));
+
+router.get('/students/search/:studentId', asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+
+    const students = await query(`
+        SELECT
+            s.id, s.student_id, s.apaar_id, s.name, s.father_name,
+            s.mother_name, s.dob, s.photo,
+            ar.session, ar.class, ar.section, ar.exam_roll_no
+        FROM students s
+        LEFT JOIN academic_records ar ON s.id = ar.student_id
+        WHERE s.student_id = ?
+    `, [studentId]);
+
+    if (students.length === 0) {
+        return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    const marksheets = await query(`
+        SELECT
+            m.id, m.session, m.class, m.exam_type,
+            m.cloudinary_url, m.is_published, m.uploaded_at
+        FROM marksheets m
+        WHERE m.student_id = ?
+        ORDER BY m.session DESC, m.exam_type
+    `, [students[0].id]);
+
+    res.json({
+        success: true,
+        data: { student: students[0], marksheets }
+    });
 }));
 
 // ================================================================
@@ -395,6 +362,7 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
         baseParams.push(session);
     }
 
+    // Count
     const countResult = await query(`
         SELECT COUNT(DISTINCT s.id) as total
         FROM students s
@@ -403,6 +371,7 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
     `, baseParams);
     const total = countResult[0]?.total || 0;
 
+    // Data
     const sql = `
         SELECT
             s.id, s.student_id, s.apaar_id, s.name, s.father_name,
@@ -441,9 +410,15 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     const classNum = normalizeClass(req.body.class, { required: true });
     const exam_type = normalizeExamType(req.body.exam_type, { required: true });
 
-    if (!student_id) throw new ValidationError('Student ID is required');
-    if (!session) throw new ValidationError('Session is required');
-    if (!req.file) throw new ValidationError('PDF file is required');
+    if (!student_id) {
+        return res.status(400).json({ success: false, message: 'Student ID is required' });
+    }
+    if (!session) {
+        return res.status(400).json({ success: false, message: 'Session is required' });
+    }
+    if (!req.file) {
+        return res.status(400).json({ success: false, message: 'PDF file is required' });
+    }
 
     const students = await query('SELECT id FROM students WHERE student_id = ?', [student_id]);
     if (students.length === 0) {
@@ -451,9 +426,7 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     }
     const studentDbId = students[0].id;
 
-    // Ensure an academic_records row exists for this exact session+class —
-    // this FK is what the /students listing joins on, so without it the
-    // marksheet would upload fine but never surface in class-filtered views.
+    // Ensure academic record exists
     let academicRecords = await query(
         'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
         [studentDbId, session, classNum]
@@ -469,6 +442,7 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
         academicRecordId = academicRecords[0].id;
     }
 
+    // Check duplicate
     const existing = await query(
         'SELECT id FROM marksheets WHERE student_id = ? AND session = ? AND class = ? AND exam_type = ?',
         [studentDbId, session, classNum, exam_type]
@@ -476,7 +450,7 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     if (existing.length > 0) {
         return res.status(409).json({
             success: false,
-            message: 'Marksheet already exists for this student/session/class/exam type combination'
+            message: 'Marksheet already exists for this combination'
         });
     }
 
@@ -540,6 +514,7 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
         params.push(is_published === 'true' || is_published === '1' ? 1 : 0);
     }
 
+    // Count
     const countSql = sql.replace(
         /SELECT[\s\S]*?FROM marksheets m/,
         'SELECT COUNT(*) as total FROM marksheets m'
@@ -561,7 +536,9 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
 
 router.get('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new ValidationError('Invalid marksheet id');
+    if (Number.isNaN(id)) {
+        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    }
 
     const marksheets = await query(`
         SELECT
@@ -584,8 +561,12 @@ router.get('/marksheets/:id', asyncHandler(async (req, res) => {
 
 router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new ValidationError('Invalid marksheet id');
-    if (!req.file) throw new ValidationError('PDF file is required');
+    if (Number.isNaN(id)) {
+        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    }
+    if (!req.file) {
+        return res.status(400).json({ success: false, message: 'PDF file is required' });
+    }
 
     const marksheets = await query('SELECT cloudinary_public_id FROM marksheets WHERE id = ?', [id]);
     if (marksheets.length === 0) {
@@ -608,7 +589,7 @@ router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res
         WHERE id = ?
     `, [cloudinaryData.public_id, cloudinaryData.secure_url, cloudinaryData.original_filename, cloudinaryData.file_size, id]);
 
-    // Clean up old file only after DB update succeeds
+    // Delete old file
     if (oldPublicId) {
         try {
             await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'raw' });
@@ -622,7 +603,9 @@ router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res
 
 router.delete('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new ValidationError('Invalid marksheet id');
+    if (Number.isNaN(id)) {
+        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    }
 
     const marksheets = await query('SELECT cloudinary_public_id FROM marksheets WHERE id = ?', [id]);
     if (marksheets.length === 0) {
@@ -648,11 +631,17 @@ router.delete('/marksheets/:id', asyncHandler(async (req, res) => {
 
 router.post('/marksheets/:id/publish', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new ValidationError('Invalid marksheet id');
+    if (Number.isNaN(id)) {
+        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    }
 
     const { declaration_date } = req.body;
-    if (!declaration_date) throw new ValidationError('Declaration date is required');
-    if (Number.isNaN(Date.parse(declaration_date))) throw new ValidationError('Invalid declaration date');
+    if (!declaration_date) {
+        return res.status(400).json({ success: false, message: 'Declaration date is required' });
+    }
+    if (Number.isNaN(Date.parse(declaration_date))) {
+        return res.status(400).json({ success: false, message: 'Invalid declaration date' });
+    }
 
     const result = await query(
         `UPDATE marksheets
@@ -670,7 +659,9 @@ router.post('/marksheets/:id/publish', asyncHandler(async (req, res) => {
 
 router.post('/marksheets/:id/unpublish', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new ValidationError('Invalid marksheet id');
+    if (Number.isNaN(id)) {
+        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    }
 
     const result = await query(
         'UPDATE marksheets SET is_published = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
@@ -684,15 +675,20 @@ router.post('/marksheets/:id/unpublish', asyncHandler(async (req, res) => {
     res.json({ success: true, message: 'Marksheet unpublished successfully' });
 }));
 
-// Bulk publish — atomic-ish: runs in a single transaction so a partial
-// failure doesn't leave half the batch published and half not.
+// Bulk publish
 router.post('/marksheets/bulk-publish', asyncHandler(async (req, res) => {
     const { ids, declaration_date } = req.body;
-    if (!Array.isArray(ids) || ids.length === 0) throw new ValidationError('ids array is required');
-    if (!declaration_date) throw new ValidationError('Declaration date is required');
+    if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ success: false, message: 'ids array is required' });
+    }
+    if (!declaration_date) {
+        return res.status(400).json({ success: false, message: 'Declaration date is required' });
+    }
 
     const cleanIds = ids.map((v) => parseInt(v, 10)).filter((v) => !Number.isNaN(v));
-    if (cleanIds.length === 0) throw new ValidationError('No valid marksheet ids provided');
+    if (cleanIds.length === 0) {
+        return res.status(400).json({ success: false, message: 'No valid marksheet ids provided' });
+    }
 
     const placeholders = cleanIds.map(() => '?').join(',');
     const result = await query(
@@ -743,7 +739,9 @@ router.get('/public/classes', asyncHandler(async (req, res) => {
 router.get('/public/:session/:class', asyncHandler(async (req, res) => {
     const session = normalizeSession(req.params.session);
     const classNum = normalizeClass(req.params.class, { required: true });
-    if (!session) throw new ValidationError('Session is required');
+    if (!session) {
+        return res.status(400).json({ success: false, message: 'Session is required' });
+    }
 
     const results = await query(`
         SELECT
@@ -764,7 +762,9 @@ router.post('/public/search', asyncHandler(async (req, res) => {
     const student_id = (req.body.student_id || '').trim();
     const dob = req.body.dob;
 
-    if (!student_id || !dob) throw new ValidationError('Student ID and Date of Birth are required');
+    if (!student_id || !dob) {
+        return res.status(400).json({ success: false, message: 'Student ID and Date of Birth are required' });
+    }
 
     const students = await query(`
         SELECT
@@ -792,7 +792,9 @@ router.post('/public/search', asyncHandler(async (req, res) => {
 
 router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new ValidationError('Invalid marksheet id');
+    if (Number.isNaN(id)) {
+        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    }
 
     const marksheets = await query(
         'SELECT cloudinary_url, is_published FROM marksheets WHERE id = ? AND is_published = 1',
@@ -806,7 +808,9 @@ router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
 
 router.get('/public/marksheet/:id/download', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new ValidationError('Invalid marksheet id');
+    if (Number.isNaN(id)) {
+        return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
+    }
 
     const marksheets = await query(
         'SELECT cloudinary_public_id, original_filename, is_published FROM marksheets WHERE id = ? AND is_published = 1',
@@ -861,12 +865,5 @@ router.get('/dashboard/stats', asyncHandler(async (req, res) => {
         }
     });
 }));
-
-// ================================================================
-//  CENTRALIZED ERROR HANDLER (must be last)
-// ================================================================
-router.use((err, req, res, next) => {
-    sendError(res, err, 'Something went wrong');
-});
 
 module.exports = router;
