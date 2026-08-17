@@ -1,6 +1,5 @@
 // ================================================================
-//  COMPLETE RESULT MANAGEMENT ROUTES - FIXED SQL QUERIES
-//  Compatible with MySQL ONLY_FULL_GROUP_BY mode
+//  COMPLETE RESULT MANAGEMENT ROUTES - CORRECTED
 // ================================================================
 
 const express = require('express');
@@ -51,7 +50,6 @@ const upload = multer({
 //  SECTION 1: STUDENT MANAGEMENT
 // ================================================================
 
-// ---------- GET All Students with Filters ----------
 router.get('/students', async (req, res) => {
     try {
         const {
@@ -92,7 +90,6 @@ router.get('/students', async (req, res) => {
             params.push(`%${name}%`);
         }
 
-        // ✅ FIX: Remove DISTINCT and use GROUP BY for proper ordering
         sql += ' GROUP BY s.id, ar.session, ar.class, ar.section, ar.exam_roll_no';
         sql += ' ORDER BY s.created_at DESC LIMIT ? OFFSET ?';
         params.push(parseInt(limit), parseInt(offset));
@@ -116,7 +113,6 @@ router.get('/students', async (req, res) => {
     }
 });
 
-// ---------- GET Single Student by ID ----------
 router.get('/students/:studentId', async (req, res) => {
     try {
         const { studentId } = req.params;
@@ -164,7 +160,6 @@ router.get('/students/:studentId', async (req, res) => {
     }
 });
 
-// ---------- CREATE Student ----------
 router.post('/students', async (req, res) => {
     try {
         const {
@@ -227,7 +222,6 @@ router.post('/students', async (req, res) => {
     }
 });
 
-// ---------- UPDATE Student ----------
 router.put('/students/:studentId', async (req, res) => {
     try {
         const { studentId } = req.params;
@@ -283,7 +277,6 @@ router.put('/students/:studentId', async (req, res) => {
     }
 });
 
-// ---------- DELETE Student ----------
 router.delete('/students/:studentId', async (req, res) => {
     try {
         const { studentId } = req.params;
@@ -330,7 +323,6 @@ router.delete('/students/:studentId', async (req, res) => {
     }
 });
 
-// ---------- SEARCH Student by ID ----------
 router.get('/students/search/:studentId', async (req, res) => {
     try {
         const { studentId } = req.params;
@@ -381,14 +373,12 @@ router.get('/students/search/:studentId', async (req, res) => {
 //  SECTION 2: CLASS-WISE MANAGEMENT
 // ================================================================
 
-// ---------- Get Students by Class ----------
 router.get('/class/:classId/students', async (req, res) => {
     try {
         const { classId } = req.params;
         const { session, page = 1, limit = 20 } = req.query;
         const offset = (page - 1) * limit;
 
-        // ✅ FIX: Add all non-aggregated columns to GROUP BY
         let sql = `
             SELECT
                 s.id, s.student_id, s.apaar_id, s.name, s.father_name,
@@ -408,7 +398,6 @@ router.get('/class/:classId/students', async (req, res) => {
             params.push(session);
         }
 
-        // ✅ FIX: GROUP BY all non-aggregated columns
         sql += `
             GROUP BY
                 s.id, s.student_id, s.apaar_id, s.name, s.father_name,
@@ -442,7 +431,6 @@ router.get('/class/:classId/students', async (req, res) => {
 //  SECTION 3: MARKSHEET MANAGEMENT
 // ================================================================
 
-// ---------- UPLOAD Marksheet ----------
 router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
     try {
         const { student_id, session, class: classNum, exam_type } = req.body;
@@ -546,7 +534,6 @@ router.post('/marksheets/upload', upload.single('pdf'), async (req, res) => {
     }
 });
 
-// ---------- GET All Marksheets ----------
 router.get('/marksheets', async (req, res) => {
     try {
         const {
@@ -560,7 +547,6 @@ router.get('/marksheets', async (req, res) => {
         } = req.query;
 
         const offset = (page - 1) * limit;
-        // ✅ FIX: Use uploaded_at instead of created_at
         let sql = `
             SELECT
                 m.id, m.session, m.class, m.exam_type,
@@ -596,7 +582,6 @@ router.get('/marksheets', async (req, res) => {
             params.push(is_published === 'true');
         }
 
-        // ✅ FIX: Use uploaded_at instead of created_at
         sql += ' ORDER BY m.uploaded_at DESC LIMIT ? OFFSET ?';
         params.push(parseInt(limit), parseInt(offset));
 
@@ -619,7 +604,6 @@ router.get('/marksheets', async (req, res) => {
     }
 });
 
-// ---------- GET Single Marksheet ----------
 router.get('/marksheets/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -657,7 +641,6 @@ router.get('/marksheets/:id', async (req, res) => {
     }
 });
 
-// ---------- REPLACE Marksheet ----------
 router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => {
     try {
         const { id } = req.params;
@@ -722,7 +705,6 @@ router.put('/marksheets/:id/replace', upload.single('pdf'), async (req, res) => 
     }
 });
 
-// ---------- DELETE Marksheet ----------
 router.delete('/marksheets/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -764,16 +746,13 @@ router.delete('/marksheets/:id', async (req, res) => {
 });
 
 // ================================================================
-//  SECTION 4: PUBLISH / UNPUBLISH
+//  SECTION 4: PUBLISH / UNPUBLISH - ✅ CORRECTED
 // ================================================================
 
-// routes/resultRoutes.js - Update publish endpoint
-
-// PUBLISH Marksheet with declaration date
 router.post('/marksheets/:id/publish', async (req, res) => {
     try {
         const { id } = req.params;
-        const { declaration_date } = req.body; // Get date from request
+        const { declaration_date } = req.body;
 
         if (!declaration_date) {
             return res.status(400).json({
@@ -782,7 +761,8 @@ router.post('/marksheets/:id/publish', async (req, res) => {
             });
         }
 
-        const [result] = await db.query(
+        // ✅ FIX: Use 'query' not 'db.query'
+        const result = await query(
             `UPDATE marksheets 
              SET is_published = TRUE, 
                  declaration_date = ?,
@@ -842,8 +822,6 @@ router.post('/marksheets/:id/unpublish', async (req, res) => {
 //  SECTION 5: PUBLIC RESULT APIS
 // ================================================================
 
-// routes/resultRoutes.js - Update public/classes endpoint
-
 router.get('/public/classes', async (req, res) => {
     try {
         const classes = await query(`
@@ -861,7 +839,6 @@ router.get('/public/classes', async (req, res) => {
             ORDER BY class
         `);
         
-        // Format date for each class
         const formattedData = classes.map(c => ({
             class: c.class,
             total_published: c.total_published,
