@@ -701,7 +701,7 @@ router.post('/marksheets/bulk-publish', asyncHandler(async (req, res) => {
 }));
 
 // ================================================================
-//  SECTION 5: PUBLIC RESULT APIS
+//  SECTION 5: PUBLIC RESULT APIS - ✅ FIXED
 // ================================================================
 
 router.get('/public/classes', asyncHandler(async (req, res) => {
