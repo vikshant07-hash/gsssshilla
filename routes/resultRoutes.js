@@ -1,16 +1,18 @@
+// routes/resultRoutes.js
 // ================================================================
-//  RESULT MANAGEMENT ROUTES — UPDATED VERSION
-//  (No getConnection - uses simple query function)
+//  COMPLETE RESULT MANAGEMENT ROUTES - PRODUCTION READY
 // ================================================================
 
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-
-const { query } = require('../config/db');
+const { query, getConnection } = require('../config/db');
 const cloudinary = require('../config/cloudinary').cloudinary;
 
+// ================================================================
+//  CONSTANTS
+// ================================================================
 const VALID_CLASSES = [6, 7, 8, 9, 10, 11, 12];
 const VALID_EXAM_TYPES = [
     'Annual Examination',
@@ -25,7 +27,6 @@ const VALID_EXAM_TYPES = [
 // ================================================================
 //  HELPERS
 // ================================================================
-
 const asyncHandler = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -41,7 +42,7 @@ function normalizeClass(value, { required = false } = {}) {
         return null;
     }
     const num = parseInt(value, 10);
-    if (Number.isNaN(num) || !VALID_CLASSES.includes(num)) {
+    if (isNaN(num) || !VALID_CLASSES.includes(num)) {
         throw new Error('Invalid class. Must be 6-12');
     }
     return num;
@@ -59,15 +60,23 @@ function normalizeExamType(value, { required = false } = {}) {
     return trimmed;
 }
 
+function formatDate(date) {
+    if (!date) return null;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString().split('T')[0];
+}
+
 function sendError(res, error, fallbackMessage) {
-    console.error('❌', fallbackMessage, error);
-    return res.status(500).json({ success: false, message: fallbackMessage });
+    console.error('❌ Error:', error);
+    const message = error.message || fallbackMessage || 'Something went wrong';
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, message });
 }
 
 // ================================================================
 //  CLOUDINARY STORAGE
 // ================================================================
-
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: (req, file) => {
@@ -112,6 +121,7 @@ function handleUpload(req, res, next) {
 //  SECTION 1: STUDENT MANAGEMENT
 // ================================================================
 
+// GET All Students
 router.get('/students', asyncHandler(async (req, res) => {
     const classNum = normalizeClass(req.query.class);
     const session = normalizeSession(req.query.session);
@@ -138,11 +148,8 @@ router.get('/students', asyncHandler(async (req, res) => {
 
     // Count total
     const countSql = sql.replace(
-        `SELECT
-            s.id, s.student_id, s.apaar_id, s.name, s.father_name,
-            s.mother_name, s.dob, s.photo,
-            ar.session, ar.class, ar.section, ar.exam_roll_no`,
-        'SELECT COUNT(DISTINCT s.id) as total'
+        /SELECT[\s\S]*?FROM students s/,
+        'SELECT COUNT(DISTINCT s.id) as total FROM students s'
     );
     const countResult = await query(countSql, params);
     const total = countResult[0]?.total || 0;
@@ -156,10 +163,16 @@ router.get('/students', asyncHandler(async (req, res) => {
     res.json({
         success: true,
         data: students,
-        pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) }
+        pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.max(Math.ceil(total / limit), 1)
+        }
     });
 }));
 
+// GET Single Student
 router.get('/students/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
 
@@ -195,6 +208,7 @@ router.get('/students/:studentId', asyncHandler(async (req, res) => {
     });
 }));
 
+// CREATE Student
 router.post('/students', asyncHandler(async (req, res) => {
     const {
         student_id, apaar_id, name, father_name, mother_name,
@@ -214,33 +228,49 @@ router.post('/students', asyncHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: 'Session is required' });
     }
 
-    // Check existing
-    const existing = await query('SELECT id FROM students WHERE student_id = ?', [student_id]);
-    if (existing.length > 0) {
-        return res.status(409).json({ success: false, message: 'Student ID already exists' });
+    const conn = await getConnection();
+    try {
+        await conn.beginTransaction();
+
+        // Check existing
+        const [existing] = await conn.query(
+            'SELECT id FROM students WHERE student_id = ?', [student_id]
+        );
+        if (existing.length > 0) {
+            await conn.rollback();
+            return res.status(409).json({ success: false, message: 'Student ID already exists' });
+        }
+
+        // Insert student
+        const [studentResult] = await conn.query(`
+            INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null]);
+
+        const studentDbId = studentResult.insertId;
+
+        // Insert academic record
+        await conn.query(`
+            INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
+            VALUES (?, ?, ?, ?, ?)
+        `, [studentDbId, session, classNum, section || null, exam_roll_no || null]);
+
+        await conn.commit();
+
+        res.status(201).json({
+            success: true,
+            message: 'Student created successfully',
+            data: { student_id, id: studentDbId }
+        });
+    } catch (error) {
+        await conn.rollback();
+        throw error;
+    } finally {
+        conn.release();
     }
-
-    // Insert student
-    const studentResult = await query(`
-        INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null]);
-
-    const studentDbId = studentResult.insertId;
-
-    // Insert academic record
-    await query(`
-        INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
-        VALUES (?, ?, ?, ?, ?)
-    `, [studentDbId, session, classNum, section || null, exam_roll_no || null]);
-
-    res.status(201).json({
-        success: true,
-        message: 'Student created successfully',
-        data: { student_id, id: studentDbId }
-    });
 }));
 
+// UPDATE Student
 router.put('/students/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const { apaar_id, name, father_name, mother_name, dob, photo, section, exam_roll_no } = req.body;
@@ -253,35 +283,47 @@ router.put('/students/:studentId', asyncHandler(async (req, res) => {
     }
     const studentDbId = students[0].id;
 
-    // Update student
-    await query(`
-        UPDATE students
-        SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
-        WHERE student_id = ?
-    `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null, studentId]);
+    const conn = await getConnection();
+    try {
+        await conn.beginTransaction();
 
-    // Update academic record if session and class provided
-    if (session !== null && classNum !== null) {
-        const existingAr = await query(
-            'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
-            [studentDbId, session, classNum]
-        );
-        if (existingAr.length > 0) {
-            await query(
-                'UPDATE academic_records SET section = ?, exam_roll_no = ? WHERE id = ?',
-                [section || null, exam_roll_no || null, existingAr[0].id]
+        // Update student
+        await conn.query(`
+            UPDATE students
+            SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
+            WHERE student_id = ?
+        `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null, studentId]);
+
+        // Update academic record
+        if (session !== null && classNum !== null) {
+            const [existingAr] = await conn.query(
+                'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
+                [studentDbId, session, classNum]
             );
-        } else {
-            await query(
-                'INSERT INTO academic_records (student_id, session, class, section, exam_roll_no) VALUES (?, ?, ?, ?, ?)',
-                [studentDbId, session, classNum, section || null, exam_roll_no || null]
-            );
+            if (existingAr.length > 0) {
+                await conn.query(
+                    'UPDATE academic_records SET section = ?, exam_roll_no = ? WHERE id = ?',
+                    [section || null, exam_roll_no || null, existingAr[0].id]
+                );
+            } else {
+                await conn.query(
+                    'INSERT INTO academic_records (student_id, session, class, section, exam_roll_no) VALUES (?, ?, ?, ?, ?)',
+                    [studentDbId, session, classNum, section || null, exam_roll_no || null]
+                );
+            }
         }
-    }
 
-    res.json({ success: true, message: 'Student updated successfully' });
+        await conn.commit();
+        res.json({ success: true, message: 'Student updated successfully' });
+    } catch (error) {
+        await conn.rollback();
+        throw error;
+    } finally {
+        conn.release();
+    }
 }));
 
+// DELETE Student
 router.delete('/students/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
 
@@ -298,13 +340,13 @@ router.delete('/students/:studentId', asyncHandler(async (req, res) => {
     // Delete student (cascade will delete marksheets)
     await query('DELETE FROM students WHERE student_id = ?', [studentId]);
 
-    // Delete Cloudinary files
+    // Clean up Cloudinary
     for (const m of marksheets) {
         if (m.cloudinary_public_id) {
             try {
                 await cloudinary.uploader.destroy(m.cloudinary_public_id, { resource_type: 'raw' });
             } catch (err) {
-                console.error('Cloudinary delete error (non-fatal):', err.message);
+                console.error('Cloudinary cleanup error:', err.message);
             }
         }
     }
@@ -312,6 +354,7 @@ router.delete('/students/:studentId', asyncHandler(async (req, res) => {
     res.json({ success: true, message: 'Student deleted successfully' });
 }));
 
+// SEARCH Student
 router.get('/students/search/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
 
@@ -536,7 +579,7 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
 
 router.get('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) {
+    if (isNaN(id)) {
         return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
     }
 
@@ -561,7 +604,7 @@ router.get('/marksheets/:id', asyncHandler(async (req, res) => {
 
 router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) {
+    if (isNaN(id)) {
         return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
     }
     if (!req.file) {
@@ -594,7 +637,7 @@ router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res
         try {
             await cloudinary.uploader.destroy(oldPublicId, { resource_type: 'raw' });
         } catch (err) {
-            console.error('Cloudinary delete error (non-fatal):', err.message);
+            console.error('Cloudinary cleanup error:', err.message);
         }
     }
 
@@ -603,7 +646,7 @@ router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res
 
 router.delete('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) {
+    if (isNaN(id)) {
         return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
     }
 
@@ -618,7 +661,7 @@ router.delete('/marksheets/:id', asyncHandler(async (req, res) => {
         try {
             await cloudinary.uploader.destroy(marksheets[0].cloudinary_public_id, { resource_type: 'raw' });
         } catch (err) {
-            console.error('Cloudinary delete error (non-fatal):', err.message);
+            console.error('Cloudinary cleanup error:', err.message);
         }
     }
 
@@ -631,7 +674,7 @@ router.delete('/marksheets/:id', asyncHandler(async (req, res) => {
 
 router.post('/marksheets/:id/publish', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) {
+    if (isNaN(id)) {
         return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
     }
 
@@ -639,7 +682,7 @@ router.post('/marksheets/:id/publish', asyncHandler(async (req, res) => {
     if (!declaration_date) {
         return res.status(400).json({ success: false, message: 'Declaration date is required' });
     }
-    if (Number.isNaN(Date.parse(declaration_date))) {
+    if (isNaN(Date.parse(declaration_date))) {
         return res.status(400).json({ success: false, message: 'Invalid declaration date' });
     }
 
@@ -659,7 +702,7 @@ router.post('/marksheets/:id/publish', asyncHandler(async (req, res) => {
 
 router.post('/marksheets/:id/unpublish', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) {
+    if (isNaN(id)) {
         return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
     }
 
@@ -685,7 +728,7 @@ router.post('/marksheets/bulk-publish', asyncHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: 'Declaration date is required' });
     }
 
-    const cleanIds = ids.map((v) => parseInt(v, 10)).filter((v) => !Number.isNaN(v));
+    const cleanIds = ids.map((v) => parseInt(v, 10)).filter((v) => !isNaN(v));
     if (cleanIds.length === 0) {
         return res.status(400).json({ success: false, message: 'No valid marksheet ids provided' });
     }
@@ -792,7 +835,7 @@ router.post('/public/search', asyncHandler(async (req, res) => {
 
 router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) {
+    if (isNaN(id)) {
         return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
     }
 
@@ -808,7 +851,7 @@ router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
 
 router.get('/public/marksheet/:id/download', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) {
+    if (isNaN(id)) {
         return res.status(400).json({ success: false, message: 'Invalid marksheet id' });
     }
 
