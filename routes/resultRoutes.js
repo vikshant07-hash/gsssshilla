@@ -767,13 +767,28 @@ router.delete('/marksheets/:id', async (req, res) => {
 //  SECTION 4: PUBLISH / UNPUBLISH
 // ================================================================
 
+// routes/resultRoutes.js - Update publish endpoint
+
+// PUBLISH Marksheet with declaration date
 router.post('/marksheets/:id/publish', async (req, res) => {
     try {
         const { id } = req.params;
+        const { declaration_date } = req.body; // Get date from request
 
-        const result = await query(
-            'UPDATE marksheets SET is_published = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            [id]
+        if (!declaration_date) {
+            return res.status(400).json({
+                success: false,
+                message: 'Declaration date is required'
+            });
+        }
+
+        const [result] = await db.query(
+            `UPDATE marksheets 
+             SET is_published = TRUE, 
+                 declaration_date = ?,
+                 updated_at = CURRENT_TIMESTAMP 
+             WHERE id = ?`,
+            [declaration_date, id]
         );
 
         if (result.affectedRows === 0) {
@@ -785,14 +800,12 @@ router.post('/marksheets/:id/publish', async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Marksheet published successfully'
+            message: 'Marksheet published successfully',
+            data: { declaration_date }
         });
     } catch (error) {
-        console.error('❌ Error publishing marksheet:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to publish marksheet'
-        });
+        console.error('Error publishing marksheet:', error);
+        res.status(500).json({ success: false, message: 'Failed to publish marksheet' });
     }
 });
 
@@ -829,29 +842,42 @@ router.post('/marksheets/:id/unpublish', async (req, res) => {
 //  SECTION 5: PUBLIC RESULT APIS
 // ================================================================
 
+// routes/resultRoutes.js - Update public/classes endpoint
+
 router.get('/public/classes', async (req, res) => {
     try {
         const classes = await query(`
-            SELECT
+            SELECT 
                 class,
-                COUNT(*) as total_published
-            FROM marksheets
+                COUNT(*) as total_published,
+                MAX(declaration_date) as declared_date,
+                (SELECT exam_type FROM marksheets m2 
+                 WHERE m2.class = m.class AND m2.is_published = TRUE 
+                 ORDER BY m2.declaration_date DESC LIMIT 1) as latest_exam_type
+            FROM marksheets m
             WHERE is_published = TRUE
             GROUP BY class
             HAVING COUNT(*) > 0
             ORDER BY class
         `);
-
-        res.json({
-            success: true,
-            data: classes
-        });
+        
+        // Format date for each class
+        const formattedData = classes.map(c => ({
+            class: c.class,
+            total_published: c.total_published,
+            exam_type: c.latest_exam_type || 'Various',
+            declared_date: c.declared_date ? 
+                new Date(c.declared_date).toLocaleDateString('en-IN', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric'
+                }) : null
+        }));
+        
+        res.json({ success: true, data: formattedData });
     } catch (error) {
-        console.error('❌ Error fetching classes:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch classes'
-        });
+        console.error('Error fetching classes:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch classes' });
     }
 });
 
