@@ -1,6 +1,6 @@
 // ================================================================
 //  COMPLETE RESULT MANAGEMENT ROUTES - FULLY FIXED
-//  No getConnection, No class validation on public view
+//  Photo Upload Fixed - Base64 Support
 // ================================================================
 
 const express = require('express');
@@ -195,7 +195,7 @@ router.get('/students/:studentId', asyncHandler(async (req, res) => {
     });
 }));
 
-// CREATE Student
+// CREATE Student - ✅ PHOTO FIXED
 router.post('/students', asyncHandler(async (req, res) => {
     const {
         student_id, apaar_id, name, father_name, mother_name,
@@ -221,11 +221,26 @@ router.post('/students', asyncHandler(async (req, res) => {
         return res.status(409).json({ success: false, message: 'Student ID already exists' });
     }
 
-    // Insert student
+    // ✅ PHOTO: Handle base64 or null
+    let photoData = null;
+    if (photo) {
+        // Check if photo is base64 string
+        if (typeof photo === 'string' && photo.startsWith('data:image')) {
+            photoData = photo; // Base64 image
+            console.log(`📸 Photo received: Base64 (${photo.length} chars)`);
+        } else if (typeof photo === 'string' && photo.length > 100) {
+            photoData = photo; // Large string (probably base64 without prefix)
+            console.log(`📸 Photo received: String (${photo.length} chars)`);
+        } else {
+            console.log('📸 Photo not provided or too small');
+        }
+    }
+
+    // Insert student with photo
     const studentResult = await query(`
         INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null]);
+    `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photoData]);
 
     const studentDbId = studentResult.insertId;
 
@@ -242,25 +257,40 @@ router.post('/students', asyncHandler(async (req, res) => {
     });
 }));
 
-// UPDATE Student
+// UPDATE Student - ✅ PHOTO FIXED
 router.put('/students/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const { apaar_id, name, father_name, mother_name, dob, photo, section, exam_roll_no } = req.body;
     const session = normalizeSession(req.body.session);
     const classNum = normalizeClass(req.body.class);
 
-    const students = await query('SELECT id FROM students WHERE student_id = ?', [studentId]);
+    const students = await query('SELECT id, photo FROM students WHERE student_id = ?', [studentId]);
     if (students.length === 0) {
         return res.status(404).json({ success: false, message: 'Student not found' });
     }
     const studentDbId = students[0].id;
 
-    // Update student
+    // ✅ PHOTO: Handle base64, URL, or keep existing
+    let photoData = students[0].photo || null; // Keep existing photo by default
+    
+    if (photo !== undefined && photo !== null) {
+        if (photo === '') {
+            photoData = null; // Photo explicitly cleared
+        } else if (typeof photo === 'string' && (photo.startsWith('data:image') || photo.startsWith('http'))) {
+            photoData = photo; // Base64 or URL
+            console.log(`📸 Photo updated: ${photo.length} chars`);
+        } else if (typeof photo === 'string' && photo.length > 100) {
+            photoData = photo; // Large base64 string
+            console.log(`📸 Photo updated: ${photo.length} chars`);
+        }
+    }
+
+    // Update student with photo
     await query(`
         UPDATE students
         SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
         WHERE student_id = ?
-    `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photo || null, studentId]);
+    `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photoData, studentId]);
 
     // Update academic record
     if (session !== null && classNum !== null) {
