@@ -1,6 +1,7 @@
 // ================================================================
 //  COMPLETE RESULT MANAGEMENT ROUTES - FULLY FIXED
 //  Photo Upload Fixed - Base64 Support
+//  Session Format Support - Both "2025-26" and "March-2026"
 // ================================================================
 
 const express = require('express');
@@ -29,10 +30,49 @@ const VALID_EXAM_TYPES = [
 const asyncHandler = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
+// ✅ Session normalize - Supports both "2025-26" and "March-2026"
 function normalizeSession(value) {
     if (value === undefined || value === null) return null;
     const trimmed = String(value).trim();
     return trimmed === '' ? null : trimmed;
+}
+
+// ✅ Session mapping helper - Converts between formats if needed
+function getSessionVariants(session) {
+    if (!session) return [session];
+    
+    const variants = [session];
+    
+    // If format is "2025-26", also try "March-2026", "March-2025" etc.
+    const yearPattern = /^(\d{4})-(\d{2})$/;
+    const match = session.match(yearPattern);
+    
+    if (match) {
+        const startYear = parseInt(match[1]);
+        const endYear = parseInt(match[2]);
+        const fullEndYear = 2000 + endYear;
+        
+        // Add common month-based variants
+        variants.push(`March-${fullEndYear}`);
+        variants.push(`march-${fullEndYear}`);
+        variants.push(`MARCH-${fullEndYear}`);
+        variants.push(`December-${fullEndYear}`);
+        variants.push(`december-${fullEndYear}`);
+        variants.push(`DECEMBER-${fullEndYear}`);
+    }
+    
+    return variants;
+}
+
+// ✅ Build session WHERE clause helper
+function buildSessionClause(column, session, params) {
+    if (!session) return '';
+    
+    const variants = getSessionVariants(session);
+    const placeholders = variants.map(() => '?').join(',');
+    params.push(...variants);
+    
+    return ` AND ${column} IN (${placeholders})`;
 }
 
 function normalizeClass(value, { required = false } = {}) {
@@ -73,11 +113,12 @@ const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: (req, file) => {
         const session = normalizeSession(req.body.session) || '2026-27';
+        const sessionSafe = session.replace(/[^a-zA-Z0-9-]/g, '-');
         const classNum = normalizeClass(req.body.class) || 'default';
         const studentId = (req.body.student_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
         const examType = (req.body.exam_type || 'exam').replace(/[^a-zA-Z0-9_-]/g, '-');
         return {
-            folder: `gsssshilla/marksheets/${session}/class-${classNum}`,
+            folder: `gsssshilla/marksheets/${sessionSafe}/class-${classNum}`,
             resource_type: 'raw',
             public_id: `${studentId}-${examType}-${Date.now()}`,
             format: 'pdf'
@@ -100,11 +141,22 @@ const upload = multer({
 function handleUpload(req, res, next) {
     upload.single('pdf')(req, res, (err) => {
         if (err instanceof multer.MulterError) {
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'File too large. Maximum size is 10MB.' 
+                });
+            }
             return res.status(400).json({ success: false, message: 'Upload error: ' + err.message });
         }
         if (err) {
             return res.status(400).json({ success: false, message: err.message || 'Upload failed' });
         }
+        
+        if (req.file) {
+            console.log(`📄 File uploaded: ${req.file.originalname} (${req.file.size} bytes)`);
+        }
+        
         next();
     });
 }
@@ -134,16 +186,35 @@ router.get('/students', asyncHandler(async (req, res) => {
     const params = [];
 
     if (classNum !== null) { sql += ' AND ar.class = ?'; params.push(classNum); }
-    if (session !== null) { sql += ' AND ar.session = ?'; params.push(session); }
+    if (session !== null) { 
+        sql += buildSessionClause('ar.session', session, params);
+    }
     if (student_id) { sql += ' AND s.student_id LIKE ?'; params.push(`%${student_id}%`); }
     if (name) { sql += ' AND s.name LIKE ?'; params.push(`%${name}%`); }
 
     // Count total
-    const countSql = sql.replace(
-        /SELECT[\s\S]*?FROM students s/,
-        'SELECT COUNT(DISTINCT s.id) as total FROM students s'
-    );
-    const countResult = await query(countSql, params);
+    const countSql = `
+        SELECT COUNT(DISTINCT s.id) as total 
+        FROM students s
+        LEFT JOIN academic_records ar ON s.id = ar.student_id
+        WHERE 1=1
+        ${classNum !== null ? ' AND ar.class = ?' : ''}
+        ${session !== null ? buildSessionClause('ar.session', session, []) : ''}
+        ${student_id ? ' AND s.student_id LIKE ?' : ''}
+        ${name ? ' AND s.name LIKE ?' : ''}
+    `;
+    
+    // Build count params properly
+    const countParams = [];
+    if (classNum !== null) countParams.push(classNum);
+    if (session !== null) {
+        const variants = getSessionVariants(session);
+        countParams.push(...variants);
+    }
+    if (student_id) countParams.push(`%${student_id}%`);
+    if (name) countParams.push(`%${name}%`);
+    
+    const countResult = await query(countSql, countParams);
     const total = countResult[0]?.total || 0;
 
     sql += ' GROUP BY s.id, ar.session, ar.class, ar.section, ar.exam_roll_no';
@@ -224,12 +295,11 @@ router.post('/students', asyncHandler(async (req, res) => {
     // ✅ PHOTO: Handle base64 or null
     let photoData = null;
     if (photo) {
-        // Check if photo is base64 string
         if (typeof photo === 'string' && photo.startsWith('data:image')) {
-            photoData = photo; // Base64 image
+            photoData = photo;
             console.log(`📸 Photo received: Base64 (${photo.length} chars)`);
         } else if (typeof photo === 'string' && photo.length > 100) {
-            photoData = photo; // Large string (probably base64 without prefix)
+            photoData = photo;
             console.log(`📸 Photo received: String (${photo.length} chars)`);
         } else {
             console.log('📸 Photo not provided or too small');
@@ -271,16 +341,16 @@ router.put('/students/:studentId', asyncHandler(async (req, res) => {
     const studentDbId = students[0].id;
 
     // ✅ PHOTO: Handle base64, URL, or keep existing
-    let photoData = students[0].photo || null; // Keep existing photo by default
+    let photoData = students[0].photo || null;
     
     if (photo !== undefined && photo !== null) {
         if (photo === '') {
-            photoData = null; // Photo explicitly cleared
+            photoData = null;
         } else if (typeof photo === 'string' && (photo.startsWith('data:image') || photo.startsWith('http'))) {
-            photoData = photo; // Base64 or URL
+            photoData = photo;
             console.log(`📸 Photo updated: ${photo.length} chars`);
         } else if (typeof photo === 'string' && photo.length > 100) {
-            photoData = photo; // Large base64 string
+            photoData = photo;
             console.log(`📸 Photo updated: ${photo.length} chars`);
         }
     }
@@ -390,8 +460,7 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
     const baseParams = [classId];
     let sessionClause = '';
     if (session !== null) {
-        sessionClause = ' AND ar.session = ?';
-        baseParams.push(session);
+        sessionClause = buildSessionClause('ar.session', session, baseParams);
     }
 
     const countResult = await query(`
@@ -434,6 +503,7 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
 //  SECTION 3: MARKSHEET MANAGEMENT
 // ================================================================
 
+// ✅ Upload marksheet - Now accepts any session format
 router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) => {
     const student_id = (req.body.student_id || '').trim();
     const session = normalizeSession(req.body.session);
@@ -441,17 +511,29 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     const exam_type = normalizeExamType(req.body.exam_type, { required: true });
 
     if (!student_id) {
+        // Cleanup uploaded file if validation fails
+        if (req.file && req.file.filename) {
+            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch(e) {}
+        }
         return res.status(400).json({ success: false, message: 'Student ID is required' });
     }
     if (!session) {
+        if (req.file && req.file.filename) {
+            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch(e) {}
+        }
         return res.status(400).json({ success: false, message: 'Session is required' });
     }
     if (!req.file) {
         return res.status(400).json({ success: false, message: 'PDF file is required' });
     }
 
+    console.log(`📝 Upload attempt: Student=${student_id}, Session=${session}, Class=${classNum}, Exam=${exam_type}`);
+
     const students = await query('SELECT id FROM students WHERE student_id = ?', [student_id]);
     if (students.length === 0) {
+        if (req.file && req.file.filename) {
+            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch(e) {}
+        }
         return res.status(404).json({ success: false, message: 'Student not found' });
     }
     const studentDbId = students[0].id;
@@ -467,8 +549,10 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
             [studentDbId, session, classNum]
         );
         academicRecordId = result.insertId;
+        console.log(`✅ New academic record created: ID=${academicRecordId}`);
     } else {
         academicRecordId = academicRecords[0].id;
+        console.log(`✅ Existing academic record found: ID=${academicRecordId}`);
     }
 
     const existing = await query(
@@ -476,6 +560,9 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
         [studentDbId, session, classNum, exam_type]
     );
     if (existing.length > 0) {
+        if (req.file && req.file.filename) {
+            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch(e) {}
+        }
         return res.status(409).json({
             success: false,
             message: 'Marksheet already exists for this combination'
@@ -489,7 +576,7 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
         file_size: req.file.size
     };
 
-    await query(`
+    const insertResult = await query(`
         INSERT INTO marksheets (
             student_id, academic_record_id, session, class, exam_type,
             cloudinary_public_id, cloudinary_url, original_filename, file_size,
@@ -505,10 +592,15 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     res.status(201).json({
         success: true,
         message: 'Marksheet uploaded successfully (Unpublished)',
-        data: { cloudinary_url: cloudinaryData.secure_url, status: 'unpublished' }
+        data: { 
+            cloudinary_url: cloudinaryData.secure_url, 
+            status: 'unpublished',
+            marksheet_id: insertResult.insertId 
+        }
     });
 }));
 
+// ✅ Get marksheets - Now supports session variants
 router.get('/marksheets', asyncHandler(async (req, res) => {
     const student_id = req.query.student_id;
     const session = normalizeSession(req.query.session);
@@ -534,7 +626,9 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
     const params = [];
 
     if (student_id) { sql += ' AND s.student_id LIKE ?'; params.push(`%${student_id}%`); }
-    if (session !== null) { sql += ' AND m.session = ?'; params.push(session); }
+    if (session !== null) { 
+        sql += buildSessionClause('m.session', session, params);
+    }
     if (classNum !== null) { sql += ' AND m.class = ?'; params.push(classNum); }
     if (exam_type !== null) { sql += ' AND m.exam_type = ?'; params.push(exam_type); }
     if (is_published !== undefined && is_published !== '') {
@@ -542,11 +636,24 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
         params.push(is_published === 'true' || is_published === '1' ? 1 : 0);
     }
 
-    const countSql = sql.replace(
-        /SELECT[\s\S]*?FROM marksheets m/,
-        'SELECT COUNT(*) as total FROM marksheets m'
-    );
-    const countResult = await query(countSql, params);
+    // Count total - build properly
+    const countParams = [];
+    let countSql = `SELECT COUNT(*) as total FROM marksheets m JOIN students s ON m.student_id = s.id LEFT JOIN academic_records ar ON m.academic_record_id = ar.id WHERE 1=1`;
+    
+    if (student_id) { countSql += ' AND s.student_id LIKE ?'; countParams.push(`%${student_id}%`); }
+    if (session !== null) { 
+        const variants = getSessionVariants(session);
+        countSql += ` AND m.session IN (${variants.map(() => '?').join(',')})`;
+        countParams.push(...variants);
+    }
+    if (classNum !== null) { countSql += ' AND m.class = ?'; countParams.push(classNum); }
+    if (exam_type !== null) { countSql += ' AND m.exam_type = ?'; countParams.push(exam_type); }
+    if (is_published !== undefined && is_published !== '') {
+        countSql += ' AND m.is_published = ?';
+        countParams.push(is_published === 'true' || is_published === '1' ? 1 : 0);
+    }
+    
+    const countResult = await query(countSql, countParams);
     const total = countResult[0]?.total || 0;
 
     sql += ' ORDER BY m.uploaded_at DESC LIMIT ? OFFSET ?';
@@ -731,7 +838,7 @@ router.post('/marksheets/bulk-publish', asyncHandler(async (req, res) => {
 }));
 
 // ================================================================
-//  SECTION 5: PUBLIC RESULT APIS - ✅ FIXED
+//  SECTION 5: PUBLIC RESULT APIS
 // ================================================================
 
 router.get('/public/classes', asyncHandler(async (req, res) => {
@@ -762,12 +869,17 @@ router.get('/public/classes', asyncHandler(async (req, res) => {
     res.json({ success: true, data: formattedData });
 }));
 
+// ✅ Public results - Supports session variants
 router.get('/public/:session/:class', asyncHandler(async (req, res) => {
     const session = normalizeSession(req.params.session);
     const classNum = normalizeClass(req.params.class, { required: true });
     if (!session) {
         return res.status(400).json({ success: false, message: 'Session is required' });
     }
+
+    // Get all session variants
+    const sessionVariants = getSessionVariants(session);
+    const placeholders = sessionVariants.map(() => '?').join(',');
 
     const results = await query(`
         SELECT
@@ -777,9 +889,9 @@ router.get('/public/:session/:class', asyncHandler(async (req, res) => {
         FROM marksheets m
         JOIN students s ON m.student_id = s.id
         LEFT JOIN academic_records ar ON m.academic_record_id = ar.id
-        WHERE m.session = ? AND m.class = ? AND m.is_published = 1
+        WHERE m.session IN (${placeholders}) AND m.class = ? AND m.is_published = 1
         ORDER BY s.name
-    `, [session, classNum]);
+    `, [...sessionVariants, classNum]);
 
     res.json({ success: true, data: results });
 }));
@@ -817,10 +929,9 @@ router.post('/public/search', asyncHandler(async (req, res) => {
 }));
 
 // ================================================================
-//  PUBLIC MARKSHEET VIEW - ✅ FIXED (No class validation)
+//  PUBLIC MARKSHEET VIEW
 // ================================================================
 
-// ✅ VIEW marksheet - Direct redirect to Cloudinary URL
 router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     
@@ -845,11 +956,9 @@ router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
         });
     }
     
-    // ✅ Direct redirect to Cloudinary
     return res.redirect(marksheets[0].cloudinary_url);
 }));
 
-// ✅ DOWNLOAD marksheet - Redirect to Cloudinary download URL
 router.get('/public/marksheet/:id/download', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     
@@ -880,7 +989,6 @@ router.get('/public/marksheet/:id/download', asyncHandler(async (req, res) => {
         filename: marksheets[0].original_filename || 'marksheet.pdf'
     });
 
-    // ✅ Direct redirect to Cloudinary download
     return res.redirect(downloadUrl);
 }));
 
