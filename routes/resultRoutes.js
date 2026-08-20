@@ -72,12 +72,12 @@ function sendError(res, error, fallbackMessage) {
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: (req, file) => {
-        const session = normalizeSession(req.body.session) || '2025-26';
+        const session = normalizeSession(req.body.session) || '2026-27';
         const classNum = normalizeClass(req.body.class) || 'default';
         const studentId = (req.body.student_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
         const examType = (req.body.exam_type || 'exam').replace(/[^a-zA-Z0-9_-]/g, '-');
         return {
-            folder: `school-results/marksheets/${session}/class-${classNum}`,
+            folder: `gsssshilla/marksheets/${session}/class-${classNum}`,
             resource_type: 'raw',
             public_id: `${studentId}-${examType}-${Date.now()}`,
             format: 'pdf'
