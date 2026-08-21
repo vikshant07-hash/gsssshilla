@@ -3,6 +3,7 @@
 //  Photo Upload Fixed - Base64 Support
 //  Session Format Support - Both "2025-26" and "March-2026"
 //  Exam Session Support Added - For marksheet upload
+//  Marks Support Added - For student marks in marksheet
 // ================================================================
 
 const express = require('express');
@@ -251,10 +252,10 @@ router.get('/students/:studentId', asyncHandler(async (req, res) => {
         return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    // ✅ UPDATED: Added exam_session
+    // ✅ UPDATED: Added exam_session and marks
     const marksheets = await query(`
         SELECT
-            m.id, m.session, m.exam_session, m.class, m.exam_type,
+            m.id, m.session, m.exam_session, m.class, m.exam_type, m.marks,
             m.cloudinary_url, m.is_published, m.uploaded_at, m.updated_at,
             m.original_filename, m.file_size
         FROM marksheets m
@@ -433,10 +434,10 @@ router.get('/students/search/:studentId', asyncHandler(async (req, res) => {
         return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    // ✅ UPDATED: Added exam_session
+    // ✅ UPDATED: Added exam_session and marks
     const marksheets = await query(`
         SELECT
-            m.id, m.session, m.exam_session, m.class, m.exam_type,
+            m.id, m.session, m.exam_session, m.class, m.exam_type, m.marks,
             m.cloudinary_url, m.is_published, m.uploaded_at
         FROM marksheets m
         WHERE m.student_id = ?
@@ -503,16 +504,17 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
 }));
 
 // ================================================================
-//  SECTION 3: MARKSHEET MANAGEMENT (UPDATED WITH exam_session)
+//  SECTION 3: MARKSHEET MANAGEMENT (UPDATED WITH exam_session AND marks)
 // ================================================================
 
-// ✅ Upload marksheet - Now accepts exam_session
+// ✅ Upload marksheet - Now accepts exam_session and marks
 router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) => {
     const student_id = (req.body.student_id || '').trim();
     const session = normalizeSession(req.body.session);
     const classNum = normalizeClass(req.body.class, { required: true });
     const exam_type = normalizeExamType(req.body.exam_type, { required: true });
     const exam_session = normalizeSession(req.body.exam_session); // ✅ NAYA FIELD
+    const marks = req.body.marks || null; // ✅ NAYA FIELD - Marks
 
     if (!student_id) {
         if (req.file && req.file.filename) {
@@ -530,7 +532,7 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
         return res.status(400).json({ success: false, message: 'PDF file is required' });
     }
 
-    console.log(`📝 Upload attempt: Student=${student_id}, Session=${session}, Class=${classNum}, Exam=${exam_type}, ExamSession=${exam_session || 'Not provided'}`);
+    console.log(`📝 Upload attempt: Student=${student_id}, Session=${session}, Class=${classNum}, Exam=${exam_type}, ExamSession=${exam_session || 'Not provided'}, Marks=${marks || 'Not provided'}`);
 
     const students = await query('SELECT id FROM students WHERE student_id = ?', [student_id]);
     if (students.length === 0) {
@@ -579,15 +581,15 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
         file_size: req.file.size
     };
 
-    // ✅ Insert with exam_session
+    // ✅ Insert with exam_session and marks
     const insertResult = await query(`
         INSERT INTO marksheets (
-            student_id, academic_record_id, session, class, exam_type, exam_session,
+            student_id, academic_record_id, session, class, exam_type, exam_session, marks,
             cloudinary_public_id, cloudinary_url, original_filename, file_size,
             is_published
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-        studentDbId, academicRecordId, session, classNum, exam_type, exam_session || null,
+        studentDbId, academicRecordId, session, classNum, exam_type, exam_session || null, marks,
         cloudinaryData.public_id, cloudinaryData.secure_url,
         cloudinaryData.original_filename, cloudinaryData.file_size,
         0
@@ -600,12 +602,13 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
             cloudinary_url: cloudinaryData.secure_url, 
             status: 'unpublished',
             marksheet_id: insertResult.insertId,
-            exam_session: exam_session || null
+            exam_session: exam_session || null,
+            marks: marks
         }
     });
 }));
 
-// ✅ Get marksheets - Now returns exam_session
+// ✅ Get marksheets - Now returns exam_session and marks
 router.get('/marksheets', asyncHandler(async (req, res) => {
     const student_id = req.query.student_id;
     const session = normalizeSession(req.query.session);
@@ -618,7 +621,7 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
 
     let sql = `
         SELECT
-            m.id, m.session, m.exam_session, m.class, m.exam_type,
+            m.id, m.session, m.exam_session, m.class, m.exam_type, m.marks,
             m.cloudinary_url, m.is_published, m.uploaded_at, m.updated_at,
             m.original_filename, m.file_size,
             s.student_id, s.name, s.father_name,
@@ -673,7 +676,7 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
     });
 }));
 
-// ✅ Get single marksheet - Now returns exam_session
+// ✅ Get single marksheet - Now returns exam_session and marks
 router.get('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -682,7 +685,7 @@ router.get('/marksheets/:id', asyncHandler(async (req, res) => {
 
     const marksheets = await query(`
         SELECT
-            m.id, m.session, m.exam_session, m.class, m.exam_type,
+            m.id, m.session, m.exam_session, m.class, m.exam_type, m.marks,
             m.cloudinary_url, m.is_published, m.uploaded_at,
             m.original_filename, m.file_size,
             s.student_id, s.name, s.father_name, s.mother_name, s.dob,
@@ -889,7 +892,7 @@ router.get('/public/:session/:class', asyncHandler(async (req, res) => {
 
     const results = await query(`
         SELECT
-            m.id, m.exam_type, m.cloudinary_url,
+            m.id, m.exam_type, m.marks, m.cloudinary_url,
             s.student_id, s.name, s.father_name, s.mother_name,
             ar.exam_roll_no
         FROM marksheets m
@@ -924,8 +927,9 @@ router.post('/public/search', asyncHandler(async (req, res) => {
         return res.status(404).json({ success: false, message: 'No student found with the provided Student ID and DOB' });
     }
 
+    // ✅ UPDATED: Added marks
     const marksheets = await query(`
-        SELECT id, session, exam_session, class, exam_type, cloudinary_url, uploaded_at
+        SELECT id, session, exam_session, class, exam_type, marks, cloudinary_url, uploaded_at
         FROM marksheets
         WHERE student_id = ? AND is_published = 1
         ORDER BY session DESC, exam_type
