@@ -81,7 +81,7 @@ router.post('/generate', authenticate, async (req, res) => {
         const verificationCode = generateVerificationCode(studentId);
         
         // Generate QR Code
-        const verificationUrl = `https://gsssshilla07.pages.dev/verify.html?code=${verificationCode}`;
+        const verificationUrl = `https://gsssshilla07.pages.dev/verify3.html?code=${verificationCode}`;
         const qrCodeDataURL = await QRCode.toDataURL(verificationUrl, {
             width: 150,
             margin: 2,
