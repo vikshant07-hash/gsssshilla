@@ -276,7 +276,7 @@ router.post('/generate', authenticate, async (req, res) => {
         certificate.updatedAt = new Date().toISOString();
 
         // Generate QR Code with permanent verification code
-        const verificationUrl = `https://gsssshilla07.pages.dev/verify3.html?code=${certificate.verificationCode}`;
+        const verificationUrl = `https://gsssshilla07.pages.dev/verify.html?code=${certificate.verificationCode}`;
         const qrCodeDataURL = await QRCode.toDataURL(verificationUrl, {
             width: 150,
             margin: 2,
