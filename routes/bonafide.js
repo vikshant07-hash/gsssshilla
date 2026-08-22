@@ -33,23 +33,50 @@ const authenticate = (req, res, next) => {
 let certificates = [];
 
 // ================================================================
-// GENERATE PERMANENT VERIFICATION CODE (Based on Student ID)
+// GENERATE PERMANENT VERIFICATION CODE - 12 CHARACTERS ALPHANUMERIC
 // ================================================================
-function generateVerificationCode(studentId) {
-    const prefix = 'BC';
-    const year = new Date().getFullYear().toString().slice(-2);
-    const idPart = studentId.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-    // Generate hash from student ID
-    const hash = idPart.split('').reduce((acc, char) => {
-        return acc + char.charCodeAt(0);
-    }, 0).toString(36).toUpperCase().slice(-4);
-    return `${prefix}${year}-${idPart.slice(0, 6)}-${hash}`;
+function generateVerificationCode(studentId, apaarId) {
+    // Combine studentId and apaarId to create unique hash
+    const combined = `${studentId}-${apaarId}-${Date.now()}`;
+    let hash = 0;
+    for (let i = 0; i < combined.length; i++) {
+        const char = combined.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+    }
+    // Convert to base36 and ensure 12 characters
+    let code = Math.abs(hash).toString(36).toUpperCase();
+    while (code.length < 12) {
+        code = 'A' + code;
+    }
+    return code.slice(0, 12);
+}
+
+// ================================================================
+// VALIDATE UNIQUE IDs
+// ================================================================
+function validateUniqueIds(studentId, apaarId) {
+    // Check if student ID already exists
+    const existingStudentId = certificates.find(c => c.studentId === studentId);
+    if (existingStudentId) {
+        return { valid: false, message: 'Student ID already exists' };
+    }
+
+    // Check if APAAR ID already exists (if provided)
+    if (apaarId) {
+        const existingApaar = certificates.find(c => c.apaarId === apaarId);
+        if (existingApaar) {
+            return { valid: false, message: 'APAAR ID already exists' };
+        }
+    }
+
+    return { valid: true };
 }
 
 // ================================================================
 // GET OR CREATE CERTIFICATE FOR STUDENT
 // ================================================================
-function getOrCreateCertificate(studentId) {
+function getOrCreateCertificate(studentId, apaarId) {
     // Check if certificate already exists for this student
     let existing = certificates.find(c => c.studentId === studentId);
 
@@ -57,11 +84,12 @@ function getOrCreateCertificate(studentId) {
         return existing;
     }
 
-    // Create new certificate with permanent verification code
-    const verificationCode = generateVerificationCode(studentId);
+    // Create new certificate with 12-character verification code
+    const verificationCode = generateVerificationCode(studentId, apaarId);
     const newCert = {
         id: uuidv4(),
         studentId: studentId,
+        apaarId: apaarId || '',
         verificationCode: verificationCode,
         createdAt: new Date().toISOString(),
         studentName: '',
@@ -76,7 +104,6 @@ function getOrCreateCertificate(studentId) {
         address: '',
         phone: '',
         photo: '',
-        apaarId: '',
         examRollNo: '',
         qrCode: '',
         updatedAt: new Date().toISOString()
@@ -86,7 +113,62 @@ function getOrCreateCertificate(studentId) {
 }
 
 // ================================================================
-// 1. GENERATE/UPDATE BONAFIDE CERTIFICATE
+// 1. VALIDATE UNIQUE IDs
+// POST /api/bonafide/validate-unique
+// ================================================================
+router.post('/validate-unique', authenticate, async (req, res) => {
+    try {
+        const { studentId, apaarId } = req.body;
+
+        if (!studentId) {
+            return res.status(400).json({
+                success: false,
+                valid: false,
+                message: 'Student ID is required'
+            });
+        }
+
+        // Check if updating existing certificate
+        const existing = certificates.find(c => c.studentId === studentId);
+        if (existing) {
+            // If updating, check if the IDs match the existing record
+            // Only check APAAR ID if it's different and provided
+            if (apaarId && existing.apaarId !== apaarId) {
+                const apaarExists = certificates.find(c => c.apaarId === apaarId);
+                if (apaarExists) {
+                    return res.json({
+                        success: true,
+                        valid: false,
+                        message: 'APAAR ID already exists for another student'
+                    });
+                }
+            }
+            return res.json({
+                success: true,
+                valid: true,
+                message: 'Updating existing certificate'
+            });
+        }
+
+        // Check for new certificate
+        const result = validateUniqueIds(studentId, apaarId);
+        return res.json({
+            success: true,
+            valid: result.valid,
+            message: result.valid ? 'IDs are unique' : result.message
+        });
+
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            valid: false,
+            message: error.message
+        });
+    }
+});
+
+// ================================================================
+// 2. GENERATE/UPDATE BONAFIDE CERTIFICATE
 // POST /api/bonafide/generate
 // ================================================================
 router.post('/generate', authenticate, async (req, res) => {
@@ -110,15 +192,71 @@ router.post('/generate', authenticate, async (req, res) => {
         } = req.body;
 
         // Validation
-        if (!studentId || !studentName || !fatherName || !className || !admissionNo) {
+        if (!studentId) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: studentId, studentName, fatherName, className, admissionNo'
+                message: 'Student ID is required'
             });
         }
 
+        if (!studentName) {
+            return res.status(400).json({
+                success: false,
+                message: 'Student Name is required'
+            });
+        }
+
+        if (!fatherName) {
+            return res.status(400).json({
+                success: false,
+                message: 'Father\'s Name is required'
+            });
+        }
+
+        if (!className) {
+            return res.status(400).json({
+                success: false,
+                message: 'Class is required'
+            });
+        }
+
+        if (!admissionNo) {
+            return res.status(400).json({
+                success: false,
+                message: 'Admission Number is required'
+            });
+        }
+
+        if (!apaarId) {
+            return res.status(400).json({
+                success: false,
+                message: 'APAAR ID is required'
+            });
+        }
+
+        // Validate APAAR ID format - exactly 12 alphanumeric characters
+        if (!/^[A-Za-z0-9]{12}$/.test(apaarId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'APAAR ID must be exactly 12 alphanumeric characters'
+            });
+        }
+
+        // Check if student already exists with different ID
+        const existingStudent = certificates.find(c => c.studentId === studentId);
+        if (!existingStudent) {
+            // Check if APAAR ID already exists on another student
+            const apaarExists = certificates.find(c => c.apaarId === apaarId && c.studentId !== studentId);
+            if (apaarExists) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'APAAR ID already exists for another student'
+                });
+            }
+        }
+
         // Get or create certificate with permanent verification code
-        let certificate = getOrCreateCertificate(studentId);
+        let certificate = getOrCreateCertificate(studentId, apaarId);
 
         // Update certificate data
         certificate.studentName = studentName;
@@ -149,17 +287,40 @@ router.post('/generate', authenticate, async (req, res) => {
         });
         certificate.qrCode = qrCodeDataURL;
 
+        // Prepare response data
+        const responseData = {
+            certificate: {
+                studentId: certificate.studentId,
+                apaarId: certificate.apaarId,
+                studentName: certificate.studentName,
+                fatherName: certificate.fatherName,
+                motherName: certificate.motherName,
+                className: certificate.className,
+                section: certificate.section,
+                session: certificate.session,
+                admissionNo: certificate.admissionNo,
+                dob: certificate.dob,
+                purpose: certificate.purpose,
+                address: certificate.address,
+                phone: certificate.phone,
+                photo: certificate.photo,
+                examRollNo: certificate.examRollNo,
+                verificationCode: certificate.verificationCode,
+                qrCode: certificate.qrCode,
+                createdAt: certificate.createdAt,
+                updatedAt: certificate.updatedAt
+            },
+            verificationCode: certificate.verificationCode,
+            qrCode: qrCodeDataURL,
+            isNew: certificate.createdAt === certificate.updatedAt
+        };
+
         return res.json({
             success: true,
             message: certificate.createdAt === certificate.updatedAt ?
                 'Bonafide certificate generated successfully' :
                 'Bonafide certificate updated successfully',
-            data: {
-                certificate,
-                verificationCode: certificate.verificationCode,
-                qrCode: qrCodeDataURL,
-                isNew: certificate.createdAt === certificate.updatedAt
-            }
+            data: responseData
         });
 
     } catch (error) {
@@ -172,7 +333,7 @@ router.post('/generate', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 2. GET CERTIFICATE BY STUDENT ID
+// 3. GET CERTIFICATE BY STUDENT ID
 // GET /api/bonafide/student/:studentId
 // ================================================================
 router.get('/student/:studentId', authenticate, async (req, res) => {
@@ -197,7 +358,7 @@ router.get('/student/:studentId', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 3. GET ALL CERTIFICATES (with filters)
+// 4. GET ALL CERTIFICATES (with filters)
 // GET /api/bonafide/all?class=10&search=name
 // ================================================================
 router.get('/all', authenticate, async (req, res) => {
@@ -211,13 +372,14 @@ router.get('/all', authenticate, async (req, res) => {
             filtered = filtered.filter(c => c.className === classFilter);
         }
 
-        // Search by name or student ID
+        // Search by name, student ID, admission number, or APAAR ID
         if (search) {
             const searchLower = search.toLowerCase();
             filtered = filtered.filter(c =>
                 c.studentName.toLowerCase().includes(searchLower) ||
                 c.studentId.toLowerCase().includes(searchLower) ||
-                c.admissionNo.toLowerCase().includes(searchLower)
+                c.admissionNo.toLowerCase().includes(searchLower) ||
+                (c.apaarId && c.apaarId.toLowerCase().includes(searchLower))
             );
         }
 
@@ -243,7 +405,7 @@ router.get('/all', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 4. GET CERTIFICATE BY VERIFICATION CODE
+// 5. GET CERTIFICATE BY VERIFICATION CODE
 // GET /api/bonafide/verify/:code
 // ================================================================
 router.get('/verify/:code', async (req, res) => {
@@ -261,6 +423,7 @@ router.get('/verify/:code', async (req, res) => {
         return res.json({
             success: true,
             data: {
+                studentId: certificate.studentId,
                 studentName: certificate.studentName,
                 fatherName: certificate.fatherName,
                 motherName: certificate.motherName,
@@ -281,7 +444,7 @@ router.get('/verify/:code', async (req, res) => {
 });
 
 // ================================================================
-// 5. DELETE CERTIFICATE
+// 6. DELETE CERTIFICATE
 // DELETE /api/bonafide/:studentId
 // ================================================================
 router.delete('/:studentId', authenticate, async (req, res) => {
@@ -307,7 +470,7 @@ router.delete('/:studentId', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 6. GET STATISTICS
+// 7. GET STATISTICS
 // GET /api/bonafide/stats
 // ================================================================
 router.get('/stats', authenticate, async (req, res) => {
@@ -339,7 +502,7 @@ router.get('/stats', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 7. GET STUDENT DETAILS (Integration with existing API)
+// 8. GET STUDENT DETAILS (Integration with existing API)
 // GET /api/bonafide/student-details/:studentId
 // ================================================================
 router.get('/student-details/:studentId', authenticate, async (req, res) => {
@@ -347,6 +510,7 @@ router.get('/student-details/:studentId', authenticate, async (req, res) => {
         const { studentId } = req.params;
 
         // Call your existing student API
+        const fetch = require('node-fetch');
         const response = await fetch(`https://gsssshilla.onrender.com/api/admin/results/students/${studentId}`, {
             headers: {
                 'Authorization': req.headers.authorization || ''
