@@ -59,7 +59,6 @@ router.get('/health', (req, res) => {
 
 // ================================================================
 // 2. VALIDATE UNIQUE IDs
-// POST /api/bonafide/validate-unique
 // ================================================================
 router.post('/validate-unique', authenticate, async (req, res) => {
     try {
@@ -73,14 +72,12 @@ router.post('/validate-unique', authenticate, async (req, res) => {
             });
         }
 
-        // Check if student ID exists
         const existing = await query(
             'SELECT student_id, apaar_id FROM bonafide_certificates WHERE student_id = ?',
             [studentId]
         );
 
         if (existing.length > 0) {
-            // If updating, check APAAR ID if different
             if (apaarId && existing[0].apaar_id !== apaarId) {
                 const apaarExists = await query(
                     'SELECT id FROM bonafide_certificates WHERE apaar_id = ? AND student_id != ?',
@@ -101,7 +98,6 @@ router.post('/validate-unique', authenticate, async (req, res) => {
             });
         }
 
-        // Check new certificate
         if (apaarId) {
             const apaarExists = await query(
                 'SELECT id FROM bonafide_certificates WHERE apaar_id = ?',
@@ -134,7 +130,6 @@ router.post('/validate-unique', authenticate, async (req, res) => {
 
 // ================================================================
 // 3. GENERATE/UPDATE BONAFIDE CERTIFICATE
-// POST /api/bonafide/generate
 // ================================================================
 router.post('/generate', authenticate, async (req, res) => {
     try {
@@ -158,53 +153,29 @@ router.post('/generate', authenticate, async (req, res) => {
             examRollNo
         } = req.body;
 
-        // ============================================================
-        // VALIDATION
-        // ============================================================
+        // Validation
         if (!studentId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Student ID is required' 
-            });
+            return res.status(400).json({ success: false, message: 'Student ID is required' });
         }
         if (!studentName) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Student Name is required' 
-            });
+            return res.status(400).json({ success: false, message: 'Student Name is required' });
         }
         if (!fatherName) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Father\'s Name is required' 
-            });
+            return res.status(400).json({ success: false, message: 'Father\'s Name is required' });
         }
         if (!className) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Class is required' 
-            });
+            return res.status(400).json({ success: false, message: 'Class is required' });
         }
         if (!admissionNo) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Admission Number is required' 
-            });
+            return res.status(400).json({ success: false, message: 'Admission Number is required' });
         }
         if (!apaarId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'APAAR ID is required' 
-            });
+            return res.status(400).json({ success: false, message: 'APAAR ID is required' });
         }
         if (!dob || dob.trim() === '') {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Date of Birth is required' 
-            });
+            return res.status(400).json({ success: false, message: 'Date of Birth is required' });
         }
 
-        // Validate APAAR ID format - exactly 12 alphanumeric
         if (!/^[A-Za-z0-9]{12}$/.test(apaarId)) {
             return res.status(400).json({
                 success: false,
@@ -212,7 +183,6 @@ router.post('/generate', authenticate, async (req, res) => {
             });
         }
 
-        // Validate date format
         const dobDate = new Date(dob);
         if (isNaN(dobDate.getTime())) {
             return res.status(400).json({
@@ -221,9 +191,7 @@ router.post('/generate', authenticate, async (req, res) => {
             });
         }
 
-        // ============================================================
-        // CHECK IF CERTIFICATE EXISTS
-        // ============================================================
+        // Check if certificate exists
         const existing = await query(
             'SELECT * FROM bonafide_certificates WHERE student_id = ?',
             [studentId]
@@ -233,7 +201,6 @@ router.post('/generate', authenticate, async (req, res) => {
         let verificationCode;
 
         if (existing.length > 0) {
-            // UPDATE EXISTING
             verificationCode = existing[0].verification_code;
             
             await query(`
@@ -274,7 +241,6 @@ router.post('/generate', authenticate, async (req, res) => {
 
             isNew = false;
         } else {
-            // CREATE NEW
             verificationCode = generateVerificationCode(studentId, apaarId);
             const id = uuidv4();
 
@@ -309,9 +275,7 @@ router.post('/generate', authenticate, async (req, res) => {
             isNew = true;
         }
 
-        // ============================================================
-        // GET UPDATED CERTIFICATE
-        // ============================================================
+        // Get updated certificate
         const certificate = await query(
             'SELECT * FROM bonafide_certificates WHERE student_id = ?',
             [studentId]
@@ -323,9 +287,7 @@ router.post('/generate', authenticate, async (req, res) => {
 
         const cert = certificate[0];
 
-        // ============================================================
-        // GENERATE QR CODE
-        // ============================================================
+        // Generate QR Code
         const verificationUrl = `https://gsssshilla07.pages.dev/verify3.html?code=${cert.verification_code}`;
         
         const qrCodeDataURL = await QRCode.toDataURL(verificationUrl, {
@@ -337,15 +299,12 @@ router.post('/generate', authenticate, async (req, res) => {
             }
         });
 
-        // Update QR code in database
         await query(
             'UPDATE bonafide_certificates SET qr_code = ? WHERE student_id = ?',
             [qrCodeDataURL, studentId]
         );
 
-        // ============================================================
-        // GET FINAL CERTIFICATE
-        // ============================================================
+        // Get final certificate
         const finalCert = await query(
             'SELECT * FROM bonafide_certificates WHERE student_id = ?',
             [studentId]
@@ -353,9 +312,6 @@ router.post('/generate', authenticate, async (req, res) => {
 
         const c = finalCert[0];
 
-        // ============================================================
-        // PREPARE RESPONSE
-        // ============================================================
         const responseData = {
             certificate: {
                 studentId: c.student_id,
@@ -400,7 +356,6 @@ router.post('/generate', authenticate, async (req, res) => {
 
 // ================================================================
 // 4. GET CERTIFICATE BY STUDENT ID
-// GET /api/bonafide/student/:studentId
 // ================================================================
 router.get('/student/:studentId', authenticate, async (req, res) => {
     try {
@@ -432,8 +387,7 @@ router.get('/student/:studentId', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 5. GET ALL CERTIFICATES (with filters)
-// GET /api/bonafide/all?class=10&search=name&page=1&limit=20
+// 5. GET ALL CERTIFICATES
 // ================================================================
 router.get('/all', authenticate, async (req, res) => {
     try {
@@ -470,7 +424,6 @@ router.get('/all', authenticate, async (req, res) => {
         const countResult = await query(countSql, countParams);
         const total = countResult[0]?.total || 0;
 
-        // Get paginated results
         sql += ' ORDER BY updated_at DESC LIMIT ? OFFSET ?';
         const offset = (parseInt(page) - 1) * parseInt(limit);
         params.push(parseInt(limit), offset);
@@ -498,7 +451,6 @@ router.get('/all', authenticate, async (req, res) => {
 
 // ================================================================
 // 6. GET CERTIFICATE BY VERIFICATION CODE (PUBLIC)
-// GET /api/bonafide/verify/:code
 // ================================================================
 router.get('/verify/:code', async (req, res) => {
     try {
@@ -547,14 +499,13 @@ router.get('/verify/:code', async (req, res) => {
 
 // ================================================================
 // 7. DELETE CERTIFICATE
-// DELETE /api/bonafide/:studentId
 // ================================================================
 router.delete('/:studentId', authenticate, async (req, res) => {
     try {
         const { studentId } = req.params;
 
         const existing = await query(
-            'SELECT id, verification_code FROM bonafide_certificates WHERE student_id = ?',
+            'SELECT id FROM bonafide_certificates WHERE student_id = ?',
             [studentId]
         );
 
@@ -585,15 +536,12 @@ router.delete('/:studentId', authenticate, async (req, res) => {
 
 // ================================================================
 // 8. GET STATISTICS
-// GET /api/bonafide/stats
 // ================================================================
 router.get('/stats', authenticate, async (req, res) => {
     try {
-        // Total certificates
         const totalResult = await query('SELECT COUNT(*) as total FROM bonafide_certificates');
         const total = totalResult[0]?.total || 0;
 
-        // Today's certificates
         const today = new Date().toISOString().split('T')[0];
         const todayResult = await query(
             'SELECT COUNT(*) as today FROM bonafide_certificates WHERE DATE(updated_at) = ?',
@@ -601,7 +549,6 @@ router.get('/stats', authenticate, async (req, res) => {
         );
         const todayCount = todayResult[0]?.today || 0;
 
-        // Class-wise statistics
         const classStats = await query(`
             SELECT class_name, COUNT(*) as count 
             FROM bonafide_certificates 
@@ -609,7 +556,6 @@ router.get('/stats', authenticate, async (req, res) => {
             ORDER BY class_name
         `);
 
-        // Latest 10 certificates
         const latest = await query(`
             SELECT * FROM bonafide_certificates 
             ORDER BY updated_at DESC 
@@ -635,38 +581,7 @@ router.get('/stats', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 9. GET STUDENT DETAILS (Integration with existing Result API)
-// GET /api/bonafide/student-details/:studentId
-// ================================================================
-router.get('/student-details/:studentId', authenticate, async (req, res) => {
-    try {
-        const { studentId } = req.params;
-        const fetch = require('node-fetch');
-
-        const response = await fetch(`https://gsssshilla.onrender.com/api/admin/results/students/${studentId}`, {
-            headers: {
-                'Authorization': req.headers.authorization || ''
-            }
-        });
-
-        if (!response.ok) {
-            throw new Error('Student not found');
-        }
-
-        const data = await response.json();
-        return res.json(data);
-    } catch (error) {
-        console.error('❌ Student details error:', error);
-        return res.status(404).json({
-            success: false,
-            message: error.message || 'Student not found'
-        });
-    }
-});
-
-// ================================================================
-// 10. BULK DELETE CERTIFICATES
-// DELETE /api/bonafide/bulk-delete
+// 9. BULK DELETE
 // ================================================================
 router.delete('/bulk-delete', authenticate, async (req, res) => {
     try {
@@ -681,7 +596,6 @@ router.delete('/bulk-delete', authenticate, async (req, res) => {
 
         const placeholders = ids.map(() => '?').join(',');
         
-        // Get certificates to delete
         const certificates = await query(
             `SELECT student_id FROM bonafide_certificates WHERE id IN (${placeholders})`,
             ids
@@ -694,7 +608,6 @@ router.delete('/bulk-delete', authenticate, async (req, res) => {
             });
         }
 
-        // Delete certificates
         await query(
             `DELETE FROM bonafide_certificates WHERE id IN (${placeholders})`,
             ids
@@ -706,70 +619,6 @@ router.delete('/bulk-delete', authenticate, async (req, res) => {
         });
     } catch (error) {
         console.error('❌ Bulk delete error:', error);
-        return res.status(500).json({ 
-            success: false, 
-            message: error.message 
-        });
-    }
-});
-
-// ================================================================
-// 11. SEARCH CERTIFICATES (Enhanced)
-// GET /api/bonafide/search?q=vikshant&class=10
-// ================================================================
-router.get('/search', authenticate, async (req, res) => {
-    try {
-        const { q, class: classFilter, session: sessionFilter, limit = 20, page = 1 } = req.query;
-
-        if (!q || q.trim() === '') {
-            return res.status(400).json({
-                success: false,
-                message: 'Search query is required'
-            });
-        }
-
-        let sql = 'SELECT * FROM bonafide_certificates WHERE 1=1';
-        const params = [];
-
-        // Search in multiple fields
-        const searchTerm = `%${q.trim()}%`;
-        sql += ' AND (student_name LIKE ? OR student_id LIKE ? OR admission_no LIKE ? OR verification_code LIKE ?)';
-        params.push(searchTerm, searchTerm, searchTerm, searchTerm);
-
-        if (classFilter) {
-            sql += ' AND class_name = ?';
-            params.push(classFilter);
-        }
-
-        if (sessionFilter) {
-            sql += ' AND session = ?';
-            params.push(sessionFilter);
-        }
-
-        // Count total
-        let countSql = sql.replace('SELECT *', 'SELECT COUNT(*) as total');
-        const countResult = await query(countSql, params);
-        const total = countResult[0]?.total || 0;
-
-        // Get paginated results
-        sql += ' ORDER BY updated_at DESC LIMIT ? OFFSET ?';
-        const offset = (parseInt(page) - 1) * parseInt(limit);
-        params.push(parseInt(limit), offset);
-
-        const certificates = await query(sql, params);
-
-        return res.json({
-            success: true,
-            data: certificates,
-            pagination: {
-                total: total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                totalPages: Math.ceil(total / parseInt(limit))
-            }
-        });
-    } catch (error) {
-        console.error('❌ Search error:', error);
         return res.status(500).json({ 
             success: false, 
             message: error.message 
