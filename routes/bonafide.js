@@ -3,8 +3,6 @@ const router = express.Router();
 const QRCode = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
-
-// ✅ Database connection
 const { query } = require('../config/db');
 
 // ================================================================
@@ -31,7 +29,7 @@ const authenticate = (req, res, next) => {
 };
 
 // ================================================================
-// GENERATE VERIFICATION CODE - 12 CHARACTERS ALPHANUMERIC
+// GENERATE 12-CHARACTER VERIFICATION CODE
 // ================================================================
 function generateVerificationCode(studentId, apaarId) {
     const combined = `${studentId}-${apaarId}-${Date.now()}`;
@@ -49,68 +47,10 @@ function generateVerificationCode(studentId, apaarId) {
 }
 
 // ================================================================
-// HELPER: GET OR CREATE CERTIFICATE IN DATABASE
-// ================================================================
-async function getOrCreateCertificate(studentId, apaarId) {
-    const existing = await query(
-        'SELECT * FROM bonafide_certificates WHERE student_id = ?',
-        [studentId]
-    );
-
-    if (existing.length > 0) {
-        return existing[0];
-    }
-
-    const verificationCode = generateVerificationCode(studentId, apaarId);
-    const newCert = {
-        id: uuidv4(),
-        student_id: studentId,
-        apaar_id: apaarId || '',
-        verification_code: verificationCode,
-        student_name: '',
-        father_name: '',
-        mother_name: '',
-        class_name: '',
-        section: '',
-        session: '2025-26',
-        admission_no: '',
-        dob: null,
-        purpose: 'General',
-        address: '',
-        phone: '',
-        photo: '',
-        exam_roll_no: '',
-        qr_code: '',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-    };
-
-    await query(`
-        INSERT INTO bonafide_certificates (
-            id, student_id, apaar_id, verification_code,
-            student_name, father_name, mother_name,
-            class_name, section, session, admission_no,
-            dob, purpose, address, phone, photo,
-            exam_roll_no, qr_code, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-        newCert.id, newCert.student_id, newCert.apaar_id, newCert.verification_code,
-        newCert.student_name, newCert.father_name, newCert.mother_name,
-        newCert.class_name, newCert.section, newCert.session, newCert.admission_no,
-        newCert.dob, newCert.purpose, newCert.address, newCert.phone, newCert.photo,
-        newCert.exam_roll_no, newCert.qr_code, newCert.created_at, newCert.updated_at
-    ]);
-
-    return newCert;
-}
-
-// ================================================================
 // 1. VALIDATE UNIQUE IDs
 // ================================================================
 router.post('/validate-unique', authenticate, async (req, res) => {
     try {
-        console.log('📥 Validate Unique Request Body:', req.body);
-        
         const { studentId, apaarId } = req.body;
 
         if (!studentId) {
@@ -183,7 +123,6 @@ router.post('/validate-unique', authenticate, async (req, res) => {
 router.post('/generate', authenticate, async (req, res) => {
     try {
         console.log('📥 Generate Request Body:', req.body);
-        console.log('📥 Generate Request Headers:', req.headers);
 
         const {
             studentId,
@@ -204,62 +143,35 @@ router.post('/generate', authenticate, async (req, res) => {
         } = req.body;
 
         // ============================================================
-        // DEBUG: Check what we received
-        // ============================================================
-        console.log('🔍 Parsed Values:');
-        console.log('studentId:', studentId);
-        console.log('studentName:', studentName);
-        console.log('fatherName:', fatherName);
-        console.log('className:', className);
-        console.log('admissionNo:', admissionNo);
-        console.log('apaarId:', apaarId);
-        console.log('dob:', dob);
-
-        // ============================================================
-        // VALIDATION - ALL FIELDS REQUIRED
+        // VALIDATION
         // ============================================================
         if (!studentId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Student ID is required'
-            });
+            return res.status(400).json({ success: false, message: 'Student ID is required' });
         }
         if (!studentName) {
-            return res.status(400).json({
-                success: false,
-                message: 'Student Name is required'
-            });
+            return res.status(400).json({ success: false, message: 'Student Name is required' });
         }
         if (!fatherName) {
-            return res.status(400).json({
-                success: false,
-                message: 'Father\'s Name is required'
-            });
+            return res.status(400).json({ success: false, message: 'Father\'s Name is required' });
         }
         if (!className) {
-            return res.status(400).json({
-                success: false,
-                message: 'Class is required'
-            });
+            return res.status(400).json({ success: false, message: 'Class is required' });
         }
         if (!admissionNo) {
-            return res.status(400).json({
-                success: false,
-                message: 'Admission Number is required'
-            });
+            return res.status(400).json({ success: false, message: 'Admission Number is required' });
         }
         if (!apaarId) {
-            return res.status(400).json({
-                success: false,
-                message: 'APAAR ID is required'
-            });
+            return res.status(400).json({ success: false, message: 'APAAR ID is required' });
+        }
+        if (!dob || dob.trim() === '') {
+            return res.status(400).json({ success: false, message: 'Date of Birth is required' });
         }
 
-        // ✅ DOB VALIDATION - Required
-        if (!dob || dob.trim() === '') {
+        // Validate APAAR ID format
+        if (!/^[A-Za-z0-9]{12}$/.test(apaarId)) {
             return res.status(400).json({
                 success: false,
-                message: 'Date of Birth is required'
+                message: 'APAAR ID must be exactly 12 alphanumeric characters'
             });
         }
 
@@ -272,28 +184,18 @@ router.post('/generate', authenticate, async (req, res) => {
             });
         }
 
-        // Validate APAAR ID format
-        if (!/^[A-Za-z0-9]{12}$/.test(apaarId)) {
-            return res.status(400).json({
-                success: false,
-                message: 'APAAR ID must be exactly 12 alphanumeric characters'
-            });
-        }
-
-        const dobValue = dob;
-
-        // Check if student exists
+        // ============================================================
+        // CHECK IF CERTIFICATE EXISTS
+        // ============================================================
         const existing = await query(
             'SELECT * FROM bonafide_certificates WHERE student_id = ?',
             [studentId]
         );
 
-        let certificate;
         let isNew = false;
 
         if (existing.length > 0) {
-            // Update existing
-            certificate = existing[0];
+            // UPDATE EXISTING
             await query(`
                 UPDATE bonafide_certificates SET
                     apaar_id = ?,
@@ -310,7 +212,7 @@ router.post('/generate', authenticate, async (req, res) => {
                     phone = ?,
                     photo = ?,
                     exam_roll_no = ?,
-                    updated_at = ?
+                    updated_at = NOW()
                 WHERE student_id = ?
             `, [
                 apaarId,
@@ -321,43 +223,34 @@ router.post('/generate', authenticate, async (req, res) => {
                 section || '',
                 session || '2025-26',
                 admissionNo,
-                dobValue,
+                dob,
                 purpose || 'General',
                 address || '',
                 phone || '',
                 photo || '',
                 examRollNo || '',
-                new Date().toISOString(),
                 studentId
             ]);
 
-            const updated = await query(
-                'SELECT * FROM bonafide_certificates WHERE student_id = ?',
-                [studentId]
-            );
-            certificate = updated[0];
             isNew = false;
         } else {
-            certificate = await getOrCreateCertificate(studentId, apaarId);
-            
+            // CREATE NEW
+            const verificationCode = generateVerificationCode(studentId, apaarId);
+            const id = uuidv4();
+
             await query(`
-                UPDATE bonafide_certificates SET
-                    student_name = ?,
-                    father_name = ?,
-                    mother_name = ?,
-                    class_name = ?,
-                    section = ?,
-                    session = ?,
-                    admission_no = ?,
-                    dob = ?,
-                    purpose = ?,
-                    address = ?,
-                    phone = ?,
-                    photo = ?,
-                    exam_roll_no = ?,
-                    updated_at = ?
-                WHERE student_id = ?
+                INSERT INTO bonafide_certificates (
+                    id, student_id, apaar_id, verification_code,
+                    student_name, father_name, mother_name,
+                    class_name, section, session, admission_no,
+                    dob, purpose, address, phone, photo,
+                    exam_roll_no, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             `, [
+                id,
+                studentId,
+                apaarId,
+                verificationCode,
                 studentName,
                 fatherName,
                 motherName || '',
@@ -365,26 +258,31 @@ router.post('/generate', authenticate, async (req, res) => {
                 section || '',
                 session || '2025-26',
                 admissionNo,
-                dobValue,
+                dob,
                 purpose || 'General',
                 address || '',
                 phone || '',
                 photo || '',
-                examRollNo || '',
-                new Date().toISOString(),
-                studentId
+                examRollNo || ''
             ]);
 
-            const updated = await query(
-                'SELECT * FROM bonafide_certificates WHERE student_id = ?',
-                [studentId]
-            );
-            certificate = updated[0];
             isNew = true;
         }
 
-        // Generate QR Code
-        const verificationUrl = `https://gsssshilla07.pages.dev/verify3.html?code=${certificate.verification_code}`;
+        // ============================================================
+        // GET UPDATED CERTIFICATE
+        // ============================================================
+        const certificate = await query(
+            'SELECT * FROM bonafide_certificates WHERE student_id = ?',
+            [studentId]
+        );
+
+        const cert = certificate[0];
+
+        // ============================================================
+        // GENERATE QR CODE
+        // ============================================================
+        const verificationUrl = `https://gsssshilla07.pages.dev/verify3.html?code=${cert.verification_code}`;
         const qrCodeDataURL = await QRCode.toDataURL(verificationUrl, {
             width: 150,
             margin: 2,
@@ -394,41 +292,45 @@ router.post('/generate', authenticate, async (req, res) => {
             }
         });
 
+        // Update QR code
         await query(
             'UPDATE bonafide_certificates SET qr_code = ? WHERE student_id = ?',
             [qrCodeDataURL, studentId]
         );
 
+        // ============================================================
+        // FINAL RESPONSE
+        // ============================================================
         const finalCert = await query(
             'SELECT * FROM bonafide_certificates WHERE student_id = ?',
             [studentId]
         );
 
-        const cert = finalCert[0];
+        const c = finalCert[0];
 
         const responseData = {
             certificate: {
-                studentId: cert.student_id,
-                apaarId: cert.apaar_id,
-                studentName: cert.student_name,
-                fatherName: cert.father_name,
-                motherName: cert.mother_name,
-                className: cert.class_name,
-                section: cert.section,
-                session: cert.session,
-                admissionNo: cert.admission_no,
-                dob: cert.dob,
-                purpose: cert.purpose,
-                address: cert.address,
-                phone: cert.phone,
-                photo: cert.photo,
-                examRollNo: cert.exam_roll_no,
-                verificationCode: cert.verification_code,
+                studentId: c.student_id,
+                apaarId: c.apaar_id,
+                studentName: c.student_name,
+                fatherName: c.father_name,
+                motherName: c.mother_name,
+                className: c.class_name,
+                section: c.section,
+                session: c.session,
+                admissionNo: c.admission_no,
+                dob: c.dob,
+                purpose: c.purpose,
+                address: c.address,
+                phone: c.phone,
+                photo: c.photo,
+                examRollNo: c.exam_roll_no,
+                verificationCode: c.verification_code,
                 qrCode: qrCodeDataURL,
-                createdAt: cert.created_at,
-                updatedAt: cert.updated_at
+                createdAt: c.created_at,
+                updatedAt: c.updated_at
             },
-            verificationCode: cert.verification_code,
+            verificationCode: c.verification_code,
             qrCode: qrCodeDataURL,
             isNew: isNew
         };
@@ -477,11 +379,11 @@ router.get('/student/:studentId', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 4. GET ALL CERTIFICATES (with filters)
+// 4. GET ALL CERTIFICATES
 // ================================================================
 router.get('/all', authenticate, async (req, res) => {
     try {
-        const { class: classFilter, search, limit = 100, page = 1 } = req.query;
+        const { class: classFilter, search, limit = 20, page = 1 } = req.query;
 
         let sql = 'SELECT * FROM bonafide_certificates WHERE 1=1';
         const params = [];
@@ -498,12 +400,12 @@ router.get('/all', authenticate, async (req, res) => {
         }
 
         sql += ' ORDER BY updated_at DESC LIMIT ? OFFSET ?';
-
-        const offset = (page - 1) * limit;
-        params.push(parseInt(limit), parseInt(offset));
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+        params.push(parseInt(limit), offset);
 
         const certificates = await query(sql, params);
 
+        // Count total
         let countSql = 'SELECT COUNT(*) as total FROM bonafide_certificates WHERE 1=1';
         const countParams = [];
         if (classFilter) {
@@ -525,7 +427,7 @@ router.get('/all', authenticate, async (req, res) => {
                 total: total,
                 page: parseInt(page),
                 limit: parseInt(limit),
-                totalPages: Math.ceil(total / limit)
+                totalPages: Math.ceil(total / parseInt(limit))
             }
         });
     } catch (error) {
@@ -534,7 +436,7 @@ router.get('/all', authenticate, async (req, res) => {
 });
 
 // ================================================================
-// 5. GET CERTIFICATE BY VERIFICATION CODE (PUBLIC)
+// 5. VERIFY BY CODE (PUBLIC)
 // ================================================================
 router.get('/verify/:code', async (req, res) => {
     try {
@@ -649,34 +551,6 @@ router.get('/stats', authenticate, async (req, res) => {
         });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
-    }
-});
-
-// ================================================================
-// 8. GET STUDENT DETAILS (Integration with existing API)
-// ================================================================
-router.get('/student-details/:studentId', authenticate, async (req, res) => {
-    try {
-        const { studentId } = req.params;
-
-        const fetch = require('node-fetch');
-        const response = await fetch(`https://gsssshilla.onrender.com/api/admin/results/students/${studentId}`, {
-            headers: {
-                'Authorization': req.headers.authorization || ''
-            }
-        });
-
-        if (!response.ok) {
-            throw new Error('Student not found');
-        }
-
-        const data = await response.json();
-        return res.json(data);
-    } catch (error) {
-        return res.status(404).json({
-            success: false,
-            message: error.message || 'Student not found'
-        });
     }
 });
 
