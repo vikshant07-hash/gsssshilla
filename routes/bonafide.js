@@ -109,6 +109,8 @@ async function getOrCreateCertificate(studentId, apaarId) {
 // ================================================================
 router.post('/validate-unique', authenticate, async (req, res) => {
     try {
+        console.log('📥 Validate Unique Request Body:', req.body);
+        
         const { studentId, apaarId } = req.body;
 
         if (!studentId) {
@@ -166,6 +168,7 @@ router.post('/validate-unique', authenticate, async (req, res) => {
         });
 
     } catch (error) {
+        console.error('Validate error:', error);
         return res.status(500).json({
             success: false,
             valid: false,
@@ -179,6 +182,9 @@ router.post('/validate-unique', authenticate, async (req, res) => {
 // ================================================================
 router.post('/generate', authenticate, async (req, res) => {
     try {
+        console.log('📥 Generate Request Body:', req.body);
+        console.log('📥 Generate Request Headers:', req.headers);
+
         const {
             studentId,
             studentName,
@@ -196,6 +202,18 @@ router.post('/generate', authenticate, async (req, res) => {
             apaarId,
             examRollNo
         } = req.body;
+
+        // ============================================================
+        // DEBUG: Check what we received
+        // ============================================================
+        console.log('🔍 Parsed Values:');
+        console.log('studentId:', studentId);
+        console.log('studentName:', studentName);
+        console.log('fatherName:', fatherName);
+        console.log('className:', className);
+        console.log('admissionNo:', admissionNo);
+        console.log('apaarId:', apaarId);
+        console.log('dob:', dob);
 
         // ============================================================
         // VALIDATION - ALL FIELDS REQUIRED
@@ -262,7 +280,7 @@ router.post('/generate', authenticate, async (req, res) => {
             });
         }
 
-        const dobValue = dob; // Now it's always present
+        const dobValue = dob;
 
         // Check if student exists
         const existing = await query(
@@ -422,7 +440,7 @@ router.post('/generate', authenticate, async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Generate error:', error);
+        console.error('❌ Generate error:', error);
         return res.status(500).json({
             success: false,
             message: error.message || 'Failed to generate certificate'
