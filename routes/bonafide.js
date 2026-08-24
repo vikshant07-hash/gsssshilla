@@ -209,7 +209,7 @@ router.post('/generate', authenticate, async (req, res) => {
             `, [
                 id, studentId, apaarId, verificationCode,
                 studentName, fatherName, motherName || '',
-                className, section || '', session || '2025-26', admissionNo,
+                className, section || '', session || '2026-27', admissionNo,
                 dob, purpose || 'General', address || '', phone || '',
                 photo || '', examRollNo || ''
             ]);
@@ -229,7 +229,7 @@ router.post('/generate', authenticate, async (req, res) => {
         const cert = certificate[0];
 
         // Generate QR Code
-        const verificationUrl = `https://gsssshilla07.pages.dev/verify3.html?code=${cert.verification_code}`;
+        const verificationUrl = `https://gsssshilla07.pages.dev/verify.html?code=${cert.verification_code}`;
         const qrCodeDataURL = await QRCode.toDataURL(verificationUrl, {
             width: 150,
             margin: 2,
