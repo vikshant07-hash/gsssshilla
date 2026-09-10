@@ -30,7 +30,6 @@ const DOC_FIELDS = [
   "incomeCertificate", "bplCertificate", "otherDocument"
 ];
 
-// Required documents on ADD (backend enforcement)
 const REQUIRED_DOCS = [
   "studentPhoto", "signature", "aadharCard", "himachaliBonafide",
   "casteCertificate", "apaarCard", "previousMarksheet"
@@ -69,7 +68,6 @@ const extractFiles = (files) => {
   return out;
 };
 
-// Session increment: 2024-25 -> 2025-26 ; 2024-2025 -> 2025-2026
 const incrementSession = (s) => {
   const m = /^(\d{4})-(\d{2,4})$/.exec(s);
   if (!m) return s;
@@ -130,7 +128,7 @@ const destroyAsset = async (publicId, url) => {
 };
 
 // ============================================================
-// ENSURE SETTINGS TABLE (auto-create on load)
+// ENSURE SETTINGS TABLE
 // ============================================================
 (async () => {
   try {
@@ -146,58 +144,6 @@ const destroyAsset = async (publicId, url) => {
     console.error("❌ settings table create error:", err.message);
   }
 })();
-
-// ============================================================
-// ADD STUDENT
-// ============================================================
-router.post("/add", studentUploadFields, rules(), validate, async (req, res) => {
-  try {
-    // Backend enforcement: check required docs are uploaded
-    const missing = [];
-    for (const docName of REQUIRED_DOCS) {
-      if (!req.files || !req.files[docName] || !req.files[docName][0]) {
-        missing.push(docName.replace(/([A-Z])/g, " $1").trim());
-      }
-    }
-    if (missing.length) {
-      return res.status(400).json({
-        success: false,
-        message: `Missing required documents: ${missing.join(", ")}`
-      });
-    }
-
-    const data = { ...pickBody(req.body), ...extractFiles(req.files) };
-    // Default status
-    if (!data.status) data.status = "Active";
-    // Default promoted_from
-    if (!data.promoted_from) data.promoted_from = null;
-
-    const cols = Object.keys(data);
-    const vals = Object.values(data);
-    const ph = cols.map(() => "?").join(",");
-
-    const result = await q(
-      `INSERT INTO Nstudent (${cols.join(",")}) VALUES (${ph})`,
-      vals
-    );
-
-    const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]);
-    res.status(201).json({
-      success: true,
-      message: "Student added successfully ✅",
-      data: rows[0]
-    });
-  } catch (err) {
-    console.error("❌ Add Student Error:", err);
-    if (err.code === "ER_DUP_ENTRY") {
-      return res.status(400).json({
-        success: false,
-        message: "Student ID or Admission Number already exists"
-      });
-    }
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
 
 // ============================================================
 // GET ALL STUDENTS
@@ -356,7 +302,7 @@ router.post("/promote", async (req, res) => {
 });
 
 // ============================================================
-// PROMOTE WHOLE SESSION — every student of a session → next class + next session
+// PROMOTE WHOLE SESSION
 // ============================================================
 router.post("/promote-session", async (req, res) => {
   try {
@@ -379,7 +325,7 @@ router.post("/promote-session", async (req, res) => {
 
       for (const s of rows) {
         const nxt = nextClass(s.class);
-        if (!nxt) { skipped++; continue; } // skip if already in last class
+        if (!nxt) { skipped++; continue; }
         await conn.query(
           `UPDATE Nstudent
            SET promoted_from = ?, class = ?, session = ?, status = 'Promoted', promotion_date = NOW()
@@ -389,7 +335,6 @@ router.post("/promote-session", async (req, res) => {
         promoted++;
       }
 
-      // Save new session as current
       await conn.query(
         "INSERT INTO settings (`key`, `value`) VALUES ('current_session', ?) ON DUPLICATE KEY UPDATE `value` = ?",
         [toSession, toSession]
@@ -434,6 +379,57 @@ router.get("/search/:query", async (req, res) => {
 });
 
 // ============================================================
+// ADD STUDENT
+// ============================================================
+router.post("/add", studentUploadFields, rules(), validate, async (req, res) => {
+  try {
+    // Backend enforcement: required docs
+    const missing = [];
+    for (const docName of REQUIRED_DOCS) {
+      if (!req.files || !req.files[docName] || !req.files[docName][0]) {
+        missing.push(docName.replace(/([A-Z])/g, " $1").trim());
+      }
+    }
+    if (missing.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing required documents: ${missing.join(", ")}`
+      });
+    }
+
+    const data = { ...pickBody(req.body), ...extractFiles(req.files) };
+    if (!data.status) data.status = "Active";
+    if (!data.promoted_from) data.promoted_from = null;
+
+    const cols = Object.keys(data);
+    const vals = Object.values(data);
+    const ph = cols.map(() => "?").join(",");
+
+    const result = await q(
+      `INSERT INTO Nstudent (${cols.join(",")}) VALUES (${ph})`,
+      vals
+    );
+
+    const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]);
+    res.status(201).json({
+      success: true,
+      message: "Student added successfully ✅",
+      data: rows[0],
+      student: rows[0]
+    });
+  } catch (err) {
+    console.error("❌ Add Student Error:", err);
+    if (err.code === "ER_DUP_ENTRY") {
+      return res.status(400).json({
+        success: false,
+        message: "Student ID or Admission Number already exists"
+      });
+    }
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
 // GET SINGLE STUDENT
 // ============================================================
 router.get("/:id", async (req, res) => {
@@ -448,7 +444,7 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ success: false, message: "Student not found" });
     }
 
-    res.json({ success: true, data: rows[0] });
+    res.json({ success: true, data: rows[0], student: rows[0] });
   } catch (err) {
     console.error("❌ Fetch Student Error:", err);
     res.status(500).json({ success: false, message: err.message });
@@ -473,7 +469,6 @@ router.put("/:id", studentUploadFields, async (req, res) => {
 
     const newFiles = extractFiles(req.files);
 
-    // Delete replaced Cloudinary assets
     for (const f of DOC_FIELDS) {
       const snake = toSnake(f);
       const newPid = newFiles[`${snake}_pid`];
@@ -487,7 +482,7 @@ router.put("/:id", studentUploadFields, async (req, res) => {
     const cols = Object.keys(data);
 
     if (!cols.length) {
-      return res.json({ success: true, message: "No changes", data: existing });
+      return res.json({ success: true, message: "No changes", data: existing, student: existing });
     }
 
     const setSql = cols.map((c) => `${c} = ?`).join(", ");
@@ -497,7 +492,8 @@ router.put("/:id", studentUploadFields, async (req, res) => {
     res.json({
       success: true,
       message: "Student updated successfully ✅",
-      data: updatedRows[0]
+      data: updatedRows[0],
+      student: updatedRows[0]
     });
   } catch (err) {
     console.error("❌ Update Student Error:", err);
