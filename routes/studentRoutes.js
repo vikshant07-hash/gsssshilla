@@ -682,4 +682,69 @@ router.get("/:id/pdf", async (req, res) => {
   }
 });
 
+// ============================================================
+// STUDENT LOGIN VERIFY
+// ============================================================
+router.post("/verify-login", async (req, res) => {
+  try {
+    const { class: cls, studentId, apaarId, dob } = req.body;
+
+    if (!cls || !studentId || !apaarId || !dob) {
+      return res.status(400).json({
+        success: false,
+        message: "All fields are required"
+      });
+    }
+
+    if (!/^\d{11}$/.test(apaarId)) {
+      return res.status(400).json({
+        success: false,
+        message: "APAAR ID must be 11 digits"
+      });
+    }
+
+    // Lookup student
+    const rows = await q(
+      `SELECT * FROM Nstudent
+       WHERE class = ?
+         AND student_id = ?
+         AND apaar_id = ?
+         AND DATE(dob) = DATE(?)
+       LIMIT 1`,
+      [cls, studentId, apaarId, dob]
+    );
+
+    if (!rows.length) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials. Please check your details."
+      });
+    }
+
+    const s = rows[0];
+
+    // Simple token (timestamp-based, not JWT — enough for portal)
+    const token = Buffer.from(`${s.id}-${Date.now()}`).toString("base64");
+
+    // Return student data (hide pids for safety)
+    const safeStudent = { ...s };
+    delete safeStudent.__v;
+    // We keep _pid fields for nothing — remove them for security
+    for (const k of Object.keys(safeStudent)) {
+      if (k.endsWith("_pid")) delete safeStudent[k];
+    }
+
+    res.json({
+      success: true,
+      message: "Login successful ✅",
+      student: safeStudent,
+      token
+    });
+  } catch (err) {
+    console.error("❌ Verify login error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
 module.exports = router;
