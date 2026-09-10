@@ -7,7 +7,8 @@ const http = require("http");
 const path = require("path");
 
 const db = require("../config/db");
-const { cloudinary, uploadStudent } = require("../middleware/cloudinary");
+const { cloudinary, uploadStudent } = require("../config/cloudinary");
+
 
 // ==================== MULTER FIELDS ====================
 const studentUploadFields = uploadStudent.fields([
