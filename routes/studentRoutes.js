@@ -9,7 +9,6 @@ const path = require("path");
 const db = require("../config/db");
 const { cloudinary, uploadStudent } = require("../config/cloudinary");
 
-
 // ==================== MULTER FIELDS ====================
 const studentUploadFields = uploadStudent.fields([
   { name: "studentPhoto", maxCount: 1 },
@@ -24,13 +23,22 @@ const studentUploadFields = uploadStudent.fields([
   { name: "otherDocument", maxCount: 1 }
 ]);
 
-// ==================== HELPERS ====================
+// ==================== CONSTANTS ====================
 const DOC_FIELDS = [
   "studentPhoto", "signature", "aadharCard", "himachaliBonafide",
   "casteCertificate", "apaarCard", "previousMarksheet",
   "incomeCertificate", "bplCertificate", "otherDocument"
 ];
 
+// Required documents on ADD (backend enforcement)
+const REQUIRED_DOCS = [
+  "studentPhoto", "signature", "aadharCard", "himachaliBonafide",
+  "casteCertificate", "apaarCard", "previousMarksheet"
+];
+
+const CLASS_ORDER = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+
+// ==================== HELPERS ====================
 const toSnake = (s) => s.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase());
 
 const BODY_FIELDS = [
@@ -61,12 +69,22 @@ const extractFiles = (files) => {
   return out;
 };
 
+// Session increment: 2024-25 -> 2025-26 ; 2024-2025 -> 2025-2026
 const incrementSession = (s) => {
-  const m = /^(\d{4})-(\d{4})$/.exec(s);
-  return m ? `${+m[1] + 1}-${+m[2] + 1}` : s;
+  const m = /^(\d{4})-(\d{2,4})$/.exec(s);
+  if (!m) return s;
+  const startYear = parseInt(m[1]) + 1;
+  const endYear = startYear + 1;
+  const endPart = m[2].length === 2 ? endYear.toString().substring(2) : String(endYear);
+  return `${startYear}-${endPart}`;
 };
 
-// Wrapper: use db.query (aapka custom wrapper promise return karta hai)
+const nextClass = (currentClass) => {
+  const idx = CLASS_ORDER.indexOf(String(currentClass));
+  if (idx === -1 || idx === CLASS_ORDER.length - 1) return null;
+  return CLASS_ORDER[idx + 1];
+};
+
 const q = (sql, params = []) => db.query(sql, params);
 
 // ==================== VALIDATION ====================
@@ -81,7 +99,7 @@ const rules = () => [
   body("aadharNumber").matches(/^\d{12}$/).withMessage("Aadhar must be 12 digits"),
   body("class").notEmpty().withMessage("Class required"),
   body("rollNumber").notEmpty().withMessage("Roll number required"),
-  body("session").matches(/^\d{4}-\d{4}$/).withMessage("Session format YYYY-YYYY"),
+  body("session").matches(/^\d{4}-\d{2,4}$/).withMessage("Session format YYYY-YY or YYYY-YYYY"),
   body("mobileNumber").matches(/^[6-9]\d{9}$/).withMessage("Invalid mobile number"),
   body("emailId").isEmail().withMessage("Invalid email"),
   body("gender").isIn(["Male", "Female", "Other"]).withMessage("Gender required"),
@@ -101,7 +119,6 @@ const validate = (req, res, next) => {
   next();
 };
 
-// Delete single cloudinary asset (safe)
 const destroyAsset = async (publicId, url) => {
   if (!publicId) return;
   const resourceType = (url || "").includes("/raw/") ? "raw" : "image";
@@ -113,11 +130,48 @@ const destroyAsset = async (publicId, url) => {
 };
 
 // ============================================================
+// ENSURE SETTINGS TABLE (auto-create on load)
+// ============================================================
+(async () => {
+  try {
+    await q(`
+      CREATE TABLE IF NOT EXISTS settings (
+        \`key\` VARCHAR(100) PRIMARY KEY,
+        \`value\` VARCHAR(500) NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
+    console.log("✅ settings table ready");
+  } catch (err) {
+    console.error("❌ settings table create error:", err.message);
+  }
+})();
+
+// ============================================================
 // ADD STUDENT
 // ============================================================
 router.post("/add", studentUploadFields, rules(), validate, async (req, res) => {
   try {
+    // Backend enforcement: check required docs are uploaded
+    const missing = [];
+    for (const docName of REQUIRED_DOCS) {
+      if (!req.files || !req.files[docName] || !req.files[docName][0]) {
+        missing.push(docName.replace(/([A-Z])/g, " $1").trim());
+      }
+    }
+    if (missing.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing required documents: ${missing.join(", ")}`
+      });
+    }
+
     const data = { ...pickBody(req.body), ...extractFiles(req.files) };
+    // Default status
+    if (!data.status) data.status = "Active";
+    // Default promoted_from
+    if (!data.promoted_from) data.promoted_from = null;
+
     const cols = Object.keys(data);
     const vals = Object.values(data);
     const ph = cols.map(() => "?").join(",");
@@ -146,7 +200,7 @@ router.post("/add", studentUploadFields, rules(), validate, async (req, res) => 
 });
 
 // ============================================================
-// GET ALL STUDENTS (filter + sort + search + pagination)
+// GET ALL STUDENTS
 // ============================================================
 router.get("/", async (req, res) => {
   try {
@@ -203,7 +257,43 @@ router.get("/", async (req, res) => {
 });
 
 // ============================================================
-// GROUP BY CLASS (statistics)
+// SESSION SETTINGS — Get current
+// ============================================================
+router.get("/current-session", async (req, res) => {
+  try {
+    const rows = await q("SELECT `value` FROM settings WHERE `key` = 'current_session'");
+    res.json({ success: true, session: rows[0]?.value || null });
+  } catch (err) {
+    console.error("❌ Get current session error:", err);
+    res.json({ success: true, session: null });
+  }
+});
+
+// ============================================================
+// SESSION SETTINGS — Set current
+// ============================================================
+router.post("/current-session", async (req, res) => {
+  try {
+    const { session } = req.body;
+    if (!session || !/^\d{4}-\d{2,4}$/.test(session)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid session format (YYYY-YY or YYYY-YYYY)"
+      });
+    }
+    await q(
+      "INSERT INTO settings (`key`, `value`) VALUES ('current_session', ?) ON DUPLICATE KEY UPDATE `value` = ?",
+      [session, session]
+    );
+    res.json({ success: true, message: "Current session saved ✅", session });
+  } catch (err) {
+    console.error("❌ Save current session error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// GROUP BY CLASS
 // ============================================================
 router.get("/by-class", async (req, res) => {
   try {
@@ -225,7 +315,7 @@ router.get("/by-class", async (req, res) => {
 });
 
 // ============================================================
-// PROMOTE (bulk)
+// PROMOTE — Bulk selected students
 // ============================================================
 router.post("/promote", async (req, res) => {
   try {
@@ -266,7 +356,63 @@ router.post("/promote", async (req, res) => {
 });
 
 // ============================================================
-// SEARCH (quick)
+// PROMOTE WHOLE SESSION — every student of a session → next class + next session
+// ============================================================
+router.post("/promote-session", async (req, res) => {
+  try {
+    const { fromSession, toSession } = req.body;
+    if (!fromSession || !toSession) {
+      return res.status(400).json({
+        success: false,
+        message: "fromSession and toSession are required"
+      });
+    }
+
+    const result = await db.transaction(async (conn) => {
+      const [rows] = await conn.query(
+        `SELECT id, class FROM Nstudent WHERE session = ? AND status = 'Active'`,
+        [fromSession]
+      );
+
+      let promoted = 0;
+      let skipped = 0;
+
+      for (const s of rows) {
+        const nxt = nextClass(s.class);
+        if (!nxt) { skipped++; continue; } // skip if already in last class
+        await conn.query(
+          `UPDATE Nstudent
+           SET promoted_from = ?, class = ?, session = ?, status = 'Promoted', promotion_date = NOW()
+           WHERE id = ?`,
+          [s.class, nxt, toSession, s.id]
+        );
+        promoted++;
+      }
+
+      // Save new session as current
+      await conn.query(
+        "INSERT INTO settings (`key`, `value`) VALUES ('current_session', ?) ON DUPLICATE KEY UPDATE `value` = ?",
+        [toSession, toSession]
+      );
+
+      return { promoted, skipped, total: rows.length };
+    });
+
+    res.json({
+      success: true,
+      message: `${result.promoted} students promoted from ${fromSession} → ${toSession}. ${result.skipped ? `${result.skipped} skipped (already final class).` : ""} ✅`,
+      count: result.promoted,
+      skipped: result.skipped,
+      newSession: toSession
+    });
+  } catch (err) {
+    console.error("❌ Promote Session Error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// SEARCH
 // ============================================================
 router.get("/search/:query", async (req, res) => {
   try {
@@ -381,7 +527,6 @@ router.delete("/:id", async (req, res) => {
     }
     const s = rows[0];
 
-    // Delete all assets from Cloudinary
     for (const f of DOC_FIELDS) {
       const snake = toSnake(f);
       if (s[`${snake}_pid`]) {
@@ -398,7 +543,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ============================================================
-// PROFESSIONAL PDF — /:id/pdf
+// SERVER-SIDE PROFESSIONAL PDF — /:id/pdf
 // ============================================================
 const fetchImageBuffer = (url) => new Promise((resolve) => {
   if (!url) return resolve(null);
@@ -434,7 +579,7 @@ router.get("/:id/pdf", async (req, res) => {
 
     doc.pipe(res);
 
-    // ---------- HEADER ----------
+    // HEADER
     doc.rect(0, 0, doc.page.width, 80).fill("#1e3a8a");
     doc.fillColor("#ffffff").fontSize(22).font("Helvetica-Bold")
       .text("STUDENT ADMISSION RECORD", 40, 25, { align: "center" });
@@ -442,7 +587,7 @@ router.get("/:id/pdf", async (req, res) => {
       .text("Official Document", 40, 55, { align: "center" });
     doc.fillColor("#000000");
 
-    // ---------- PHOTO ----------
+    // PHOTO
     const photoBuf = await fetchImageBuffer(s.student_photo_url);
     const px = doc.page.width - 150;
     const py = 110;
@@ -455,7 +600,6 @@ router.get("/:id/pdf", async (req, res) => {
       doc.fontSize(9).fillColor("#666").text("No Photo", px + 25, py + 55);
     }
 
-    // ---------- PERSONAL ----------
     doc.fontSize(14).font("Helvetica-Bold").fillColor("#1e3a8a")
       .text("Personal Details", 40, 110);
     doc.moveTo(40, 130).lineTo(400, 130).stroke("#1e3a8a");
@@ -481,7 +625,6 @@ router.get("/:id/pdf", async (req, res) => {
     row("Mobile", s.mobile_number);
     row("Email", s.email_id);
 
-    // ---------- ACADEMIC ----------
     doc.moveDown(1.5);
     doc.fontSize(14).font("Helvetica-Bold").fillColor("#1e3a8a").text("Academic Details");
     doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke("#1e3a8a");
@@ -492,14 +635,13 @@ router.get("/:id/pdf", async (req, res) => {
     row("Session", s.session);
     row("Status", s.status);
 
-    // ---------- ADDRESS ----------
     doc.moveDown(1.5);
     doc.fontSize(14).font("Helvetica-Bold").fillColor("#1e3a8a").text("Address");
     doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke("#1e3a8a");
     doc.moveDown(0.6);
     doc.font("Helvetica").fontSize(10).fillColor("#000").text(s.address || "-");
 
-    // ---------- DOCUMENTS PAGE ----------
+    // DOCUMENTS PAGE
     doc.addPage();
     doc.fontSize(16).font("Helvetica-Bold").fillColor("#1e3a8a")
       .text("Uploaded Documents", { align: "center" });
@@ -527,7 +669,6 @@ router.get("/:id/pdf", async (req, res) => {
       y += 42;
     }
 
-    // ---------- FOOTER ----------
     doc.fontSize(8).fillColor("#666")
       .text(
         `Generated on ${new Date().toLocaleString("en-IN")}`,
