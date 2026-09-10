@@ -103,7 +103,8 @@ const checkSession = (req, res, next) => {
 // ============================================================
 // ============================================================
 const resultRoutes = require('./routes/resultRoutes');
-const bonafideRoutes = require('./routes/bonafide');
+
+    const bonafideRoutes = require("./routes/bonafideRoutes");
 const studentRoutes = require("./routes/studentRoutes");
 
 // Bonafide routes
@@ -111,7 +112,9 @@ const studentRoutes = require("./routes/studentRoutes");
 
 // Mount the routes
 app.use('/api/admin/results', resultRoutes); // Admin routes
-app.use('/api/bonafide', bonafideRoutes);
+
+
+app.use("/api/bonafide", bonafideRoutes);
 app.use('/api/results', resultRoutes); // Public routes
 app.use("/api/students", studentRoutes);
 
