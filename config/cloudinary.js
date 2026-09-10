@@ -53,7 +53,7 @@ const recentStorage = new CloudinaryStorage({
 });
 
 // ============================================================
-// STORAGE FOR GALLERY - IMAGES & VIDEOS (NEW)
+// STORAGE FOR GALLERY - IMAGES & VIDEOS
 // ============================================================
 const galleryStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
@@ -108,21 +108,34 @@ const facultyStorage = new CloudinaryStorage({
 });
 
 // ============================================================
+// STORAGE FOR STUDENT DOCUMENTS  🆕
+// ============================================================
+const studentStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: (req, file) => {
+    const isPdf = file.mimetype === "application/pdf";
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
+
+    return {
+      folder: process.env.CLOUDINARY_STUDENT_FOLDER || "school/students",
+      resource_type: isPdf ? "raw" : "image",
+      allowed_formats: ["jpg", "jpeg", "png", "webp", "pdf"],
+      public_id: `${file.fieldname}-${originalName}-${uniqueSuffix}`
+    };
+  }
+});
+
+// ============================================================
 // MULTER UPLOAD: SLIDER IMAGES
 // ============================================================
 const uploadSlider = multer({
   storage: sliderStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = [
-      "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"
-    ];
-    
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only images (JPEG, PNG, GIF, WebP) are allowed for slider!"), false);
-    }
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"];
+    if (allowedTypes.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images (JPEG, PNG, GIF, WebP) are allowed for slider!"), false);
   }
 });
 
@@ -131,7 +144,7 @@ const uploadSlider = multer({
 // ============================================================
 const uploadRecent = multer({
   storage: recentStorage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
       "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
@@ -141,32 +154,24 @@ const uploadRecent = multer({
       "audio/mpeg", "audio/wav", "audio/ogg",
       "video/mp4", "video/avi", "video/mpeg", "video/quicktime"
     ];
-    
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only images, PDFs, Word, Audio and Video files are allowed!"), false);
-    }
+    if (allowedTypes.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images, PDFs, Word, Audio and Video files are allowed!"), false);
   }
 });
 
 // ============================================================
-// MULTER UPLOAD: GALLERY (Images & Videos) - NEW
+// MULTER UPLOAD: GALLERY
 // ============================================================
 const uploadGallery = multer({
   storage: galleryStorage,
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB for videos
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
       "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
       "video/mp4", "video/avi", "video/mpeg", "video/quicktime", "video/webm", "video/x-matroska"
     ];
-    
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only images and video files are allowed for gallery!"), false);
-    }
+    if (allowedTypes.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images and video files are allowed for gallery!"), false);
   }
 });
 
@@ -175,7 +180,7 @@ const uploadGallery = multer({
 // ============================================================
 const uploadDownload = multer({
   storage: downloadStorage,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
+  limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
       "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
@@ -183,12 +188,8 @@ const uploadDownload = multer({
       "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ];
-    
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only PDF, Word documents, and images are allowed!"), false);
-    }
+    if (allowedTypes.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only PDF, Word documents, and images are allowed!"), false);
   }
 });
 
@@ -197,14 +198,27 @@ const uploadDownload = multer({
 // ============================================================
 const uploadFaculty = multer({
   storage: facultyStorage,
-  limits: { fileSize: 3 * 1024 * 1024 }, // 3MB
+  limits: { fileSize: 3 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only images (JPEG, PNG, WebP) are allowed!"), false);
-    }
+    if (allowedTypes.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images (JPEG, PNG, WebP) are allowed!"), false);
+  }
+});
+
+// ============================================================
+// MULTER UPLOAD: STUDENT DOCUMENTS  🆕
+// ============================================================
+const uploadStudent = multer({
+  storage: studentStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      "image/jpeg", "image/jpg", "image/png", "image/webp",
+      "application/pdf"
+    ];
+    if (allowedTypes.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPG, PNG, WEBP, PDF allowed for student documents!"), false);
   }
 });
 
@@ -215,7 +229,8 @@ module.exports = {
   cloudinary,
   uploadSlider,
   uploadRecent,
-  uploadGallery,   // <-- ADD THIS
+  uploadGallery,
   uploadDownload,
-  uploadFaculty
+  uploadFaculty,
+  uploadStudent      // 🆕
 };
