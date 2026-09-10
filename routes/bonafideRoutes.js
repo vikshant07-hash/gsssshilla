@@ -32,157 +32,22 @@ const q = (sql, params = []) => db.query(sql, params);
 })();
 
 // ============================================================
-// AUTH HELPER
+// AUTH MIDDLEWARE — Only for admin actions
 // ============================================================
 const requireAdmin = (req, res, next) => {
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Bearer ")) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
+    return res.status(401).json({ success: false, message: "Unauthorized - admin token required" });
   }
-  // Simple pass-through; real JWT verify happens in your admin middleware
   req.adminToken = auth.substring(7);
   next();
 };
 
 // ============================================================
-// STATUS BULK — which students have bonafide enabled
+// 🟢 PUBLIC ROUTES (Student Dashboard can access)
 // ============================================================
-router.post("/status-bulk", requireAdmin, async (req, res) => {
-  try {
-    const { studentIds } = req.body;
-    if (!Array.isArray(studentIds) || !studentIds.length) {
-      return res.json({ success: true, map: {} });
-    }
-    const ph = studentIds.map(() => "?").join(",");
-    const rows = await q(
-      `SELECT student_id, is_enabled FROM bonafide_certificates WHERE student_id IN (${ph})`,
-      studentIds
-    );
-    const map = {};
-    studentIds.forEach(id => { map[id] = false; });
-    rows.forEach(r => { map[r.student_id] = !!r.is_enabled; });
-    res.json({ success: true, map });
-  } catch (err) {
-    console.error("❌ status-bulk error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
 
-// ============================================================
-// ENABLE single student
-// ============================================================
-router.post("/enable", requireAdmin, async (req, res) => {
-  try {
-    const { studentId } = req.body;
-    if (!studentId) return res.status(400).json({ success: false, message: "studentId required" });
-
-    // Verify student exists
-    const students = await q("SELECT id FROM Nstudent WHERE student_id = ?", [studentId]);
-    if (!students.length) {
-      return res.status(404).json({ success: false, message: "Student not found" });
-    }
-
-    await q(
-      `INSERT INTO bonafide_certificates (student_id, is_enabled, enabled_at)
-       VALUES (?, 1, NOW())
-       ON DUPLICATE KEY UPDATE is_enabled = 1, enabled_at = NOW()`,
-      [studentId]
-    );
-
-    res.json({ success: true, message: `Bonafide enabled for ${studentId} ✅` });
-  } catch (err) {
-    console.error("❌ enable error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// DISABLE single student
-// ============================================================
-router.post("/disable", requireAdmin, async (req, res) => {
-  try {
-    const { studentId } = req.body;
-    if (!studentId) return res.status(400).json({ success: false, message: "studentId required" });
-
-    await q(
-      `INSERT INTO bonafide_certificates (student_id, is_enabled)
-       VALUES (?, 0)
-       ON DUPLICATE KEY UPDATE is_enabled = 0`,
-      [studentId]
-    );
-
-    res.json({ success: true, message: `Bonafide disabled for ${studentId}` });
-  } catch (err) {
-    console.error("❌ disable error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ENABLE for whole class
-// ============================================================
-router.post("/enable-class", requireAdmin, async (req, res) => {
-  try {
-    const { class: cls } = req.body;
-    if (!cls) return res.status(400).json({ success: false, message: "class required" });
-
-    const students = await q("SELECT student_id FROM Nstudent WHERE class = ?", [cls]);
-    if (!students.length) {
-      return res.json({ success: true, message: "No students in this class", count: 0 });
-    }
-
-    let count = 0;
-    for (const s of students) {
-      await q(
-        `INSERT INTO bonafide_certificates (student_id, is_enabled, enabled_at)
-         VALUES (?, 1, NOW())
-         ON DUPLICATE KEY UPDATE is_enabled = 1, enabled_at = NOW()`,
-        [s.student_id]
-      );
-      count++;
-    }
-
-    res.json({ success: true, message: `Bonafide enabled for ${count} students in Class ${cls} ✅`, count });
-  } catch (err) {
-    console.error("❌ enable-class error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// DISABLE for whole class
-// ============================================================
-router.post("/disable-class", requireAdmin, async (req, res) => {
-  try {
-    const { class: cls } = req.body;
-    if (!cls) return res.status(400).json({ success: false, message: "class required" });
-
-    const students = await q("SELECT student_id FROM Nstudent WHERE class = ?", [cls]);
-    if (!students.length) {
-      return res.json({ success: true, message: "No students in this class", count: 0 });
-    }
-
-    let count = 0;
-    for (const s of students) {
-      await q(
-        `INSERT INTO bonafide_certificates (student_id, is_enabled)
-         VALUES (?, 0)
-         ON DUPLICATE KEY UPDATE is_enabled = 0`,
-        [s.student_id]
-      );
-      count++;
-    }
-
-    res.json({ success: true, message: `Bonafide disabled for ${count} students in Class ${cls}`, count });
-  } catch (err) {
-    console.error("❌ disable-class error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// STUDENT — check if own bonafide is enabled
-// ============================================================
+// Check if bonafide enabled for a student
 router.get("/my-status/:studentId", async (req, res) => {
   try {
     const { studentId } = req.params;
@@ -193,13 +58,12 @@ router.get("/my-status/:studentId", async (req, res) => {
     const enabled = rows.length > 0 && rows[0].is_enabled;
     res.json({ success: true, enabled, enabledAt: rows[0]?.enabled_at || null });
   } catch (err) {
+    console.error("❌ my-status error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ============================================================
-// GENERATE PDF — bonafide certificate
-// ============================================================
+// PUBLIC PDF — Student download (also protected by is_enabled check)
 const fetchImageBuffer = (url) => new Promise((resolve) => {
   if (!url) return resolve(null);
   const client = url.startsWith("https") ? https : http;
@@ -221,7 +85,10 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
       [studentId]
     );
     if (!certRows.length || !certRows[0].is_enabled) {
-      return res.status(403).json({ success: false, message: "Bonafide certificate not enabled for this student" });
+      return res.status(403).json({
+        success: false,
+        message: "Bonafide certificate not enabled for this student. Contact school office."
+      });
     }
 
     // Get student
@@ -238,7 +105,7 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
     doc.rect(0, 0, doc.page.width, 90).fill("#0d1b2a");
     doc.rect(0, 90, doc.page.width, 4).fill("#c9972b");
 
-    // Logo (skip if fails)
+    // Logo
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     if (logoBuf) {
       try { doc.image(logoBuf, 40, 15, { width: 60, height: 60 }); } catch (e) {}
@@ -270,7 +137,6 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
     }
 
     // STUDENT INFO
-    doc.fillColor("#0d1b2a").fontSize(12).font("Helvetica-Bold");
     const labelY = (offset) => 130 + offset;
     const left = 40;
     const midX = 260;
@@ -297,9 +163,9 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
     row("Mobile", s.mobile_number, midX, labelY(110));
     row("Email", s.email_id, midX, labelY(132));
 
-    // Address
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#c9972b").text("Address:", left, labelY(185));
-    doc.font("Helvetica").fontSize(11).fillColor("#1a2332").text(s.address || "—", left + 90, labelY(185), { width: 400 });
+    doc.font("Helvetica").fontSize(11).fillColor("#1a2332")
+      .text(s.address || "—", left + 90, labelY(185), { width: 400 });
 
     // CERTIFICATION TEXT
     const certY = labelY(230);
@@ -332,12 +198,142 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
 
     // FOOTER
     doc.fontSize(8).fillColor("#94a3b8")
-      .text(`Generated on ${new Date().toLocaleString("en-IN")} • This is a computer-generated certificate`, 40, doc.page.height - 40, { align: "center", width: doc.page.width - 80 });
+      .text(`Generated on ${new Date().toLocaleString("en-IN")} • This is a computer-generated certificate`,
+        40, doc.page.height - 40, { align: "center", width: doc.page.width - 80 });
 
     doc.end();
   } catch (err) {
     console.error("❌ Bonafide PDF error:", err);
     if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// 🔒 ADMIN ROUTES (JWT required)
+// ============================================================
+
+// Status bulk — which students have bonafide enabled
+router.post("/status-bulk", requireAdmin, async (req, res) => {
+  try {
+    const { studentIds } = req.body;
+    if (!Array.isArray(studentIds) || !studentIds.length) {
+      return res.json({ success: true, map: {} });
+    }
+    const ph = studentIds.map(() => "?").join(",");
+    const rows = await q(
+      `SELECT student_id, is_enabled FROM bonafide_certificates WHERE student_id IN (${ph})`,
+      studentIds
+    );
+    const map = {};
+    studentIds.forEach(id => { map[id] = false; });
+    rows.forEach(r => { map[r.student_id] = !!r.is_enabled; });
+    res.json({ success: true, map });
+  } catch (err) {
+    console.error("❌ status-bulk error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Enable single student
+router.post("/enable", requireAdmin, async (req, res) => {
+  try {
+    const { studentId } = req.body;
+    if (!studentId) return res.status(400).json({ success: false, message: "studentId required" });
+
+    const students = await q("SELECT id FROM Nstudent WHERE student_id = ?", [studentId]);
+    if (!students.length) {
+      return res.status(404).json({ success: false, message: "Student not found" });
+    }
+
+    await q(
+      `INSERT INTO bonafide_certificates (student_id, is_enabled, enabled_at)
+       VALUES (?, 1, NOW())
+       ON DUPLICATE KEY UPDATE is_enabled = 1, enabled_at = NOW()`,
+      [studentId]
+    );
+
+    res.json({ success: true, message: `Bonafide enabled for ${studentId} ✅` });
+  } catch (err) {
+    console.error("❌ enable error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Disable single student
+router.post("/disable", requireAdmin, async (req, res) => {
+  try {
+    const { studentId } = req.body;
+    if (!studentId) return res.status(400).json({ success: false, message: "studentId required" });
+
+    await q(
+      `INSERT INTO bonafide_certificates (student_id, is_enabled)
+       VALUES (?, 0)
+       ON DUPLICATE KEY UPDATE is_enabled = 0`,
+      [studentId]
+    );
+
+    res.json({ success: true, message: `Bonafide disabled for ${studentId}` });
+  } catch (err) {
+    console.error("❌ disable error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Enable for whole class
+router.post("/enable-class", requireAdmin, async (req, res) => {
+  try {
+    const { class: cls } = req.body;
+    if (!cls) return res.status(400).json({ success: false, message: "class required" });
+
+    const students = await q("SELECT student_id FROM Nstudent WHERE class = ?", [cls]);
+    if (!students.length) {
+      return res.json({ success: true, message: "No students in this class", count: 0 });
+    }
+
+    let count = 0;
+    for (const s of students) {
+      await q(
+        `INSERT INTO bonafide_certificates (student_id, is_enabled, enabled_at)
+         VALUES (?, 1, NOW())
+         ON DUPLICATE KEY UPDATE is_enabled = 1, enabled_at = NOW()`,
+        [s.student_id]
+      );
+      count++;
+    }
+
+    res.json({ success: true, message: `Bonafide enabled for ${count} students in Class ${cls} ✅`, count });
+  } catch (err) {
+    console.error("❌ enable-class error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Disable for whole class
+router.post("/disable-class", requireAdmin, async (req, res) => {
+  try {
+    const { class: cls } = req.body;
+    if (!cls) return res.status(400).json({ success: false, message: "class required" });
+
+    const students = await q("SELECT student_id FROM Nstudent WHERE class = ?", [cls]);
+    if (!students.length) {
+      return res.json({ success: true, message: "No students in this class", count: 0 });
+    }
+
+    let count = 0;
+    for (const s of students) {
+      await q(
+        `INSERT INTO bonafide_certificates (student_id, is_enabled)
+         VALUES (?, 0)
+         ON DUPLICATE KEY UPDATE is_enabled = 0`,
+        [s.student_id]
+      );
+      count++;
+    }
+
+    res.json({ success: true, message: `Bonafide disabled for ${count} students in Class ${cls}`, count });
+  } catch (err) {
+    console.error("❌ disable-class error:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
