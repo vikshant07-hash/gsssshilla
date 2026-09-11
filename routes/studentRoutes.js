@@ -44,7 +44,7 @@ const BODY_FIELDS = [
   "studentId", "admissionNumber", "admissionDate", "name", "fatherName",
   "motherName", "dob", "aadharNumber", "apaarId", "class", "rollNumber",
   "session", "mobileNumber", "emailId", "gender", "category", "address",
-  "status", "promotedFrom", "promotionDate"
+  "status", "promotedFrom", "promotionDate", "stream", "village", "postOffice", "tehsil", "district", "state", "pincode"
 ];
 
 const pickBody = (b) => {
