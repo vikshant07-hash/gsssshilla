@@ -8,17 +8,6 @@ const db = require("../config/db");
 const q = (sql, params = []) => db.query(sql, params);
 
 // ============================================================
-// AUTH
-// ============================================================
-const requireAdmin = (req, res, next) => {
-  const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Bearer ")) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-  }
-  next();
-};
-
-// ============================================================
 // HELPERS
 // ============================================================
 const fetchImageBuffer = (url) => new Promise((resolve) => {
@@ -46,36 +35,34 @@ const maskAadhar = (a) => {
 };
 
 // ============================================================
-// DRAW ONE ID CARD (front or back) at given position
+// DRAW ONE SIDE OF ID CARD
 // ============================================================
-const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, side) => {
+const drawCard = (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, qrBuf, side) => {
   const CARD_GOLD = "#c9972b";
   const CARD_DARK = "#0d1b2a";
   const CARD_TEXT = "#1a2332";
   const CARD_MUTED = "#5a6a7e";
 
-  // ---- OUTER BORDER (rounded look via two rects) ----
+  // ---- OUTER BORDER ----
   doc.rect(x, y, W, H).fillAndStroke("#ffffff", CARD_DARK).lineWidth(1).stroke();
   doc.rect(x + 2, y + 2, W - 4, H - 4).lineWidth(0.6).strokeColor(CARD_GOLD).stroke();
 
   // ==================== FRONT SIDE ====================
   if (side === "front") {
-    // Header band
+    // Header
     doc.rect(x + 2, y + 2, W - 4, 22).fill(CARD_DARK);
     doc.rect(x + 2, y + 22, W - 4, 2).fill(CARD_GOLD);
 
-    // Logo
     if (logoBuf) {
       try { doc.image(logoBuf, x + 5, y + 5, { width: 16, height: 16 }); } catch (e) {}
     }
 
-    // School name
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
       .text("GOVT. SR. SEC. SCHOOL SHILLA", x + 24, y + 5, { width: W - 30, align: "left" });
     doc.font("Helvetica").fontSize(4.5).fillColor(CARD_GOLD)
       .text("Shilla • Nerwa • Distt. Shimla • HP - 171210", x + 24, y + 14, { width: W - 30, align: "left" });
 
-    // Photo box (left)
+    // Photo
     const photoX = x + 6;
     const photoY = y + 30;
     const photoW = 32;
@@ -88,7 +75,7 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
         .text("PHOTO", photoX, photoY + 18, { width: photoW, align: "center" });
     }
 
-    // Student info (right of photo)
+    // Info
     const infoX = photoX + photoW + 4;
     const infoW = W - (infoX - x) - 6;
     let infoY = y + 30;
@@ -100,9 +87,6 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
       ["DOB", fmtDate(s.dob)]
     ];
 
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD);
-    doc.font("Helvetica").fontSize(5).fillColor(CARD_TEXT);
-
     for (const [label, val] of rowData) {
       doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
         .text(label, infoX, infoY, { width: infoW });
@@ -111,7 +95,7 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
       infoY += 10;
     }
 
-    // Student ID + class/roll (bottom band)
+    // Bottom band
     const bandY = y + H - 22;
     doc.rect(x + 2, bandY, W - 4, 20).fillAndStroke("#fef8ed", CARD_GOLD).lineWidth(0.5).stroke();
 
@@ -138,14 +122,12 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
 
   // ==================== BACK SIDE ====================
   if (side === "back") {
-    // Header band
     doc.rect(x + 2, y + 2, W - 4, 16).fill(CARD_DARK);
     doc.rect(x + 2, y + 16, W - 4, 2).fill(CARD_GOLD);
 
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
       .text("STUDENT INFORMATION", x + 4, y + 5, { width: W - 8, align: "center" });
 
-    // Aadhar + APAAR
     let infoY = y + 24;
 
     doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
@@ -160,7 +142,6 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
 
     infoY += 30;
 
-    // Mobile + Email
     doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
       .text("MOBILE", x + 5, infoY);
     doc.font("Helvetica").fontSize(5.5).fillColor(CARD_TEXT)
@@ -173,7 +154,6 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
 
     infoY += 30;
 
-    // Address
     const fullAddr = [
       s.village,
       s.post_office ? "PO " + s.post_office : "",
@@ -188,9 +168,7 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
     doc.font("Helvetica").fontSize(4.5).fillColor(CARD_TEXT)
       .text(fullAddr, x + 5, infoY + 5, { width: W - 10, height: 16, ellipsis: true });
 
-    infoY += 26;
-
-    // QR code + principal signature
+    // QR
     const qrSize = 26;
     const qrX = x + 6;
     const qrY = y + H - qrSize - 10;
@@ -219,7 +197,6 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
     doc.font("Helvetica").fontSize(3.5).fillColor(CARD_MUTED)
       .text("GSSS Shilla", sigX + 5, sigY + 27, { width: 40, align: "center" });
 
-    // Footer line
     doc.font("Helvetica-Oblique").fontSize(3).fillColor(CARD_MUTED)
       .text("If found, please return to school office", x + 2, y + H - 6, { width: W - 4, align: "center" });
   }
@@ -228,7 +205,7 @@ const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, sig
 // ============================================================
 // GENERATE SINGLE ID CARD PDF (Front + Back side by side)
 // ============================================================
-router.get("/generate/:studentId/pdf", requireAdmin, async (req, res) => {
+router.get("/generate/:studentId/pdf", async (req, res) => {
   try {
     const { studentId } = req.params;
 
@@ -236,18 +213,14 @@ router.get("/generate/:studentId/pdf", requireAdmin, async (req, res) => {
     if (!rows.length) return res.status(404).json({ success: false, message: "Student not found" });
     const s = rows[0];
 
-    // Fetch images
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
     const photoBuf = await fetchImageBuffer(s.student_photo_url);
-    const signatureBuf = await fetchImageBuffer(s.signature_url);
 
-    // QR code
     const qrData = `ID:${s.student_id}|Class:${s.class}|Roll:${s.roll_number}|Name:${s.name}`;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData)}`;
     const qrBuf = await fetchImageBuffer(qrUrl);
 
-    // A4 landscape PDF
     const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 0 });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="idcard-${studentId}.pdf"`);
@@ -256,11 +229,9 @@ router.get("/generate/:studentId/pdf", requireAdmin, async (req, res) => {
     const PW = doc.page.width;
     const PH = doc.page.height;
 
-    // Title
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
-      .text("STUDENT IDENTITY CARD", 0, 20, { width: PW, align: "center" });
+    doc.font("Helvetica-Bold").fontSize(12).fillColor("#0d1b2a")
+      .text("STUDENT IDENTITY CARD", 0, 25, { width: PW, align: "center" });
 
-    // Card dimensions (credit card size scaled up: 1.6x for readability)
     const cardW = 220;
     const cardH = 138;
     const gap = 30;
@@ -268,20 +239,18 @@ router.get("/generate/:studentId/pdf", requireAdmin, async (req, res) => {
     const startX = (PW - totalW) / 2;
     const startY = (PH - cardH) / 2;
 
-    // FRONT (left) + BACK (right)
-    await drawCard(doc, startX, startY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, "front");
-    await drawCard(doc, startX + cardW + gap, startY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, "back");
+    drawCard(doc, startX, startY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, qrBuf, "front");
+    drawCard(doc, startX + cardW + gap, startY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, qrBuf, "back");
 
-    // Labels below cards
-    doc.font("Helvetica-Bold").fontSize(7).fillColor("#5a6a7e")
-      .text("FRONT SIDE", startX, startY + cardH + 10, { width: cardW, align: "center" });
-    doc.text("BACK SIDE", startX + cardW + gap, startY + cardH + 10, { width: cardW, align: "center" });
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#5a6a7e")
+      .text("FRONT SIDE", startX, startY + cardH + 12, { width: cardW, align: "center" });
+    doc.text("BACK SIDE", startX + cardW + gap, startY + cardH + 12, { width: cardW, align: "center" });
 
-    // Instructions
-    doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-      .text("• Print on 300 GSM cardstock or PVC card", 0, PH - 50, { width: PW, align: "center" });
-    doc.text("• Laminate for durability", 0, PH - 40, { width: PW, align: "center" });
-    doc.text(`• Generated on ${new Date().toLocaleDateString("en-IN")}`, 0, PH - 30, { width: PW, align: "center" });
+    doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+      .text("• Print on 300 GSM cardstock or PVC card • Laminate for durability",
+        0, PH - 40, { width: PW, align: "center" });
+    doc.text(`Generated on ${new Date().toLocaleDateString("en-IN")}`,
+        0, PH - 28, { width: PW, align: "center" });
 
     doc.end();
   } catch (err) {
@@ -291,9 +260,9 @@ router.get("/generate/:studentId/pdf", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// GENERATE BULK ID CARDS PDF (Whole class — multiple pages)
+// GENERATE BULK ID CARDS PDF — Max 5 students per page (5 rows × 2 cols)
 // ============================================================
-router.get("/generate-class/:class/pdf", requireAdmin, async (req, res) => {
+router.get("/generate-class/:class/pdf", async (req, res) => {
   try {
     const { class: cls } = req.params;
     const { session } = req.query;
@@ -311,68 +280,67 @@ router.get("/generate-class/:class/pdf", requireAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: "No students found in this class" });
     }
 
-    // Fetch shared assets (logo + principal)
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
 
-    // A4 landscape — 2 students per page (2 cards each side by side)
+    // A4 Landscape — 5 rows per page
     const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 0 });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="idcards-class${cls}.pdf"`);
     doc.pipe(res);
 
-    const PW = doc.page.width;
-    const PH = doc.page.height;
+    const PW = doc.page.width;   // ~841
+    const PH = doc.page.height;  // ~595
 
-    const cardW = 220;
-    const cardH = 138;
-    const gap = 20;
-    const totalW = cardW * 2 + gap;
-    const startX = (PW - totalW) / 2;
+    // Card dimensions (compact so 5 rows fit)
+    const cardW = 78;
+    const cardH = 98;
+    const colGap = 8;   // gap between front & back of same student
+    const rowGap = 4;   // gap between students
 
-    // Two rows per page
-    const rowGap = 30;
-    const totalH = cardH * 2 + rowGap;
+    // Total width of one student (front + gap + back)
+    const studentW = cardW * 2 + colGap;
+
+    // Total height needed: 5 students × (cardH + rowGap)
+    const totalH = 5 * cardH + 4 * rowGap;
+
+    // Center everything
+    const startX = (PW - studentW) / 2;
     const startY = (PH - totalH) / 2 + 5;
 
-    let slot = 0; // 0,1 per page (top row), 2,3 (bottom row)
+    let slot = 0;
     let pageCount = 1;
 
     for (let i = 0; i < students.length; i++) {
       const s = students[i];
 
-      // Fetch per-student assets
       const photoBuf = await fetchImageBuffer(s.student_photo_url);
-      const signatureBuf = await fetchImageBuffer(s.signature_url);
       const qrData = `ID:${s.student_id}|Class:${s.class}|Roll:${s.roll_number}|Name:${s.name}`;
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData)}`;
       const qrBuf = await fetchImageBuffer(qrUrl);
 
-      // Position
-      const isTopRow = slot < 2;
-      const col = slot % 2;
-      const cardX = startX + col * (cardW + gap);
-      const cardY = startY + (isTopRow ? 0 : cardH + rowGap);
+      const rowIdx = slot; // 0..4
+      const cardX = startX;
+      const cardY = startY + rowIdx * (cardH + rowGap);
 
-      await drawCard(doc, cardX, cardY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, "front");
-      await drawCard(doc, cardX + cardW + gap, cardY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, "back");
+      // Draw FRONT
+      drawCard(doc, cardX, cardY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, qrBuf, "front");
+      // Draw BACK
+      drawCard(doc, cardX + cardW + colGap, cardY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, qrBuf, "back");
 
-      slot += 1;
+      slot++;
 
-      // Every student occupies a full row (front + back side by side)
-      // So 2 students per page (top + bottom row)
-      // When slot reaches 2, we've filled the page
-      if (slot === 2 && i < students.length - 1) {
-        // Save current drawing state and add page
+      // Full page when 5 slots filled
+      if (slot === 5 && i < students.length - 1) {
         doc.addPage({ size: "A4", layout: "landscape", margin: 0 });
         slot = 0;
         pageCount++;
       }
     }
 
-    // Footer
     doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-      .text(`Class ${cls} — ${students.length} students — Total ${pageCount} page(s)`, 0, PH - 15, { width: PW, align: "center" });
+      .text(`Class ${cls} — ${students.length} students — Page 1 of ${pageCount}`,
+        0, PH - 15, { width: PW, align: "center" });
 
     doc.end();
   } catch (err) {
