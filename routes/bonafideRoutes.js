@@ -3,6 +3,7 @@ const router = express.Router();
 const PDFDocument = require("pdfkit");
 const https = require("https");
 const http = require("http");
+const crypto = require("crypto");
 
 const db = require("../config/db");
 const q = (sql, params = []) => db.query(sql, params);
@@ -17,6 +18,9 @@ const q = (sql, params = []) => db.query(sql, params);
         id INT AUTO_INCREMENT PRIMARY KEY,
         student_id VARCHAR(40) NOT NULL UNIQUE,
         is_enabled TINYINT(1) DEFAULT 0,
+        purpose VARCHAR(200) DEFAULT 'General Purpose',
+        verification_code VARCHAR(40) DEFAULT NULL,
+        issued_date DATE DEFAULT NULL,
         enabled_at TIMESTAMP NULL,
         enabled_by VARCHAR(100) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -25,6 +29,20 @@ const q = (sql, params = []) => db.query(sql, params);
         INDEX idx_enabled (is_enabled)
       )
     `);
+
+    // Add columns if not exist (safe migration)
+    const safeAdd = async (col, def) => {
+      try {
+        await q(`ALTER TABLE bonafide_certificates ADD COLUMN ${col} ${def}`);
+        console.log(`✅ Added column ${col}`);
+      } catch (e) {
+        // already exists
+      }
+    };
+    await safeAdd("purpose", "VARCHAR(200) DEFAULT 'General Purpose'");
+    await safeAdd("verification_code", "VARCHAR(40) DEFAULT NULL");
+    await safeAdd("issued_date", "DATE DEFAULT NULL");
+
     console.log("✅ bonafide_certificates table ready");
   } catch (err) {
     console.error("❌ bonafide table create error:", err.message);
@@ -32,7 +50,7 @@ const q = (sql, params = []) => db.query(sql, params);
 })();
 
 // ============================================================
-// AUTH MIDDLEWARE — Only for admin actions
+// AUTH
 // ============================================================
 const requireAdmin = (req, res, next) => {
   const auth = req.headers.authorization || "";
@@ -44,26 +62,8 @@ const requireAdmin = (req, res, next) => {
 };
 
 // ============================================================
-// 🟢 PUBLIC ROUTES (Student Dashboard can access)
+// HELPERS
 // ============================================================
-
-// Check if bonafide enabled for a student
-router.get("/my-status/:studentId", async (req, res) => {
-  try {
-    const { studentId } = req.params;
-    const rows = await q(
-      "SELECT is_enabled, enabled_at FROM bonafide_certificates WHERE student_id = ?",
-      [studentId]
-    );
-    const enabled = rows.length > 0 && rows[0].is_enabled;
-    res.json({ success: true, enabled, enabledAt: rows[0]?.enabled_at || null });
-  } catch (err) {
-    console.error("❌ my-status error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// PUBLIC PDF — Student download (also protected by is_enabled check)
 const fetchImageBuffer = (url) => new Promise((resolve) => {
   if (!url) return resolve(null);
   const client = url.startsWith("https") ? https : http;
@@ -75,13 +75,59 @@ const fetchImageBuffer = (url) => new Promise((resolve) => {
   }).on("error", () => resolve(null));
 });
 
+const fmtDate = (d) => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  return isNaN(dt) ? d : dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+};
+
+const fmtDateLong = (d) => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  return isNaN(dt) ? d : dt.toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+};
+
+const generateCode = (studentId) => {
+  const raw = `${studentId}-${Date.now()}-${Math.random()}`;
+  const hash = crypto.createHash("sha256").update(raw).digest("hex");
+  return `GSSS-${hash.substring(0, 8).toUpperCase()}`;
+};
+
+// ============================================================
+// 🟢 PUBLIC — my-status
+// ============================================================
+router.get("/my-status/:studentId", async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const rows = await q(
+      "SELECT is_enabled, enabled_at, purpose, verification_code, issued_date FROM bonafide_certificates WHERE student_id = ?",
+      [studentId]
+    );
+    const enabled = rows.length > 0 && rows[0].is_enabled;
+    res.json({
+      success: true,
+      enabled,
+      enabledAt: rows[0]?.enabled_at || null,
+      purpose: rows[0]?.purpose || null,
+      verificationCode: rows[0]?.verification_code || null,
+      issuedDate: rows[0]?.issued_date || null
+    });
+  } catch (err) {
+    console.error("❌ my-status error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// 🟢 PUBLIC — Professional Bonafide Certificate PDF
+// ============================================================
 router.get("/certificate/:studentId/pdf", async (req, res) => {
   try {
     const { studentId } = req.params;
 
     // Check enabled
     const certRows = await q(
-      "SELECT is_enabled FROM bonafide_certificates WHERE student_id = ?",
+      "SELECT * FROM bonafide_certificates WHERE student_id = ?",
       [studentId]
     );
     if (!certRows.length || !certRows[0].is_enabled) {
@@ -90,116 +136,205 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
         message: "Bonafide certificate not enabled for this student. Contact school office."
       });
     }
+    const cert = certRows[0];
 
     // Get student
     const rows = await q("SELECT * FROM Nstudent WHERE student_id = ?", [studentId]);
     if (!rows.length) return res.status(404).json({ success: false, message: "Student not found" });
     const s = rows[0];
 
-    const doc = new PDFDocument({ size: "A4", margin: 40 });
+    // Build full address
+    const fullAddress = [
+      s.village,
+      s.post_office ? "PO " + s.post_office : "",
+      s.tehsil ? "Teh. " + s.tehsil : "",
+      s.district ? "Distt. " + s.district : "",
+      s.state,
+      s.pincode
+    ].filter(Boolean).join(", ") || s.address || "—";
+
+    const isHigher = ["11","12"].includes(String(s.class));
+    const streamDisplay = isHigher ? (s.stream || "—") : "Non-Specialized";
+
+    const doc = new PDFDocument({ size: "A4", margin: 0 });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="bonafide-${studentId}.pdf"`);
     doc.pipe(res);
 
-    // HEADER
-    doc.rect(0, 0, doc.page.width, 90).fill("#0d1b2a");
-    doc.rect(0, 90, doc.page.width, 4).fill("#c9972b");
+    const PW = doc.page.width;
+    const PH = doc.page.height;
+    const M = 40;
 
-    // Logo
+    // ==================== OUTER GOLD BORDER ====================
+    doc.rect(20, 20, PW - 40, PH - 40).lineWidth(3).strokeColor("#c9972b").stroke();
+    doc.rect(28, 28, PW - 56, PH - 56).lineWidth(1).strokeColor("#c9972b").stroke();
+
+    // ==================== WATERMARK ====================
+    doc.save();
+    doc.opacity(0.04);
+    doc.fontSize(90).font("Helvetica-Bold").fillColor("#0d1b2a");
+    doc.rotate(-45, { origin: [PW / 2, PH / 2] });
+    doc.text("GSSS SHILLA", PW / 2 - 350, PH / 2 - 50, { width: 700, align: "center" });
+    doc.restore();
+
+    // ==================== HEADER ====================
+    const headerY = 45;
+
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     if (logoBuf) {
-      try { doc.image(logoBuf, 40, 15, { width: 60, height: 60 }); } catch (e) {}
+      try { doc.image(logoBuf, M + 10, headerY, { width: 65, height: 65 }); } catch (e) {}
     }
 
-    doc.fillColor("#ffffff").fontSize(20).font("Helvetica-Bold")
-      .text("Govt. Sr. Sec. School Shilla", 110, 22, { align: "center", width: doc.page.width - 220 });
-    doc.fontSize(10).font("Helvetica")
-      .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", 110, 50, { align: "center", width: doc.page.width - 220 });
-    doc.fontSize(9).fillColor("#c9972b").font("Helvetica-Bold")
-      .text("BONAFIDE CERTIFICATE", 110, 68, { align: "center", width: doc.page.width - 220, characterSpacing: 2 });
+    doc.font("Helvetica-Bold").fontSize(22).fillColor("#0d1b2a")
+      .text("GOVT. SR. SEC. SCHOOL SHILLA", M + 85, headerY + 5, { width: PW - M * 2 - 85, align: "center" });
+    doc.font("Helvetica").fontSize(10).fillColor("#5a6a7e")
+      .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", M + 85, headerY + 34, { width: PW - M * 2 - 85, align: "center" });
+    doc.font("Helvetica").fontSize(9).fillColor("#94a3b8")
+      .text("Affiliated to H.P. Board of School Education, Dharamshala", M + 85, headerY + 49, { width: PW - M * 2 - 85, align: "center" });
 
-    doc.fillColor("#000000");
-    doc.y = 120;
+    // Divider
+    doc.moveTo(M, 125).lineTo(PW - M, 125).lineWidth(2).strokeColor("#c9972b").stroke();
+    doc.moveTo(M, 129).lineTo(PW - M, 129).lineWidth(0.5).strokeColor("#c9972b").stroke();
 
-    // PHOTO
+    // ==================== TITLE ====================
+    const titleBoxWidth = 260;
+    const titleBoxX = (PW - titleBoxWidth) / 2;
+    doc.rect(titleBoxX, 145, titleBoxWidth, 32).fillAndStroke("#0d1b2a", "#c9972b");
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(15)
+      .text("BONAFIDE CERTIFICATE", titleBoxX, 154, { width: titleBoxWidth, align: "center", characterSpacing: 2 });
+
+    // ==================== PHOTO ====================
+    const photoX = PW - M - 105;
+    const photoY = 195;
+    const photoW = 90;
+    const photoH = 110;
+
     const photoBuf = await fetchImageBuffer(s.student_photo_url);
-    const px = doc.page.width - 140;
-    const py = 120;
-
     if (photoBuf) {
       try {
-        doc.rect(px - 4, py - 4, 88, 108).strokeColor("#c9972b").lineWidth(2).stroke();
-        doc.image(photoBuf, px, py, { width: 80, height: 100 });
+        doc.rect(photoX - 3, photoY - 3, photoW + 6, photoH + 6).fillAndStroke("#ffffff", "#c9972b");
+        doc.image(photoBuf, photoX, photoY, { width: photoW, height: photoH });
       } catch (e) {}
     } else {
-      doc.rect(px, py, 80, 100).strokeColor("#c9972b").lineWidth(2).stroke();
-      doc.fontSize(9).fillColor("#94a3b8").text("Photo", px + 25, py + 45);
+      doc.rect(photoX, photoY, photoW, photoH).fillAndStroke("#f8fafc", "#c9972b");
+      doc.fontSize(10).fillColor("#94a3b8").text("No Photo", photoX + 15, photoY + 50);
+    }
+    doc.fontSize(8).fillColor("#475569").font("Helvetica-Bold")
+      .text("STUDENT PHOTO", photoX, photoY + photoH + 6, { width: photoW, align: "center" });
+
+    // ==================== REF + DATE ====================
+    const refNo = cert.verification_code || `GSSS-${studentId.substring(0, 8)}`;
+    const issueDate = cert.issued_date ? fmtDateLong(cert.issued_date) : fmtDateLong(new Date());
+
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a");
+    doc.text(`Ref No: `, M, 195, { continued: true });
+    doc.font("Helvetica").fillColor("#c9972b").text(refNo);
+
+    doc.font("Helvetica-Bold").fillColor("#0d1b2a")
+      .text(`Issue Date: `, M, 213, { continued: true });
+    doc.font("Helvetica").fillColor("#c9972b").text(issueDate);
+
+    // ==================== DETAILS TABLE ====================
+    let tblY = 245;
+    const labelW = 110;
+    const valueW = 190;
+    const rowH = 22;
+    const rowGap = 6;
+
+    const rowsData = [
+      ["Student ID", s.student_id, "Roll Number", s.roll_number || "—"],
+      ["Full Name", s.name, "Admission Number", s.admission_number || "—"],
+      ["Father's Name", s.father_name || "—", "Mother's Name", s.mother_name || "—"],
+      ["Date of Birth", fmtDate(s.dob), "Gender", s.gender || "—"],
+      ["Category", s.category || "—", "Aadhar Number", s.aadhar_number || "—"],
+      ["APAAR ID", s.apaar_id || "—", "Mobile", s.mobile_number || "—"],
+      ["Class", s.class, "Stream", streamDisplay],
+      ["Session", s.session || "—", "Admission Date", fmtDate(s.admission_date)]
+    ];
+
+    const leftX = M + 10;
+    const rightX = M + 10 + labelW + valueW + 15;
+
+    for (let i = 0; i < rowsData.length; i++) {
+      const [l1, v1, l2, v2] = rowsData[i];
+      const y = tblY + i * (rowH + rowGap);
+
+      doc.rect(leftX, y, labelW, rowH).fillAndStroke("#fef8ed", "#c9972b");
+      doc.rect(leftX + labelW, y, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
+      doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0d1b2a")
+        .text(l1.toUpperCase(), leftX + 6, y + 7, { width: labelW - 12 });
+      doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
+        .text(String(v1 || "—"), leftX + labelW + 6, y + 6, { width: valueW - 12 });
+
+      doc.rect(rightX, y, labelW, rowH).fillAndStroke("#fef8ed", "#c9972b");
+      doc.rect(rightX + labelW, y, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
+      doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0d1b2a")
+        .text(l2.toUpperCase(), rightX + 6, y + 7, { width: labelW - 12 });
+      doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
+        .text(String(v2 || "—"), rightX + labelW + 6, y + 6, { width: valueW - 12 });
     }
 
-    // STUDENT INFO
-    const labelY = (offset) => 130 + offset;
-    const left = 40;
-    const midX = 260;
+    // ==================== ADDRESS ====================
+    const addrY = tblY + rowsData.length * (rowH + rowGap) + 8;
+    doc.rect(leftX, addrY, PW - M * 2 - 20, 44).fillAndStroke("#f8fafc", "#c9972b");
 
-    const row = (label, value, x, y) => {
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#c9972b").text(`${label}:`, x, y);
-      doc.font("Helvetica").fontSize(11).fillColor("#1a2332").text(String(value ?? "—"), x + 90, y);
-    };
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0d1b2a")
+      .text("RESIDENTIAL ADDRESS", leftX + 8, addrY + 6);
+    doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
+      .text(fullAddress, leftX + 8, addrY + 20, { width: PW - M * 2 - 40, height: 20, ellipsis: true });
 
-    row("Student ID", s.student_id, left, labelY(0));
-    row("Admission No", s.admission_number, left, labelY(22));
-    row("Full Name", s.name, left, labelY(44));
-    row("Father's Name", s.father_name, left, labelY(66));
-    row("Mother's Name", s.mother_name, left, labelY(88));
-    row("Date of Birth", s.dob, left, labelY(110));
-    row("Category", s.category, left, labelY(132));
-    row("Aadhar Number", s.aadhar_number, left, labelY(154));
+    // ==================== CERTIFICATION ====================
+    const textY = addrY + 60;
+    doc.rect(M + 10, textY, PW - M * 2 - 20, 130).fillAndStroke("#fffbeb", "#c9972b");
 
-    row("Class", s.class, midX, labelY(0));
-    row("Roll Number", s.roll_number, midX, labelY(22));
-    row("Session", s.session, midX, labelY(44));
-    row("APAAR ID", s.apaar_id, midX, labelY(66));
-    row("Gender", s.gender, midX, labelY(88));
-    row("Mobile", s.mobile_number, midX, labelY(110));
-    row("Email", s.email_id, midX, labelY(132));
+    doc.font("Helvetica-Bold").fontSize(12).fillColor("#0d1b2a")
+      .text("TO WHOMSOEVER IT MAY CONCERN", M + 10, textY + 12, { width: PW - M * 2 - 20, align: "center", characterSpacing: 1 });
 
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#c9972b").text("Address:", left, labelY(185));
-    doc.font("Helvetica").fontSize(11).fillColor("#1a2332")
-      .text(s.address || "—", left + 90, labelY(185), { width: 400 });
+    doc.moveTo(M + 80, textY + 32).lineTo(PW - M - 80, textY + 32).lineWidth(0.5).strokeColor("#c9972b").stroke();
 
-    // CERTIFICATION TEXT
-    const certY = labelY(230);
-    doc.rect(40, certY, doc.page.width - 80, 100).fillAndStroke("#fef8ed", "#c9972b");
-
-    doc.fillColor("#0d1b2a").fontSize(11).font("Helvetica-Bold")
-      .text("TO WHOMSOEVER IT MAY CONCERN", 40, certY + 12, { align: "center", width: doc.page.width - 80 });
+    const certText = `This is to certify that ${s.name}, son/daughter of Shri ${s.father_name || "—"} and Smt. ${s.mother_name || "—"}, is a bonafide student of Govt. Sr. Sec. School Shilla. He/She is currently studying in Class ${s.class}${isHigher ? " (" + streamDisplay + ")" : ""} with Roll Number ${s.roll_number || "—"} during the academic session ${s.session || "—"}. His/Her date of birth as per school records is ${fmtDate(s.dob)}. This certificate is being issued on the request of the student for ${cert.purpose || "General Purpose"}.`;
 
     doc.font("Helvetica").fontSize(11).fillColor("#1a2332")
-      .text(
-        `This is to certify that ${s.name}, S/o Shri. ${s.father_name} & Smt. ${s.mother_name}, ` +
-        `bearing Student ID ${s.student_id}, is a bonafide student of Govt. Sr. Sec. School Shilla, ` +
-        `studying in Class ${s.class} (Roll No: ${s.roll_number || "—"}) during the academic session ${s.session}. ` +
-        `His/Her date of birth as per school records is ${s.dob}.`,
-        60, certY + 35,
-        { width: doc.page.width - 120, align: "justify", lineGap: 4 }
-      );
+      .text(certText, M + 30, textY + 48, { width: PW - M * 2 - 60, align: "justify", lineGap: 4 });
 
-    // SIGNATURE
-    const sigY = certY + 130;
-    doc.font("Helvetica").fontSize(11).fillColor("#1a2332")
-      .text("Date: " + new Date().toLocaleDateString("en-IN"), 40, sigY + 60);
-    doc.text("Place: Shilla", 40, sigY + 80);
+    // ==================== SIGNATURE ====================
+    const sigY = PH - 165;
 
-    doc.moveTo(doc.page.width - 220, sigY + 80).lineTo(doc.page.width - 60, sigY + 80).stroke("#1a2332");
+    // School seal
+    doc.circle(M + 70, sigY + 20, 42).lineWidth(2).strokeColor("#c9972b").stroke();
+    doc.circle(M + 70, sigY + 20, 36).lineWidth(0.5).strokeColor("#c9972b").stroke();
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
+      .text("SCHOOL SEAL", M + 30, sigY + 16, { width: 80, align: "center" });
+
+    // Principal signature
+    const sigX = PW - M - 210;
+
+    const principalSigBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
+    if (principalSigBuf) {
+      try { doc.image(principalSigBuf, sigX + 40, sigY - 25, { width: 120, height: 55 }); } catch (e) {}
+    }
+
+    doc.moveTo(sigX, sigY + 35).lineTo(sigX + 180, sigY + 35).lineWidth(1.5).strokeColor("#0d1b2a").stroke();
     doc.font("Helvetica-Bold").fontSize(11).fillColor("#0d1b2a")
-      .text("Principal", doc.page.width - 220, sigY + 85, { width: 160, align: "center" });
+      .text("Principal", sigX, sigY + 42, { width: 180, align: "center" });
     doc.font("Helvetica").fontSize(9).fillColor("#5a6a7e")
-      .text("Govt. Sr. Sec. School Shilla", doc.page.width - 220, sigY + 100, { width: 160, align: "center" });
+      .text("Govt. Sr. Sec. School Shilla", sigX, sigY + 58, { width: 180, align: "center" });
 
-    // FOOTER
-    doc.fontSize(8).fillColor("#94a3b8")
-      .text(`Generated on ${new Date().toLocaleString("en-IN")} • This is a computer-generated certificate`,
-        40, doc.page.height - 40, { align: "center", width: doc.page.width - 80 });
+    // ==================== FOOTER ====================
+    const footerY = PH - 75;
+
+    doc.moveTo(M + 10, footerY).lineTo(PW - M - 10, footerY).lineWidth(0.5).strokeColor("#c9972b").stroke();
+
+    doc.font("Helvetica").fontSize(8).fillColor("#64748b")
+      .text(`Verification Code: `, M + 15, footerY + 8, { continued: true });
+    doc.font("Helvetica-Bold").fillColor("#c9972b").text(refNo);
+
+    doc.font("Helvetica").fillColor("#64748b")
+      .text(`Issued on: `, M + 15, footerY + 22, { continued: true });
+    doc.font("Helvetica-Bold").fillColor("#0d1b2a").text(issueDate);
+
+    doc.font("Helvetica-Oblique").fontSize(7).fillColor("#94a3b8")
+      .text("This is a computer-generated certificate issued by GSSS Shilla.", M + 15, footerY + 38, { width: PW - M * 2 - 30, align: "center" });
 
     doc.end();
   } catch (err) {
@@ -209,13 +344,11 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
 });
 
 // ============================================================
-// 🔒 ADMIN ROUTES (JWT required)
+// 🔒 ADMIN — status-bulk
 // ============================================================
-
-// Status bulk — which students have bonafide enabled
 router.post("/status-bulk", requireAdmin, async (req, res) => {
   try {
-    const { studentIds } = req.body;
+    const { studentIds } = req.body || {};
     if (!Array.isArray(studentIds) || !studentIds.length) {
       return res.json({ success: true, map: {} });
     }
@@ -234,32 +367,45 @@ router.post("/status-bulk", requireAdmin, async (req, res) => {
   }
 });
 
-// Enable single student
+// ============================================================
+// 🔒 ADMIN — enable single
+// ============================================================
 router.post("/enable", requireAdmin, async (req, res) => {
   try {
-    const { studentId } = req.body;
+    const { studentId, purpose } = req.body;
     if (!studentId) return res.status(400).json({ success: false, message: "studentId required" });
 
-    const students = await q("SELECT id FROM Nstudent WHERE student_id = ?", [studentId]);
+    const students = await q("SELECT id, name FROM Nstudent WHERE student_id = ?", [studentId]);
     if (!students.length) {
       return res.status(404).json({ success: false, message: "Student not found" });
     }
 
+    const code = generateCode(studentId);
+    const purposeVal = (purpose && purpose.trim()) || "General Purpose";
+
     await q(
-      `INSERT INTO bonafide_certificates (student_id, is_enabled, enabled_at)
-       VALUES (?, 1, NOW())
-       ON DUPLICATE KEY UPDATE is_enabled = 1, enabled_at = NOW()`,
-      [studentId]
+      `INSERT INTO bonafide_certificates 
+        (student_id, is_enabled, purpose, verification_code, issued_date, enabled_at)
+       VALUES (?, 1, ?, ?, CURDATE(), NOW())
+       ON DUPLICATE KEY UPDATE 
+        is_enabled = 1,
+        purpose = VALUES(purpose),
+        verification_code = IFNULL(verification_code, VALUES(verification_code)),
+        issued_date = IFNULL(issued_date, CURDATE()),
+        enabled_at = NOW()`,
+      [studentId, purposeVal, code]
     );
 
-    res.json({ success: true, message: `Bonafide enabled for ${studentId} ✅` });
+    res.json({ success: true, message: `Bonafide enabled for ${students[0].name} ✅` });
   } catch (err) {
     console.error("❌ enable error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Disable single student
+// ============================================================
+// 🔒 ADMIN — disable single
+// ============================================================
 router.post("/disable", requireAdmin, async (req, res) => {
   try {
     const { studentId } = req.body;
@@ -272,14 +418,16 @@ router.post("/disable", requireAdmin, async (req, res) => {
       [studentId]
     );
 
-    res.json({ success: true, message: `Bonafide disabled for ${studentId}` });
+    res.json({ success: true, message: `Bonafide disabled ✅` });
   } catch (err) {
     console.error("❌ disable error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Enable for whole class
+// ============================================================
+// 🔒 ADMIN — enable class
+// ============================================================
 router.post("/enable-class", requireAdmin, async (req, res) => {
   try {
     const { class: cls } = req.body;
@@ -292,11 +440,17 @@ router.post("/enable-class", requireAdmin, async (req, res) => {
 
     let count = 0;
     for (const s of students) {
+      const code = generateCode(s.student_id);
       await q(
-        `INSERT INTO bonafide_certificates (student_id, is_enabled, enabled_at)
-         VALUES (?, 1, NOW())
-         ON DUPLICATE KEY UPDATE is_enabled = 1, enabled_at = NOW()`,
-        [s.student_id]
+        `INSERT INTO bonafide_certificates 
+          (student_id, is_enabled, purpose, verification_code, issued_date, enabled_at)
+         VALUES (?, 1, 'General Purpose', ?, CURDATE(), NOW())
+         ON DUPLICATE KEY UPDATE 
+          is_enabled = 1,
+          verification_code = IFNULL(verification_code, VALUES(verification_code)),
+          issued_date = IFNULL(issued_date, CURDATE()),
+          enabled_at = NOW()`,
+        [s.student_id, code]
       );
       count++;
     }
@@ -308,7 +462,9 @@ router.post("/enable-class", requireAdmin, async (req, res) => {
   }
 });
 
-// Disable for whole class
+// ============================================================
+// 🔒 ADMIN — disable class
+// ============================================================
 router.post("/disable-class", requireAdmin, async (req, res) => {
   try {
     const { class: cls } = req.body;
