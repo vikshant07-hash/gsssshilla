@@ -107,6 +107,8 @@ const resultRoutes = require('./routes/resultRoutes');
     const bonafideRoutes = require("./routes/bonafideRoutes");
 const studentRoutes = require("./routes/studentRoutes");
 const admitCardRoutes = require("./routes/admitCardRoutes");
+const idCardRoutes = require("./routes/idCardRoutes");
+
 
 
 // Bonafide routes
@@ -114,7 +116,7 @@ const admitCardRoutes = require("./routes/admitCardRoutes");
 
 // Mount the routes
 app.use('/api/admin/results', resultRoutes); // Admin routes
-
+app.use("/api/idcard", idCardRoutes);
 app.use("/api/admit-card", admitCardRoutes);
 app.use("/api/bonafide", bonafideRoutes);
 app.use('/api/results', resultRoutes); // Public routes
