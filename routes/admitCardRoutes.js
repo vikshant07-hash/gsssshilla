@@ -3,9 +3,6 @@ const router = express.Router();
 const multer = require("multer");
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const cloudinary = require("cloudinary").v2;
-const PDFDocument = require("pdfkit");
-const https = require("https");
-const http = require("http");
 
 const db = require("../config/db");
 const q = (sql, params = []) => db.query(sql, params);
@@ -17,7 +14,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// ==================== MULTER (admit card PDF upload) ====================
+// ==================== MULTER ====================
 const admitStorage = new CloudinaryStorage({
   cloudinary,
   params: (req, file) => {
@@ -44,7 +41,7 @@ const uploadAdmit = multer({
 const requireAdmin = (req, res, next) => {
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Bearer ")) {
-    return res.status(401).json({ success: false, message: "Unauthorized - admin token required" });
+    return res.status(401).json({ success: false, message: "Unauthorized" });
   }
   next();
 };
@@ -68,11 +65,9 @@ const requireAdmin = (req, res, next) => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
         KEY idx_class (class),
-        KEY idx_session (exam_session),
-        KEY idx_published (is_published)
+        KEY idx_session (exam_session)
       )
     `);
-
     await q(`
       CREATE TABLE IF NOT EXISTS admit_card_students (
         id INT NOT NULL AUTO_INCREMENT,
@@ -84,53 +79,30 @@ const requireAdmin = (req, res, next) => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
         UNIQUE KEY uq_publish_student (admit_publish_id, student_id),
-        KEY idx_student (student_id),
-        KEY idx_publish (admit_publish_id)
+        KEY idx_student (student_id)
       )
     `);
-
     console.log("✅ Admit card tables ready");
   } catch (err) {
     console.error("❌ Admit card table error:", err.message);
   }
 })();
 
-// ==================== HELPERS ====================
-const fetchImageBuffer = (url) => new Promise((resolve) => {
-  if (!url) return resolve(null);
-  const client = url.startsWith("https") ? https : http;
-  client.get(url, (resp) => {
-    if (resp.statusCode !== 200) return resolve(null);
-    const chunks = [];
-    resp.on("data", (c) => chunks.push(c));
-    resp.on("end", () => resolve(Buffer.concat(chunks)));
-  }).on("error", () => resolve(null));
-});
-
-const formatDate = (d) => {
-  if (!d) return "—";
-  const dt = new Date(d);
-  return isNaN(dt) ? d : dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-};
-
 // ============================================================
-// GET CLASS STUDENTS — auto-fetch from Nstudent
+// GET CLASS STUDENTS — FULL Nstudent data
 // ============================================================
 router.get("/class-students", requireAdmin, async (req, res) => {
   try {
     const { class: cls, session } = req.query;
     if (!cls) return res.status(400).json({ success: false, message: "class required" });
 
-    const where = ["class = ?", "status = 'Active'"];
+    const where = ["class = ?"];
     const params = [cls];
     if (session) { where.push("session = ?"); params.push(session); }
 
+    // Return ALL fields from Nstudent
     const rows = await q(
-      `SELECT id, student_id, admission_number, name, father_name, mother_name,
-              roll_number, class, stream, session, gender, category,
-              dob, aadhar_number, apaar_id, mobile_number, email_id,
-              student_photo_url, village, post_office, tehsil, district, state, pincode, address
-       FROM Nstudent
+      `SELECT * FROM Nstudent
        WHERE ${where.join(" AND ")}
        ORDER BY CAST(roll_number AS UNSIGNED) ASC, name ASC`,
       params
@@ -144,7 +116,7 @@ router.get("/class-students", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// CREATE — insert admit card publish with PDF
+// CREATE — insert admit card record with PDF
 // ============================================================
 router.post("/create", requireAdmin, uploadAdmit.single("admitPdf"), async (req, res) => {
   try {
@@ -153,7 +125,6 @@ router.post("/create", requireAdmin, uploadAdmit.single("admitPdf"), async (req,
     if (!examinationType || !examSession || !cls) {
       return res.status(400).json({ success: false, message: "Examination type, session and class required" });
     }
-
     if (!req.file) {
       return res.status(400).json({ success: false, message: "Admit card PDF file required" });
     }
@@ -175,21 +146,20 @@ router.post("/create", requireAdmin, uploadAdmit.single("admitPdf"), async (req,
       data: rows[0]
     });
   } catch (err) {
-    console.error("❌ create admit error:", err);
+    console.error("❌ create error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ============================================================
-// LIST — all admit card publishes (admin)
+// LIST — all admit card records
 // ============================================================
 router.get("/list", requireAdmin, async (req, res) => {
   try {
-    const { class: cls, session } = req.query;
+    const { class: cls } = req.query;
     const where = [];
     const params = [];
     if (cls) { where.push("class = ?"); params.push(cls); }
-    if (session) { where.push("exam_session = ?"); params.push(session); }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
     const rows = await q(
@@ -209,7 +179,7 @@ router.get("/list", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// GET SINGLE — with all students
+// GET SINGLE — with students list (FULL data)
 // ============================================================
 router.get("/:id", requireAdmin, async (req, res) => {
   try {
@@ -218,7 +188,8 @@ router.get("/:id", requireAdmin, async (req, res) => {
     if (!rows.length) return res.status(404).json({ success: false, message: "Not found" });
 
     const students = await q(
-      `SELECT acs.*, s.name, s.class, s.student_photo_url, s.father_name, s.gender, s.category
+      `SELECT acs.id as acs_id, acs.is_enabled, acs.roll_number as acs_roll, acs.published_at,
+              s.*
        FROM admit_card_students acs
        JOIN Nstudent s ON s.student_id = acs.student_id
        WHERE acs.admit_publish_id = ?
@@ -233,7 +204,7 @@ router.get("/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// DELETE — remove admit publish + Cloudinary file + students
+// DELETE
 // ============================================================
 router.delete("/:id", requireAdmin, async (req, res) => {
   try {
@@ -247,10 +218,8 @@ router.delete("/:id", requireAdmin, async (req, res) => {
         await cloudinary.uploader.destroy(item.admit_pdf_public_id, { resource_type: "raw" });
       } catch (e) { console.warn("Cloudinary delete warning:", e.message); }
     }
-
     await q("DELETE FROM admit_card_students WHERE admit_publish_id = ?", [id]);
     await q("DELETE FROM admit_card_publishes WHERE id = ?", [id]);
-
     res.json({ success: true, message: "Deleted ✅" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -258,7 +227,7 @@ router.delete("/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// PUBLISH — bulk (class) or selected student IDs
+// PUBLISH — bulk or selected
 // ============================================================
 router.post("/:id/publish", requireAdmin, async (req, res) => {
   try {
@@ -310,7 +279,6 @@ router.post("/:id/publish", requireAdmin, async (req, res) => {
       count
     });
   } catch (err) {
-    console.error("❌ publish error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -329,9 +297,8 @@ router.post("/:id/unpublish", requireAdmin, async (req, res) => {
         `UPDATE admit_card_students SET is_enabled = 0 WHERE admit_publish_id = ? AND student_id IN (${ph})`,
         [id, ...studentIds]
       );
-      return res.json({ success: true, message: "Unpublished for selected students ✅" });
+      return res.json({ success: true, message: "Unpublished for selected ✅" });
     }
-
     await q("UPDATE admit_card_students SET is_enabled = 0 WHERE admit_publish_id = ?", [id]);
     await q("UPDATE admit_card_publishes SET is_published = 0 WHERE id = ?", [id]);
     res.json({ success: true, message: "Unpublished ✅" });
@@ -341,7 +308,7 @@ router.post("/:id/unpublish", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — get own published admit cards (public)
+// STUDENT — public — own admit cards
 // ============================================================
 router.get("/student/:studentId/list", async (req, res) => {
   try {
@@ -356,35 +323,27 @@ router.get("/student/:studentId/list", async (req, res) => {
        ORDER BY acs.published_at DESC`,
       [studentId]
     );
-
     res.json({ success: true, data: rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ============================================================
-// STUDENT — open admit PDF (public, only if enabled for them)
-// ============================================================
 router.get("/student/:studentId/pdf/:publishId", async (req, res) => {
   try {
     const { studentId, publishId } = req.params;
-
     const check = await q(
       `SELECT * FROM admit_card_students WHERE admit_publish_id = ? AND student_id = ? AND is_enabled = 1`,
       [publishId, studentId]
     );
     if (!check.length) {
-      return res.status(403).json({ success: false, message: "Admit card not available for you" });
+      return res.status(403).json({ success: false, message: "Not available for you" });
     }
-
     const p = await q("SELECT * FROM admit_card_publishes WHERE id = ?", [publishId]);
-    if (!p.length) return res.status(404).json({ success: false, message: "Not found" });
-
-    const pdfUrl = p[0].admit_pdf_url;
-    if (!pdfUrl) return res.status(404).json({ success: false, message: "PDF not uploaded" });
-
-    res.redirect(pdfUrl);
+    if (!p.length || !p[0].admit_pdf_url) {
+      return res.status(404).json({ success: false, message: "PDF not found" });
+    }
+    res.redirect(p[0].admit_pdf_url);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
