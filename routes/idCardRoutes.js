@@ -24,7 +24,7 @@ const fetchImageBuffer = (url) => new Promise((resolve) => {
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d);
-  return isNaN(dt) ? d : dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  return isNaN(dt) ? d : dt.toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
 
 const maskAadhar = (a) => {
@@ -35,124 +35,142 @@ const maskAadhar = (a) => {
 };
 
 // ============================================================
-// DRAW ONE SIDE OF ID CARD
+// DRAW ONE CARD (Front or Back) — Word-style banner layout
+// Card size: 250 × 158 pt (= 88mm × 55mm approximately)
 // ============================================================
-const drawCard = (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, qrBuf, side) => {
+const drawCard = async (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, side) => {
+  const CARD_BLUE = "#1e3a8a";
+  const CARD_GREEN = "#16a34a";
   const CARD_GOLD = "#c9972b";
   const CARD_DARK = "#0d1b2a";
   const CARD_TEXT = "#1a2332";
   const CARD_MUTED = "#5a6a7e";
+  const CARD_LIGHT = "#f8fafc";
 
-  // ---- OUTER BORDER ----
-  doc.rect(x, y, W, H).fillAndStroke("#ffffff", CARD_DARK).lineWidth(1).stroke();
-  doc.rect(x + 2, y + 2, W - 4, H - 4).lineWidth(0.6).strokeColor(CARD_GOLD).stroke();
+  // ==================== OUTER BORDER ====================
+  doc.rect(x, y, W, H).fillAndStroke("#ffffff", CARD_DARK).lineWidth(1.5).stroke();
+  doc.rect(x + 2, y + 2, W - 4, H - 4).lineWidth(0.5).strokeColor(CARD_GOLD).stroke();
 
   // ==================== FRONT SIDE ====================
   if (side === "front") {
-    // Header
-    doc.rect(x + 2, y + 2, W - 4, 22).fill(CARD_DARK);
-    doc.rect(x + 2, y + 22, W - 4, 2).fill(CARD_GOLD);
+    // ---- BLUE BANNER HEADER ----
+    doc.rect(x + 2, y + 2, W - 4, 32).fill(CARD_BLUE);
 
+    // Logo (left side of banner)
     if (logoBuf) {
-      try { doc.image(logoBuf, x + 5, y + 5, { width: 16, height: 16 }); } catch (e) {}
-    }
-
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
-      .text("GOVT. SR. SEC. SCHOOL SHILLA", x + 24, y + 5, { width: W - 30, align: "left" });
-    doc.font("Helvetica").fontSize(4.5).fillColor(CARD_GOLD)
-      .text("Shilla • Nerwa • Distt. Shimla • HP - 171210", x + 24, y + 14, { width: W - 30, align: "left" });
-
-    // Photo
-    const photoX = x + 6;
-    const photoY = y + 30;
-    const photoW = 32;
-    const photoH = 42;
-    doc.rect(photoX, photoY, photoW, photoH).fillAndStroke("#f1f5f9", CARD_GOLD).lineWidth(0.8).stroke();
-    if (photoBuf) {
-      try { doc.image(photoBuf, photoX + 1, photoY + 1, { width: photoW - 2, height: photoH - 2 }); } catch (e) {}
+      try { doc.image(logoBuf, x + 5, y + 5, { width: 26, height: 26 }); } catch (e) {}
     } else {
-      doc.font("Helvetica").fontSize(5).fillColor(CARD_MUTED)
-        .text("PHOTO", photoX, photoY + 18, { width: photoW, align: "center" });
+      doc.circle(x + 18, y + 18, 13).strokeColor("#ffffff").lineWidth(1).stroke();
+      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(10).text("🏛", x + 8, y + 11);
     }
 
-    // Info
-    const infoX = photoX + photoW + 4;
-    const infoW = W - (infoX - x) - 6;
-    let infoY = y + 30;
+    // School name (center of banner)
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(11)
+      .text("GOVT. SR. SEC. SCHOOL SHILLA", x + 36, y + 6, { width: W - 42, align: "center" });
+    doc.font("Helvetica").fontSize(6).fillColor("#e0e7ff")
+      .text("Shilla • Nerwa • Distt. Shimla • HP - 171210", x + 36, y + 20, { width: W - 42, align: "center" });
 
-    const rowData = [
-      ["NAME", s.name],
-      ["FATHER", s.father_name || "—"],
-      ["MOTHER", s.mother_name || "—"],
-      ["DOB", fmtDate(s.dob)]
+    // ---- GREEN "ID CARD" BADGE ----
+    const badgeW = 60;
+    const badgeX = x + (W - badgeW) / 2;
+    doc.roundedRect(badgeX, y + 36, badgeW, 12, 6).fill(CARD_GREEN);
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
+      .text("ID CARD", badgeX, y + 39, { width: badgeW, align: "center", characterSpacing: 1 });
+
+    // ---- PHOTO (Right side) ----
+    const photoW = 50;
+    const photoH = 60;
+    const photoX = x + W - photoW - 8;
+    const photoY = y + 55;
+
+    doc.rect(photoX - 1, photoY - 1, photoW + 2, photoH + 2).strokeColor(CARD_GOLD).lineWidth(0.5).stroke();
+    if (photoBuf) {
+      try { doc.image(photoBuf, photoX, photoY, { width: photoW, height: photoH }); } catch (e) {}
+    } else {
+      doc.rect(photoX, photoY, photoW, photoH).fillAndStroke(CARD_LIGHT, "#cbd5e1");
+      doc.font("Helvetica").fontSize(6).fillColor(CARD_MUTED)
+        .text("PHOTO", photoX, photoY + 27, { width: photoW, align: "center" });
+    }
+
+    // ---- STUDENT SIGNATURE (below photo) ----
+    const sigY = photoY + photoH + 3;
+    if (signatureBuf) {
+      try { doc.image(signatureBuf, photoX, sigY, { width: photoW, height: 12 }); } catch (e) {}
+    }
+    doc.moveTo(photoX + 5, sigY + 14).lineTo(photoX + photoW - 5, sigY + 14).lineWidth(0.4).strokeColor(CARD_MUTED).stroke();
+    doc.font("Helvetica").fontSize(5).fillColor(CARD_MUTED)
+      .text("Student Signature", photoX, sigY + 16, { width: photoW, align: "center" });
+
+    // ---- DETAILS TABLE (Left side) ----
+    const infoX = x + 8;
+    const infoYStart = y + 55;
+    const labelW = 50;
+    const valueW = W - labelW - photoW - 25;
+    const rowH = 11;
+
+    const rows = [
+      ["Name", (s.name || "—").substring(0, 22)],
+      ["Father's Name", (s.father_name || "—").substring(0, 22)],
+      ["Mother's Name", (s.mother_name || "—").substring(0, 22)],
+      ["D.O.B.", fmtDate(s.dob)],
+      ["Class", `${s.class || "—"}${["11","12"].includes(String(s.class)) ? " - " + (s.stream || "") : ""}`],
+      ["Roll No.", s.roll_number || "—"],
+      ["Student ID", s.student_id || "—"],
+      ["Session", s.session || "—"]
     ];
 
-    for (const [label, val] of rowData) {
-      doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
-        .text(label, infoX, infoY, { width: infoW });
+    rows.forEach(([label, val], i) => {
+      const rowY = infoYStart + i * rowH;
+
+      // Label
       doc.font("Helvetica-Bold").fontSize(6).fillColor(CARD_TEXT)
-        .text(String(val).substring(0, 28), infoX, infoY + 4.5, { width: infoW });
-      infoY += 10;
+        .text(label, infoX, rowY, { width: labelW });
+      // Separator
+      doc.font("Helvetica-Bold").fontSize(6).fillColor(CARD_TEXT)
+        .text(":", infoX + labelW - 3, rowY, { width: 5 });
+      // Value
+      doc.font("Helvetica").fontSize(6).fillColor(CARD_TEXT)
+        .text(String(val), infoX + labelW + 2, rowY, { width: valueW });
+    });
+
+    // ---- PRINCIPAL SIGNATURE (bottom right, below student signature) ----
+    const pSigX = photoX - 5;
+    const pSigY = y + H - 22;
+
+    if (principalBuf) {
+      try { doc.image(principalBuf, pSigX + 8, pSigY - 6, { width: 34, height: 16 }); } catch (e) {}
     }
-
-    // Bottom band
-    const bandY = y + H - 22;
-    doc.rect(x + 2, bandY, W - 4, 20).fillAndStroke("#fef8ed", CARD_GOLD).lineWidth(0.5).stroke();
-
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_MUTED)
-      .text("STUDENT ID", x + 5, bandY + 3, { width: 40 });
-    doc.font("Helvetica-Bold").fontSize(6).fillColor(CARD_DARK)
-      .text(s.student_id || "—", x + 5, bandY + 8, { width: 45 });
-
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_MUTED)
-      .text("CLASS", x + 55, bandY + 3, { width: 30 });
-    doc.font("Helvetica-Bold").fontSize(6).fillColor(CARD_DARK)
-      .text(String(s.class || "—"), x + 55, bandY + 8, { width: 30 });
-
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_MUTED)
-      .text("ROLL NO", x + 85, bandY + 3, { width: 30 });
-    doc.font("Helvetica-Bold").fontSize(6).fillColor(CARD_DARK)
-      .text(s.roll_number || "—", x + 85, bandY + 8, { width: 30 });
-
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_MUTED)
-      .text("SESSION", x + 120, bandY + 3, { width: 40 });
-    doc.font("Helvetica-Bold").fontSize(5.5).fillColor(CARD_DARK)
-      .text(s.session || "—", x + 120, bandY + 8, { width: 50 });
+    doc.moveTo(pSigX + 2, pSigY + 10).lineTo(pSigX + 48, pSigY + 10).lineWidth(0.4).strokeColor(CARD_MUTED).stroke();
+    doc.font("Helvetica-Bold").fontSize(5).fillColor(CARD_DARK)
+      .text("Principal", pSigX, pSigY + 12, { width: 50, align: "center" });
   }
 
   // ==================== BACK SIDE ====================
   if (side === "back") {
-    doc.rect(x + 2, y + 2, W - 4, 16).fill(CARD_DARK);
-    doc.rect(x + 2, y + 16, W - 4, 2).fill(CARD_GOLD);
+    // ---- BLUE BANNER HEADER ----
+    doc.rect(x + 2, y + 2, W - 4, 32).fill(CARD_BLUE);
 
+    if (logoBuf) {
+      try { doc.image(logoBuf, x + 5, y + 5, { width: 26, height: 26 }); } catch (e) {}
+    }
+
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(11)
+      .text("GOVT. SR. SEC. SCHOOL SHILLA", x + 36, y + 6, { width: W - 42, align: "center" });
+    doc.font("Helvetica").fontSize(6).fillColor("#e0e7ff")
+      .text("Shilla • Nerwa • Distt. Shimla • HP - 171210", x + 36, y + 20, { width: W - 42, align: "center" });
+
+    // ---- GREEN BADGE ----
+    const badgeW = 70;
+    const badgeX = x + (W - badgeW) / 2;
+    doc.roundedRect(badgeX, y + 36, badgeW, 12, 6).fill(CARD_GREEN);
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
-      .text("STUDENT INFORMATION", x + 4, y + 5, { width: W - 8, align: "center" });
+      .text("SCHOOL ADDRESS & CONTACT", badgeX, y + 39, { width: badgeW, align: "center" });
 
-    let infoY = y + 24;
-
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
-      .text("AADHAR NUMBER", x + 5, infoY);
-    doc.font("Helvetica").fontSize(5.5).fillColor(CARD_TEXT)
-      .text(maskAadhar(s.aadhar_number), x + 5, infoY + 5, { width: W - 10 });
-
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
-      .text("APAAR ID", x + 5, infoY + 14);
-    doc.font("Helvetica").fontSize(5.5).fillColor(CARD_TEXT)
-      .text(s.apaar_id || "—", x + 5, infoY + 19, { width: W - 10 });
-
-    infoY += 30;
-
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
-      .text("MOBILE", x + 5, infoY);
-    doc.font("Helvetica").fontSize(5.5).fillColor(CARD_TEXT)
-      .text(s.mobile_number || "—", x + 5, infoY + 5, { width: W - 10 });
-
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
-      .text("EMAIL", x + 5, infoY + 14);
-    doc.font("Helvetica").fontSize(4.5).fillColor(CARD_TEXT)
-      .text(s.email_id || "—", x + 5, infoY + 19, { width: W - 10, ellipsis: true });
-
-    infoY += 30;
+    // ---- DETAILS ----
+    const infoX = x + 8;
+    const infoYStart = y + 55;
+    const labelW = 55;
+    const rowH = 12;
 
     const fullAddr = [
       s.village,
@@ -163,47 +181,56 @@ const drawCard = (doc, x, y, W, H, s, logoBuf, principalBuf, photoBuf, qrBuf, si
       s.pincode
     ].filter(Boolean).join(", ") || s.address || "—";
 
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_GOLD)
-      .text("ADDRESS", x + 5, infoY);
-    doc.font("Helvetica").fontSize(4.5).fillColor(CARD_TEXT)
-      .text(fullAddr, x + 5, infoY + 5, { width: W - 10, height: 16, ellipsis: true });
+    const rows = [
+      ["Address", fullAddr.substring(0, 60)],
+      ["Mobile No.", s.mobile_number || "—"],
+      ["Email", s.email_id || "—"],
+      ["Aadhar No.", maskAadhar(s.aadhar_number)],
+      ["APAAR ID", s.apaar_id || "—"],
+      ["Issue Date", fmtDate(new Date())]
+    ];
 
-    // QR
-    const qrSize = 26;
-    const qrX = x + 6;
-    const qrY = y + H - qrSize - 10;
+    rows.forEach(([label, val], i) => {
+      const rowY = infoYStart + i * rowH;
+
+      doc.font("Helvetica-Bold").fontSize(6).fillColor(CARD_TEXT)
+        .text(label, infoX, rowY, { width: labelW });
+      doc.font("Helvetica-Bold").fontSize(6).fillColor(CARD_TEXT)
+        .text(":", infoX + labelW - 3, rowY, { width: 5 });
+      doc.font("Helvetica").fontSize(6).fillColor(CARD_TEXT)
+        .text(String(val), infoX + labelW + 2, rowY, { width: W - labelW - 20 });
+    });
+
+    // ---- QR CODE (bottom right) ----
+    const qrSize = 42;
+    const qrX = x + W - qrSize - 8;
+    const qrY = y + H - qrSize - 8;
 
     if (qrBuf) {
       try {
-        doc.rect(qrX - 1, qrY - 1, qrSize + 2, qrSize + 2).strokeColor(CARD_GOLD).lineWidth(0.5).stroke();
+        doc.rect(qrX - 2, qrY - 2, qrSize + 4, qrSize + 4).strokeColor(CARD_GOLD).lineWidth(0.5).stroke();
         doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
       } catch (e) {}
     }
 
-    doc.font("Helvetica").fontSize(3.5).fillColor(CARD_MUTED)
-      .text("Scan to verify", qrX - 2, qrY + qrSize + 1, { width: qrSize + 4, align: "center" });
+    doc.font("Helvetica-Bold").fontSize(4.5).fillColor(CARD_DARK)
+      .text("SCAN TO VERIFY", qrX - 5, qrY + qrSize + 2, { width: qrSize + 10, align: "center" });
 
-    // Principal signature
-    const sigX = x + W - 55;
-    const sigY = y + H - 32;
+    // ---- Principal Signature (bottom left) ----
+    const sigX = x + 15;
+    const sigY = y + H - 22;
 
     if (principalBuf) {
-      try { doc.image(principalBuf, sigX + 10, sigY, { width: 30, height: 16 }); } catch (e) {}
+      try { doc.image(principalBuf, sigX + 8, sigY - 6, { width: 34, height: 16 }); } catch (e) {}
     }
-
-    doc.moveTo(sigX + 5, sigY + 20).lineTo(sigX + 45, sigY + 20).lineWidth(0.5).strokeColor(CARD_DARK).stroke();
-    doc.font("Helvetica-Bold").fontSize(4).fillColor(CARD_DARK)
-      .text("Principal", sigX + 5, sigY + 22, { width: 40, align: "center" });
-    doc.font("Helvetica").fontSize(3.5).fillColor(CARD_MUTED)
-      .text("GSSS Shilla", sigX + 5, sigY + 27, { width: 40, align: "center" });
-
-    doc.font("Helvetica-Oblique").fontSize(3).fillColor(CARD_MUTED)
-      .text("If found, please return to school office", x + 2, y + H - 6, { width: W - 4, align: "center" });
+    doc.moveTo(sigX + 2, sigY + 10).lineTo(sigX + 48, sigY + 10).lineWidth(0.4).strokeColor(CARD_MUTED).stroke();
+    doc.font("Helvetica-Bold").fontSize(5).fillColor(CARD_DARK)
+      .text("Principal", sigX, sigY + 12, { width: 50, align: "center" });
   }
 };
 
 // ============================================================
-// GENERATE SINGLE ID CARD PDF (Front + Back side by side)
+// GENERATE SINGLE ID CARD PDF
 // ============================================================
 router.get("/generate/:studentId/pdf", async (req, res) => {
   try {
@@ -216,7 +243,7 @@ router.get("/generate/:studentId/pdf", async (req, res) => {
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
     const photoBuf = await fetchImageBuffer(s.student_photo_url);
-
+    const signatureBuf = await fetchImageBuffer(s.signature_url);
     const qrData = `ID:${s.student_id}|Class:${s.class}|Roll:${s.roll_number}|Name:${s.name}`;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData)}`;
     const qrBuf = await fetchImageBuffer(qrUrl);
@@ -229,28 +256,23 @@ router.get("/generate/:studentId/pdf", async (req, res) => {
     const PW = doc.page.width;
     const PH = doc.page.height;
 
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#0d1b2a")
-      .text("STUDENT IDENTITY CARD", 0, 25, { width: PW, align: "center" });
-
-    const cardW = 220;
-    const cardH = 138;
-    const gap = 30;
+    const cardW = 250;
+    const cardH = 158;
+    const gap = 40;
     const totalW = cardW * 2 + gap;
     const startX = (PW - totalW) / 2;
     const startY = (PH - cardH) / 2;
 
-    drawCard(doc, startX, startY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, qrBuf, "front");
-    drawCard(doc, startX + cardW + gap, startY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, qrBuf, "back");
+    await drawCard(doc, startX, startY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, "front");
+    await drawCard(doc, startX + cardW + gap, startY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, "back");
 
-    doc.font("Helvetica-Bold").fontSize(8).fillColor("#5a6a7e")
-      .text("FRONT SIDE", startX, startY + cardH + 12, { width: cardW, align: "center" });
-    doc.text("BACK SIDE", startX + cardW + gap, startY + cardH + 12, { width: cardW, align: "center" });
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#5a6a7e")
+      .text("FRONT SIDE", startX, startY + cardH + 15, { width: cardW, align: "center" });
+    doc.text("BACK SIDE", startX + cardW + gap, startY + cardH + 15, { width: cardW, align: "center" });
 
     doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
-      .text("• Print on 300 GSM cardstock or PVC card • Laminate for durability",
+      .text("• Print on 300 GSM cardstock or PVC • Laminate for durability",
         0, PH - 40, { width: PW, align: "center" });
-    doc.text(`Generated on ${new Date().toLocaleDateString("en-IN")}`,
-        0, PH - 28, { width: PW, align: "center" });
 
     doc.end();
   } catch (err) {
@@ -260,7 +282,7 @@ router.get("/generate/:studentId/pdf", async (req, res) => {
 });
 
 // ============================================================
-// GENERATE BULK ID CARDS PDF — Max 5 students per page (5 rows × 2 cols)
+// GENERATE BULK ID CARDS PDF — 4 students per A4 page (2×2)
 // ============================================================
 router.get("/generate-class/:class/pdf", async (req, res) => {
   try {
@@ -283,7 +305,6 @@ router.get("/generate-class/:class/pdf", async (req, res) => {
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
 
-    // A4 Landscape — 5 rows per page
     const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 0 });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="idcards-class${cls}.pdf"`);
@@ -292,20 +313,23 @@ router.get("/generate-class/:class/pdf", async (req, res) => {
     const PW = doc.page.width;   // ~841
     const PH = doc.page.height;  // ~595
 
-    // Card dimensions (compact so 5 rows fit)
-    const cardW = 78;
-    const cardH = 98;
-    const colGap = 8;   // gap between front & back of same student
-    const rowGap = 4;   // gap between students
+    // 2×2 grid = 4 students per page
+    // Each student = front + back side by side
+    const cardW = 250;
+    const cardH = 158;
+    const innerGap = 20;   // gap between front and back
+    const colGap = 15;      // gap between columns
+    const rowGap = 15;      // gap between rows
 
-    // Total width of one student (front + gap + back)
-    const studentW = cardW * 2 + colGap;
+    // Total width per student = cardW * 2 + innerGap
+    const studentW = cardW * 2 + innerGap;
+    const studentH = cardH;
 
-    // Total height needed: 5 students × (cardH + rowGap)
-    const totalH = 5 * cardH + 4 * rowGap;
+    // Grid: 2 columns × 2 rows
+    const totalW = studentW * 2 + colGap;
+    const totalH = studentH * 2 + rowGap;
 
-    // Center everything
-    const startX = (PW - studentW) / 2;
+    const startX = (PW - totalW) / 2;
     const startY = (PH - totalH) / 2 + 5;
 
     let slot = 0;
@@ -315,23 +339,25 @@ router.get("/generate-class/:class/pdf", async (req, res) => {
       const s = students[i];
 
       const photoBuf = await fetchImageBuffer(s.student_photo_url);
+      const signatureBuf = await fetchImageBuffer(s.signature_url);
       const qrData = `ID:${s.student_id}|Class:${s.class}|Roll:${s.roll_number}|Name:${s.name}`;
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData)}`;
       const qrBuf = await fetchImageBuffer(qrUrl);
 
-      const rowIdx = slot; // 0..4
-      const cardX = startX;
-      const cardY = startY + rowIdx * (cardH + rowGap);
+      const rowIdx = Math.floor(slot / 2);
+      const colIdx = slot % 2;
 
-      // Draw FRONT
-      drawCard(doc, cardX, cardY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, qrBuf, "front");
-      // Draw BACK
-      drawCard(doc, cardX + cardW + colGap, cardY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, qrBuf, "back");
+      const studentX = startX + colIdx * (studentW + colGap);
+      const studentY = startY + rowIdx * (studentH + rowGap);
+
+      // Front at studentX
+      await drawCard(doc, studentX, studentY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, "front");
+      // Back at studentX + cardW + innerGap
+      await drawCard(doc, studentX + cardW + innerGap, studentY, cardW, cardH, s, logoBuf, principalBuf, photoBuf, signatureBuf, qrBuf, "back");
 
       slot++;
 
-      // Full page when 5 slots filled
-      if (slot === 5 && i < students.length - 1) {
+      if (slot === 4 && i < students.length - 1) {
         doc.addPage({ size: "A4", layout: "landscape", margin: 0 });
         slot = 0;
         pageCount++;
