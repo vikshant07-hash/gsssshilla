@@ -29,15 +29,6 @@ const q = (sql, params = []) => db.query(sql, params);
         INDEX idx_enabled (is_enabled)
       )
     `);
-
-    const safeAdd = async (col, def) => {
-      try { await q(`ALTER TABLE bonafide_certificates ADD COLUMN ${col} ${def}`); }
-      catch (e) { /* exists */ }
-    };
-    await safeAdd("purpose", "VARCHAR(200) DEFAULT 'General Purpose'");
-    await safeAdd("verification_code", "VARCHAR(40) DEFAULT NULL");
-    await safeAdd("issued_date", "DATE DEFAULT NULL");
-
     console.log("✅ bonafide_certificates table ready");
   } catch (err) {
     console.error("❌ bonafide table create error:", err.message);
@@ -50,7 +41,7 @@ const q = (sql, params = []) => db.query(sql, params);
 const requireAdmin = (req, res, next) => {
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Bearer ")) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
+    return res.status(401).json({ success: false, message: "Unauthorized - admin token required" });
   }
   req.adminToken = auth.substring(7);
   next();
@@ -115,7 +106,7 @@ router.get("/my-status/:studentId", async (req, res) => {
 });
 
 // ============================================================
-// 🟢 PUBLIC — Bonafide PDF (Single Page, Profile Style)
+// 🟢 PUBLIC — Bonafide PDF (Single Page, Professional Layout)
 // ============================================================
 router.get("/certificate/:studentId/pdf", async (req, res) => {
   try {
@@ -171,239 +162,233 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
 
     const PW = doc.page.width;
     const PH = doc.page.height;
-    const M = 40;
+    const M = 30;
+    const contentW = PW - M * 2;
 
     // ==================== OUTER GOLD BORDER ====================
-    doc.rect(18, 18, PW - 36, PH - 36).lineWidth(3).strokeColor("#c9972b").stroke();
-    doc.rect(26, 26, PW - 52, PH - 52).lineWidth(1).strokeColor("#c9972b").stroke();
+    doc.rect(15, 15, PW - 30, PH - 30).lineWidth(3).strokeColor("#c9972b").stroke();
+    doc.rect(22, 22, PW - 44, PH - 44).lineWidth(1).strokeColor("#c9972b").stroke();
 
     // ==================== WATERMARK ====================
     doc.save();
-    doc.opacity(0.05);
-    doc.fontSize(90).font("Helvetica-Bold").fillColor("#0d1b2a");
+    doc.opacity(0.04);
+    doc.fontSize(85).font("Helvetica-Bold").fillColor("#0d1b2a");
     doc.rotate(-45, { origin: [PW / 2, PH / 2] });
     doc.text("GSSS SHILLA", PW / 2 - 350, PH / 2 - 50, { width: 700, align: "center" });
     doc.restore();
 
-    // ==================== HEADER ====================
-    let y = 50;
+    let y = 40;
 
+    // ==================== HEADER ====================
     if (logoBuf) {
-      try { doc.image(logoBuf, M + 5, y, { width: 65, height: 65 }); } catch (e) {}
+      try { doc.image(logoBuf, M, y, { width: 55, height: 55 }); } catch (e) {}
     }
 
-    // School name
-    doc.font("Helvetica-Bold").fontSize(22).fillColor("#0d1b2a")
-      .text("GOVT. SR. SEC. SCHOOL SHILLA", M + 80, y + 5, { width: PW - M * 2 - 80, align: "center" });
-    doc.font("Helvetica").fontSize(10).fillColor("#5a6a7e")
-      .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", M + 80, y + 34, { width: PW - M * 2 - 80, align: "center" });
+    doc.font("Helvetica-Bold").fontSize(18).fillColor("#0d1b2a")
+      .text("GOVT. SR. SEC. SCHOOL SHILLA", M + 65, y + 3, { width: contentW - 65, align: "center" });
+    doc.font("Helvetica").fontSize(9).fillColor("#5a6a7e")
+      .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", M + 65, y + 28, { width: contentW - 65, align: "center" });
 
-    y += 78;
-
-    // Gold divider
-    doc.moveTo(M, y).lineTo(PW - M, y).lineWidth(3).strokeColor("#c9972b").stroke();
-    y += 8;
+    y += 68;
+    doc.moveTo(M, y).lineTo(PW - M, y).lineWidth(2.5).strokeColor("#c9972b").stroke();
+    y += 10;
 
     // ==================== TITLE BOX ====================
-    const titleBoxWidth = 320;
+    const titleBoxWidth = 280;
     const titleBoxX = (PW - titleBoxWidth) / 2;
-    doc.rect(titleBoxX, y, titleBoxWidth, 32).fillAndStroke("#0d1b2a", "#c9972b");
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(15)
-      .text("BONAFIDE CERTIFICATE", titleBoxX, y + 9, { width: titleBoxWidth, align: "center", characterSpacing: 2 });
+    doc.rect(titleBoxX, y, titleBoxWidth, 28).fillAndStroke("#0d1b2a", "#c9972b");
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(13)
+      .text("BONAFIDE CERTIFICATE", titleBoxX, y + 8, { width: titleBoxWidth, align: "center", characterSpacing: 1.5 });
 
-    y += 45;
+    y += 40;
 
-    // ==================== REF NO + ISSUE DATE ====================
-    doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0d1b2a");
-    doc.text("Ref No: ", M + 5, y, { continued: true });
+    // ==================== REF + DATE ====================
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0d1b2a");
+    doc.text("Ref No: ", M, y, { continued: true });
     doc.font("Helvetica").fillColor("#c9972b").text(refNo);
 
     doc.font("Helvetica-Bold").fillColor("#0d1b2a")
-      .text("Issue Date: ", PW - M - 180, y, { continued: true, width: 175 });
+      .text("Issue Date: ", M + contentW - 175, y, { continued: true, width: 170 });
     doc.font("Helvetica").fillColor("#c9972b").text(fmtDateLong(issueDate));
 
-    y += 22;
+    y += 20;
 
-    // ==================== PERSONAL INFORMATION TABLE ====================
-    // Section heading
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#c9972b")
-      .text("▸ PERSONAL INFORMATION", M + 5, y);
-    y += 18;
+    // ==================== PERSONAL INFORMATION ====================
+    doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#c9972b")
+      .text("PERSONAL INFORMATION", M, y);
+    y += 16;
 
-    const rowH = 20;
-    const gap = 4;
-    const halfWidth = (PW - M * 2 - 100) / 2;
-    const labelW = 95;
-    const valueW = halfWidth - labelW;
-    const leftColX = M + 5;
-    const rightColX = M + 5 + halfWidth + 10;
-
-    // Photo box (right side of table)
-    const photoBoxW = 85;
-    const photoBoxH = 105;
-    const photoBoxX = PW - M - photoBoxW - 5;
+    const rowH = 18;
+    const gap = 3;
+    const labelW = 90;
+    const photoBoxW = 75;
+    const photoBoxH = 95;
+    const photoBoxX = PW - M - photoBoxW;
     const photoBoxY = y;
 
-    // Draw photo
+    // Photo
     doc.rect(photoBoxX, photoBoxY, photoBoxW, photoBoxH).fillAndStroke("#f8fafc", "#c9972b");
     if (photoBuf) {
       try { doc.image(photoBuf, photoBoxX + 2, photoBoxY + 2, { width: photoBoxW - 4, height: photoBoxH - 4 }); } catch (e) {}
     } else {
-      doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
-        .text("No Photo", photoBoxX, photoBoxY + 45, { width: photoBoxW, align: "center" });
+      doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+        .text("No Photo", photoBoxX, photoBoxY + 40, { width: photoBoxW, align: "center" });
     }
 
-    // Personal info rows (left + right column side by side)
+    // Table area (left of photo)
+    const tableW = contentW - photoBoxW - 12;
+    const colW = tableW / 2;
+    const valueW = colW - labelW;
+
     const personalRows = [
-      ["Student ID", s.student_id, "Admission No", s.admission_number || "—"],
-      ["Full Name", s.name, "Gender", s.gender || "—"],
-      ["Father's Name", s.father_name || "—", "Mother's Name", s.mother_name || "—"],
-      ["Date of Birth", fmtDate(s.dob), "Category", s.category || "—"],
-      ["Aadhar Number", s.aadhar_number || "—", "APAAR ID", s.apaar_id || "—"],
-      ["Mobile", s.mobile_number || "—", "Email", s.email_id || "—"]
+      ["STUDENT ID", s.student_id, "ADMISSION NO", s.admission_number || "—"],
+      ["FULL NAME", s.name, "GENDER", s.gender || "—"],
+      ["FATHER'S NAME", s.father_name || "—", "MOTHER'S NAME", s.mother_name || "—"],
+      ["DATE OF BIRTH", fmtDate(s.dob), "CATEGORY", s.category || "—"],
+      ["AADHAR NUMBER", s.aadhar_number || "—", "APAAR ID", s.apaar_id || "—"],
+      ["MOBILE", s.mobile_number || "—", "EMAIL", s.email_id || "—"]
     ];
 
     for (let i = 0; i < personalRows.length; i++) {
       const [l1, v1, l2, v2] = personalRows[i];
       const rowY = y + i * (rowH + gap);
 
-      // LEFT ROW
-      doc.rect(leftColX, rowY, labelW, rowH).fillAndStroke("#fef8ed", "#e2e8f0");
-      doc.rect(leftColX + labelW, rowY, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
-      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a")
-        .text(l1.toUpperCase(), leftColX + 5, rowY + 6, { width: labelW - 10 });
-      doc.font("Helvetica").fontSize(9).fillColor("#1a2332")
-        .text(String(v1 || "—"), leftColX + labelW + 5, rowY + 5, { width: valueW - 10, ellipsis: true });
+      // Left cell
+      doc.rect(M, rowY, labelW, rowH).fillAndStroke("#fef8ed", "#c9972b");
+      doc.rect(M + labelW, rowY, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
+      doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#0d1b2a")
+        .text(l1, M + 4, rowY + 6, { width: labelW - 8 });
+      doc.font("Helvetica").fontSize(8).fillColor("#1a2332")
+        .text(String(v1 || "—"), M + labelW + 4, rowY + 5, { width: valueW - 8, ellipsis: true });
 
-      // RIGHT ROW
-      doc.rect(rightColX, rowY, labelW, rowH).fillAndStroke("#fef8ed", "#e2e8f0");
-      doc.rect(rightColX + labelW, rowY, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
-      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a")
-        .text(l2.toUpperCase(), rightColX + 5, rowY + 6, { width: labelW - 10 });
-      doc.font("Helvetica").fontSize(9).fillColor("#1a2332")
-        .text(String(v2 || "—"), rightColX + labelW + 5, rowY + 5, { width: valueW - 10, ellipsis: true });
+      // Right cell
+      doc.rect(M + colW, rowY, labelW, rowH).fillAndStroke("#fef8ed", "#c9972b");
+      doc.rect(M + colW + labelW, rowY, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
+      doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#0d1b2a")
+        .text(l2, M + colW + 4, rowY + 6, { width: labelW - 8 });
+      doc.font("Helvetica").fontSize(8).fillColor("#1a2332")
+        .text(String(v2 || "—"), M + colW + labelW + 4, rowY + 5, { width: valueW - 8, ellipsis: true });
     }
 
-    y += personalRows.length * (rowH + gap) + 10;
+    y += personalRows.length * (rowH + gap) + 8;
 
     // ==================== ACADEMIC INFORMATION ====================
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#c9972b")
-      .text("▸ ACADEMIC INFORMATION", M + 5, y);
-    y += 18;
+    doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#c9972b")
+      .text("ACADEMIC INFORMATION", M, y);
+    y += 16;
 
     const academicRows = [
-      ["Class", s.class || "—", "Stream", streamDisplay],
-      ["Roll Number", s.roll_number || "—", "Session", s.session || "—"],
-      ["Status", (s.status || "Active").toUpperCase(), "Admission Date", fmtDate(s.admission_date)],
-      ["Promoted From", s.promoted_from || "—", "Promotion Date", fmtDate(s.promotion_date)]
+      ["CLASS", s.class || "—", "STREAM", streamDisplay],
+      ["ROLL NUMBER", s.roll_number || "—", "SESSION", s.session || "—"],
+      ["STATUS", (s.status || "Active").toUpperCase(), "ADMISSION DATE", fmtDate(s.admission_date)]
     ];
 
     for (let i = 0; i < academicRows.length; i++) {
       const [l1, v1, l2, v2] = academicRows[i];
       const rowY = y + i * (rowH + gap);
 
-      doc.rect(leftColX, rowY, labelW, rowH).fillAndStroke("#fef8ed", "#e2e8f0");
-      doc.rect(leftColX + labelW, rowY, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
-      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a")
-        .text(l1.toUpperCase(), leftColX + 5, rowY + 6, { width: labelW - 10 });
-      doc.font("Helvetica").fontSize(9).fillColor("#1a2332")
-        .text(String(v1 || "—"), leftColX + labelW + 5, rowY + 5, { width: valueW - 10, ellipsis: true });
+      doc.rect(M, rowY, labelW, rowH).fillAndStroke("#fef8ed", "#c9972b");
+      doc.rect(M + labelW, rowY, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
+      doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#0d1b2a")
+        .text(l1, M + 4, rowY + 6, { width: labelW - 8 });
+      doc.font("Helvetica").fontSize(8).fillColor("#1a2332")
+        .text(String(v1 || "—"), M + labelW + 4, rowY + 5, { width: valueW - 8, ellipsis: true });
 
-      doc.rect(rightColX, rowY, labelW, rowH).fillAndStroke("#fef8ed", "#e2e8f0");
-      doc.rect(rightColX + labelW, rowY, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
-      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a")
-        .text(l2.toUpperCase(), rightColX + 5, rowY + 6, { width: labelW - 10 });
-      doc.font("Helvetica").fontSize(9).fillColor("#1a2332")
-        .text(String(v2 || "—"), rightColX + labelW + 5, rowY + 5, { width: valueW - 10, ellipsis: true });
+      doc.rect(M + colW, rowY, labelW, rowH).fillAndStroke("#fef8ed", "#c9972b");
+      doc.rect(M + colW + labelW, rowY, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
+      doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#0d1b2a")
+        .text(l2, M + colW + 4, rowY + 6, { width: labelW - 8 });
+      doc.font("Helvetica").fontSize(8).fillColor("#1a2332")
+        .text(String(v2 || "—"), M + colW + labelW + 4, rowY + 5, { width: valueW - 8, ellipsis: true });
     }
 
-    y += academicRows.length * (rowH + gap) + 10;
+    y += academicRows.length * (rowH + gap) + 8;
 
-    // ==================== RESIDENTIAL ADDRESS ====================
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#c9972b")
-      .text("▸ RESIDENTIAL ADDRESS", M + 5, y);
-    y += 18;
+    // ==================== ADDRESS ====================
+    doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#c9972b")
+      .text("RESIDENTIAL ADDRESS", M, y);
+    y += 16;
 
-    doc.rect(M + 5, y, PW - M * 2 - 10, 40).fillAndStroke("#f8fafc", "#c9972b");
-    doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
-      .text(fullAddress, M + 15, y + 13, { width: PW - M * 2 - 30 });
+    const addrText = fullAddress;
+    const addrHeight = Math.max(30, doc.heightOfString(addrText, { width: contentW - 20 }) + 14);
+    doc.rect(M, y, contentW, addrHeight).fillAndStroke("#f8fafc", "#c9972b");
+    doc.font("Helvetica").fontSize(9).fillColor("#1a2332")
+      .text(addrText, M + 8, y + 8, { width: contentW - 16 });
 
-    y += 55;
+    y += addrHeight + 8;
 
-    // ==================== PURPOSE LINE ====================
-    doc.rect(M + 5, y, PW - M * 2 - 10, 34).fillAndStroke("#fef8ed", "#c9972b");
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
-      .text("PURPOSE OF CERTIFICATE:", M + 18, y + 11, { continued: true });
-    doc.font("Helvetica-Bold").fillColor("#c9972b").text(" " + purpose.toUpperCase());
+    // ==================== PURPOSE ====================
+    doc.rect(M, y, contentW, 28).fillAndStroke("#fef8ed", "#c9972b");
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0d1b2a")
+      .text("PURPOSE OF CERTIFICATE: ", M + 10, y + 9, { continued: true });
+    doc.font("Helvetica-Bold").fillColor("#c9972b").text(purpose.toUpperCase());
 
-    y += 48;
+    y += 38;
 
     // ==================== CERTIFICATION TEXT ====================
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#c9972b")
-      .text("▸ CERTIFICATION", M + 5, y);
-    y += 18;
+    doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#c9972b")
+      .text("CERTIFICATION", M, y);
+    y += 16;
 
     const certText = `This is to certify that ${s.name}, son/daughter of Shri ${s.father_name || "—"} and Smt. ${s.mother_name || "—"}, is a bonafide student of Govt. Sr. Sec. School Shilla. He/She is currently studying in Class ${s.class}${isHigher ? " (" + streamDisplay + ")" : ""} with Roll Number ${s.roll_number || "—"} during the academic session ${s.session || "—"}. His/Her date of birth as per school records is ${fmtDate(s.dob)}.`;
 
-    const textHeight = doc.heightOfString(certText, { width: PW - M * 2 - 40 });
-    doc.rect(M + 5, y, PW - M * 2 - 10, textHeight + 20).fillAndStroke("#fffbeb", "#c9972b");
-    doc.font("Helvetica").fontSize(10.5).fillColor("#1a2332")
-      .text(certText, M + 18, y + 10, { width: PW - M * 2 - 36, align: "justify", lineGap: 3 });
+    const certHeight = doc.heightOfString(certText, { width: contentW - 24 }) + 18;
+    doc.rect(M, y, contentW, certHeight).fillAndStroke("#fffbeb", "#c9972b");
+    doc.font("Helvetica").fontSize(9.5).fillColor("#1a2332")
+      .text(certText, M + 12, y + 8, { width: contentW - 24, align: "justify", lineGap: 3 });
 
-    y += textHeight + 30;
+    y += certHeight + 15;
 
     // ==================== SIGNATURE AREA ====================
-    const sigY = PH - 170;
+    const sigAreaY = Math.max(y, PH - 140);
 
     // Date box (left)
-    doc.rect(M + 10, sigY, 165, 50).fillAndStroke("#fef8ed", "#c9972b");
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0d1b2a")
-      .text(fmtDateLong(issueDate), M + 10, sigY + 10, { width: 165, align: "center" });
-    doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
-      .text("DATE OF ISSUE", M + 10, sigY + 28, { width: 165, align: "center", characterSpacing: 1 });
-
-    // Principal signature (right)
-    const sigX = PW - M - 200;
-    if (principalBuf) {
-      try { doc.image(principalBuf, sigX + 40, sigY - 30, { width: 120, height: 60 }); } catch (e) {}
-    }
-    doc.moveTo(sigX, sigY + 35).lineTo(sigX + 180, sigY + 35).lineWidth(1.5).strokeColor("#0d1b2a").stroke();
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0d1b2a")
-      .text("Principal", sigX, sigY + 42, { width: 180, align: "center" });
-    doc.font("Helvetica").fontSize(8.5).fillColor("#5a6a7e")
-      .text("Govt. Sr. Sec. School Shilla", sigX, sigY + 57, { width: 180, align: "center" });
+    doc.rect(M, sigAreaY, 150, 42).fillAndStroke("#fef8ed", "#c9972b");
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
+      .text(fmtDateLong(issueDate), M, sigAreaY + 8, { width: 150, align: "center" });
+    doc.font("Helvetica").fontSize(7).fillColor("#475569")
+      .text("DATE OF ISSUE", M, sigAreaY + 25, { width: 150, align: "center", characterSpacing: 0.8 });
 
     // QR (center)
     if (qrBuf) {
       try {
-        doc.image(qrBuf, PW / 2 - 35, sigY - 15, { width: 70, height: 70 });
-        doc.font("Helvetica-Bold").fontSize(7).fillColor("#0d1b2a")
-          .text("SCAN TO VERIFY", PW / 2 - 50, sigY + 60, { width: 100, align: "center" });
+        doc.image(qrBuf, PW / 2 - 30, sigAreaY - 5, { width: 60, height: 60 });
+        doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#0d1b2a")
+          .text("SCAN TO VERIFY", PW / 2 - 45, sigAreaY + 58, { width: 90, align: "center" });
       } catch (e) {}
     }
 
+    // Principal signature (right)
+    const sigX = PW - M - 165;
+    if (principalBuf) {
+      try { doc.image(principalBuf, sigX + 30, sigAreaY - 25, { width: 105, height: 50 }); } catch (e) {}
+    }
+    doc.moveTo(sigX, sigAreaY + 30).lineTo(sigX + 165, sigAreaY + 30).lineWidth(1.2).strokeColor("#0d1b2a").stroke();
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
+      .text("Principal", sigX, sigAreaY + 35, { width: 165, align: "center" });
+    doc.font("Helvetica").fontSize(7.5).fillColor("#5a6a7e")
+      .text("Govt. Sr. Sec. School Shilla", sigX, sigAreaY + 49, { width: 165, align: "center" });
+
     // ==================== FOOTER ====================
-    const footerY = PH - 85;
+    const footerY = PH - 62;
 
-    // Security text line
-    doc.font("Helvetica-Bold").fontSize(7).fillColor("#cbd5e1")
-      .text("GSSS SHILLA OFFICIAL DOCUMENT | GSSS SHILLA OFFICIAL DOCUMENT | GSSS SHILLA OFFICIAL DOCUMENT", M + 5, footerY - 12, { width: PW - M * 2 - 10, align: "center", characterSpacing: 2 });
+    doc.font("Helvetica-Bold").fontSize(6).fillColor("#cbd5e1")
+      .text("GSSS SHILLA OFFICIAL DOCUMENT", 0, footerY - 10, { width: PW, align: "center", characterSpacing: 3 });
 
-    doc.moveTo(M + 5, footerY).lineTo(PW - M - 5, footerY).lineWidth(2).strokeColor("#c9972b").stroke();
+    doc.moveTo(M, footerY).lineTo(PW - M, footerY).lineWidth(1.5).strokeColor("#c9972b").stroke();
 
-    doc.font("Helvetica").fontSize(8).fillColor("#475569")
-      .text("Verification Code: ", M + 15, footerY + 8, { continued: true });
+    doc.font("Helvetica").fontSize(7.5).fillColor("#475569")
+      .text("Verification Code: ", M, footerY + 6, { continued: true });
     doc.font("Helvetica-Bold").fillColor("#c9972b").text(refNo);
 
     doc.font("Helvetica").fillColor("#475569")
-      .text("Issued on: ", M + 15, footerY + 22, { continued: true });
+      .text("Issued on: ", M, footerY + 18, { continued: true });
     doc.font("Helvetica-Bold").fillColor("#0d1b2a").text(fmtDateLong(issueDate));
 
-    doc.font("Helvetica-Oblique").fontSize(7).fillColor("#94a3b8")
-      .text("This is a computer-generated certificate issued by GSSS Shilla.", PW - M - 220, footerY + 8, { width: 215, align: "right" });
-
-    doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
-      .text("Page 1 of 1", PW - M - 220, footerY + 22, { width: 215, align: "right" });
+    doc.font("Helvetica-Oblique").fontSize(6.5).fillColor("#94a3b8")
+      .text("This is a computer-generated certificate", PW - M - 180, footerY + 6, { width: 180, align: "right" });
+    doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a")
+      .text("Page 1 of 1", PW - M - 180, footerY + 18, { width: 180, align: "right" });
 
     doc.end();
   } catch (err) {
