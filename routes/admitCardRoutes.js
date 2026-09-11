@@ -17,7 +17,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// ==================== MULTER (for admit card PDF upload) ====================
+// ==================== MULTER (admit card PDF upload) ====================
 const admitStorage = new CloudinaryStorage({
   cloudinary,
   params: (req, file) => {
@@ -49,7 +49,7 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-// ==================== ENSURE TABLE ====================
+// ==================== ENSURE TABLES ====================
 (async () => {
   try {
     await q(`
@@ -127,7 +127,7 @@ router.get("/class-students", requireAdmin, async (req, res) => {
 
     const rows = await q(
       `SELECT id, student_id, admission_number, name, father_name, mother_name,
-              roll_number, class, stream, section, session, gender, category,
+              roll_number, class, stream, session, gender, category,
               dob, aadhar_number, apaar_id, mobile_number, email_id,
               student_photo_url, village, post_office, tehsil, district, state, pincode, address
        FROM Nstudent
@@ -384,7 +384,6 @@ router.get("/student/:studentId/pdf/:publishId", async (req, res) => {
     const pdfUrl = p[0].admit_pdf_url;
     if (!pdfUrl) return res.status(404).json({ success: false, message: "PDF not uploaded" });
 
-    // Redirect to Cloudinary PDF
     res.redirect(pdfUrl);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
