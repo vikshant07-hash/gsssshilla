@@ -3,6 +3,8 @@ const router = express.Router();
 const multer = require("multer");
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const cloudinary = require("cloudinary").v2;
+const https = require("https");
+const http = require("http");
 
 const db = require("../config/db");
 const q = (sql, params = []) => db.query(sql, params);
@@ -23,7 +25,7 @@ const admitStorage = new CloudinaryStorage({
       folder: process.env.CLOUDINARY_ADMIT_FOLDER || "school/admit_cards",
       resource_type: "raw",
       allowed_formats: ["pdf"],
-      public_id: `admit-${uniqueSuffix}`
+      public_id: `admit-${uniqueSuffix}.pdf`
     };
   }
 });
@@ -41,7 +43,7 @@ const uploadAdmit = multer({
 const requireAdmin = (req, res, next) => {
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Bearer ")) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
+    return res.status(401).json({ success: false, message: "Unauthorized - admin token required" });
   }
   next();
 };
@@ -89,7 +91,7 @@ const requireAdmin = (req, res, next) => {
 })();
 
 // ============================================================
-// GET CLASS STUDENTS — FULL Nstudent data
+// GET CLASS STUDENTS
 // ============================================================
 router.get("/class-students", requireAdmin, async (req, res) => {
   try {
@@ -100,7 +102,6 @@ router.get("/class-students", requireAdmin, async (req, res) => {
     const params = [cls];
     if (session) { where.push("session = ?"); params.push(session); }
 
-    // Return ALL fields from Nstudent
     const rows = await q(
       `SELECT * FROM Nstudent
        WHERE ${where.join(" AND ")}
@@ -116,7 +117,7 @@ router.get("/class-students", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// CREATE — insert admit card record with PDF
+// CREATE — with PDF upload
 // ============================================================
 router.post("/create", requireAdmin, uploadAdmit.single("admitPdf"), async (req, res) => {
   try {
@@ -152,7 +153,7 @@ router.post("/create", requireAdmin, uploadAdmit.single("admitPdf"), async (req,
 });
 
 // ============================================================
-// LIST — all admit card records
+// LIST
 // ============================================================
 router.get("/list", requireAdmin, async (req, res) => {
   try {
@@ -179,7 +180,7 @@ router.get("/list", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// GET SINGLE — with students list (FULL data)
+// GET SINGLE with students
 // ============================================================
 router.get("/:id", requireAdmin, async (req, res) => {
   try {
@@ -227,7 +228,7 @@ router.delete("/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// PUBLISH — bulk or selected
+// PUBLISH
 // ============================================================
 router.post("/:id/publish", requireAdmin, async (req, res) => {
   try {
@@ -273,11 +274,7 @@ router.post("/:id/publish", requireAdmin, async (req, res) => {
       await q("UPDATE admit_card_publishes SET is_published = 1, published_at = NOW() WHERE id = ?", [id]);
     }
 
-    res.json({
-      success: true,
-      message: `Admit cards published for ${count} student(s) ✅`,
-      count
-    });
+    res.json({ success: true, message: `Admit cards published for ${count} student(s) ✅`, count });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -308,7 +305,7 @@ router.post("/:id/unpublish", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — public — own admit cards
+// STUDENT — list own admit cards (public)
 // ============================================================
 router.get("/student/:studentId/list", async (req, res) => {
   try {
@@ -329,23 +326,108 @@ router.get("/student/:studentId/list", async (req, res) => {
   }
 });
 
-router.get("/student/:studentId/pdf/:publishId", async (req, res) => {
+// ============================================================
+// STUDENT — get single admit card details (for preview modal)
+// ============================================================
+router.get("/student/:studentId/details/:publishId", async (req, res) => {
   try {
     const { studentId, publishId } = req.params;
+
     const check = await q(
       `SELECT * FROM admit_card_students WHERE admit_publish_id = ? AND student_id = ? AND is_enabled = 1`,
       [publishId, studentId]
     );
     if (!check.length) {
-      return res.status(403).json({ success: false, message: "Not available for you" });
+      return res.status(403).json({ success: false, message: "Admit card not available for you" });
     }
+
+    const p = await q("SELECT * FROM admit_card_publishes WHERE id = ?", [publishId]);
+    if (!p.length) return res.status(404).json({ success: false, message: "Not found" });
+
+    const s = await q("SELECT * FROM Nstudent WHERE student_id = ?", [studentId]);
+
+    res.json({
+      success: true,
+      admit: p[0],
+      student: s[0] || null,
+      roll_number: check[0].roll_number
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// STUDENT — stream admit PDF with proper content-type
+// ============================================================
+router.get("/student/:studentId/pdf/:publishId", async (req, res) => {
+  try {
+    const { studentId, publishId } = req.params;
+
+    const check = await q(
+      `SELECT * FROM admit_card_students WHERE admit_publish_id = ? AND student_id = ? AND is_enabled = 1`,
+      [publishId, studentId]
+    );
+    if (!check.length) {
+      return res.status(403).json({ success: false, message: "Admit card not available for you" });
+    }
+
+    const p = await q("SELECT * FROM admit_card_publishes WHERE id = ?", [publishId]);
+    if (!p.length) return res.status(404).json({ success: false, message: "Not found" });
+
+    const pdfUrl = p[0].admit_pdf_url;
+    if (!pdfUrl) return res.status(404).json({ success: false, message: "PDF not uploaded" });
+
+    // Stream PDF from Cloudinary with correct headers
+    const client = pdfUrl.startsWith("https") ? https : http;
+
+    client.get(pdfUrl, (streamRes) => {
+      if (streamRes.statusCode !== 200) {
+        return res.status(500).json({ success: false, message: "Failed to fetch PDF" });
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="admit-${studentId}-${publishId}.pdf"`);
+      res.setHeader("Cache-Control", "no-store");
+
+      streamRes.pipe(res);
+    }).on("error", (err) => {
+      console.error("❌ PDF stream error:", err);
+      if (!res.headersSent) res.status(500).json({ success: false, message: "Failed to download" });
+    });
+
+  } catch (err) {
+    console.error("❌ PDF route error:", err);
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ADMIN — direct PDF open (preview button)
+// ============================================================
+router.get("/admin/pdf/:publishId", requireAdmin, async (req, res) => {
+  try {
+    const { publishId } = req.params;
     const p = await q("SELECT * FROM admit_card_publishes WHERE id = ?", [publishId]);
     if (!p.length || !p[0].admit_pdf_url) {
       return res.status(404).json({ success: false, message: "PDF not found" });
     }
-    res.redirect(p[0].admit_pdf_url);
+
+    const pdfUrl = p[0].admit_pdf_url;
+    const client = pdfUrl.startsWith("https") ? https : http;
+
+    client.get(pdfUrl, (streamRes) => {
+      if (streamRes.statusCode !== 200) {
+        return res.status(500).json({ success: false, message: "Failed to fetch PDF" });
+      }
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="admit-${publishId}.pdf"`);
+      streamRes.pipe(res);
+    }).on("error", () => {
+      if (!res.headersSent) res.status(500).json({ success: false, message: "Failed" });
+    });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
   }
 });
 
