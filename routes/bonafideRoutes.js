@@ -30,14 +30,9 @@ const q = (sql, params = []) => db.query(sql, params);
       )
     `);
 
-    // Add columns if not exist (safe migration)
     const safeAdd = async (col, def) => {
-      try {
-        await q(`ALTER TABLE bonafide_certificates ADD COLUMN ${col} ${def}`);
-        console.log(`✅ Added column ${col}`);
-      } catch (e) {
-        // already exists
-      }
+      try { await q(`ALTER TABLE bonafide_certificates ADD COLUMN ${col} ${def}`); }
+      catch (e) { /* already exists */ }
     };
     await safeAdd("purpose", "VARCHAR(200) DEFAULT 'General Purpose'");
     await safeAdd("verification_code", "VARCHAR(40) DEFAULT NULL");
@@ -93,6 +88,8 @@ const generateCode = (studentId) => {
   return `GSSS-${hash.substring(0, 8).toUpperCase()}`;
 };
 
+const VERIFY_BASE = "https://gsssshilla07.pages.dev/verify-bonafide.html";
+
 // ============================================================
 // 🟢 PUBLIC — my-status
 // ============================================================
@@ -113,13 +110,12 @@ router.get("/my-status/:studentId", async (req, res) => {
       issuedDate: rows[0]?.issued_date || null
     });
   } catch (err) {
-    console.error("❌ my-status error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ============================================================
-// 🟢 PUBLIC — Professional Bonafide Certificate PDF
+// 🟢 PUBLIC — Professional Bonafide Certificate PDF (Single Page)
 // ============================================================
 router.get("/certificate/:studentId/pdf", async (req, res) => {
   try {
@@ -156,6 +152,22 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
     const isHigher = ["11","12"].includes(String(s.class));
     const streamDisplay = isHigher ? (s.stream || "—") : "Non-Specialized";
 
+    // Reference + date
+    const refNo = cert.verification_code || `GSSS-${studentId.substring(0, 8)}`;
+    const issueDate = cert.issued_date ? new Date(cert.issued_date) : new Date();
+    const purpose = cert.purpose || "General Purpose";
+
+    // Verification QR
+    const verificationUrl = `${VERIFY_BASE}?code=${encodeURIComponent(refNo)}&id=${encodeURIComponent(s.student_id)}`;
+    const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(verificationUrl)}`;
+    const qrBuf = await fetchImageBuffer(qrApiUrl);
+
+    // Logo + principal signature
+    const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
+    const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
+    const photoBuf = await fetchImageBuffer(s.student_photo_url);
+
+    // ==================== PDF ====================
     const doc = new PDFDocument({ size: "A4", margin: 0 });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="bonafide-${studentId}.pdf"`);
@@ -165,51 +177,58 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
     const PH = doc.page.height;
     const M = 40;
 
-    // ==================== OUTER GOLD BORDER ====================
+    // ---- OUTER GOLD BORDER ----
     doc.rect(20, 20, PW - 40, PH - 40).lineWidth(3).strokeColor("#c9972b").stroke();
     doc.rect(28, 28, PW - 56, PH - 56).lineWidth(1).strokeColor("#c9972b").stroke();
 
-    // ==================== WATERMARK ====================
+    // ---- WATERMARK ----
     doc.save();
-    doc.opacity(0.04);
+    doc.opacity(0.05);
     doc.fontSize(90).font("Helvetica-Bold").fillColor("#0d1b2a");
     doc.rotate(-45, { origin: [PW / 2, PH / 2] });
     doc.text("GSSS SHILLA", PW / 2 - 350, PH / 2 - 50, { width: 700, align: "center" });
     doc.restore();
 
-    // ==================== HEADER ====================
+    // ---- HEADER ----
     const headerY = 45;
 
-    const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     if (logoBuf) {
-      try { doc.image(logoBuf, M + 10, headerY, { width: 65, height: 65 }); } catch (e) {}
+      try { doc.image(logoBuf, M + 10, headerY, { width: 70, height: 70 }); } catch (e) {}
     }
 
     doc.font("Helvetica-Bold").fontSize(22).fillColor("#0d1b2a")
-      .text("GOVT. SR. SEC. SCHOOL SHILLA", M + 85, headerY + 5, { width: PW - M * 2 - 85, align: "center" });
+      .text("GOVT. SR. SEC. SCHOOL SHILLA", M + 90, headerY + 8, { width: PW - M * 2 - 90, align: "center" });
     doc.font("Helvetica").fontSize(10).fillColor("#5a6a7e")
-      .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", M + 85, headerY + 34, { width: PW - M * 2 - 85, align: "center" });
+      .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", M + 90, headerY + 36, { width: PW - M * 2 - 90, align: "center" });
     doc.font("Helvetica").fontSize(9).fillColor("#94a3b8")
-      .text("Affiliated to H.P. Board of School Education, Dharamshala", M + 85, headerY + 49, { width: PW - M * 2 - 85, align: "center" });
+      .text("Affiliated to H.P. Board of School Education, Dharamshala", M + 90, headerY + 51, { width: PW - M * 2 - 90, align: "center" });
 
     // Divider
-    doc.moveTo(M, 125).lineTo(PW - M, 125).lineWidth(2).strokeColor("#c9972b").stroke();
-    doc.moveTo(M, 129).lineTo(PW - M, 129).lineWidth(0.5).strokeColor("#c9972b").stroke();
+    doc.moveTo(M, 130).lineTo(PW - M, 130).lineWidth(2).strokeColor("#c9972b").stroke();
+    doc.moveTo(M, 134).lineTo(PW - M, 134).lineWidth(0.5).strokeColor("#c9972b").stroke();
 
-    // ==================== TITLE ====================
-    const titleBoxWidth = 260;
+    // ---- TITLE BOX ----
+    const titleBoxWidth = 280;
     const titleBoxX = (PW - titleBoxWidth) / 2;
-    doc.rect(titleBoxX, 145, titleBoxWidth, 32).fillAndStroke("#0d1b2a", "#c9972b");
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(15)
-      .text("BONAFIDE CERTIFICATE", titleBoxX, 154, { width: titleBoxWidth, align: "center", characterSpacing: 2 });
+    doc.rect(titleBoxX, 150, titleBoxWidth, 34).fillAndStroke("#0d1b2a", "#c9972b");
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(16)
+      .text("BONAFIDE CERTIFICATE", titleBoxX, 160, { width: titleBoxWidth, align: "center", characterSpacing: 2 });
 
-    // ==================== PHOTO ====================
-    const photoX = PW - M - 105;
+    // ---- REF NO + ISSUE DATE ----
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a");
+    doc.text("Ref No: ", M + 10, 200, { continued: true });
+    doc.font("Helvetica").fillColor("#c9972b").text(refNo);
+
+    doc.font("Helvetica-Bold").fillColor("#0d1b2a")
+      .text("Issue Date: ", M + 10, 218, { continued: true });
+    doc.font("Helvetica").fillColor("#c9972b").text(fmtDateLong(issueDate));
+
+    // ---- PHOTO (right side) ----
+    const photoX = PW - M - 110;
     const photoY = 195;
     const photoW = 90;
     const photoH = 110;
 
-    const photoBuf = await fetchImageBuffer(s.student_photo_url);
     if (photoBuf) {
       try {
         doc.rect(photoX - 3, photoY - 3, photoW + 6, photoH + 6).fillAndStroke("#ffffff", "#c9972b");
@@ -217,29 +236,17 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
       } catch (e) {}
     } else {
       doc.rect(photoX, photoY, photoW, photoH).fillAndStroke("#f8fafc", "#c9972b");
-      doc.fontSize(10).fillColor("#94a3b8").text("No Photo", photoX + 15, photoY + 50);
+      doc.fontSize(9).fillColor("#94a3b8").text("No Photo", photoX + 20, photoY + 50, { width: photoW - 40, align: "center" });
     }
     doc.fontSize(8).fillColor("#475569").font("Helvetica-Bold")
       .text("STUDENT PHOTO", photoX, photoY + photoH + 6, { width: photoW, align: "center" });
 
-    // ==================== REF + DATE ====================
-    const refNo = cert.verification_code || `GSSS-${studentId.substring(0, 8)}`;
-    const issueDate = cert.issued_date ? fmtDateLong(cert.issued_date) : fmtDateLong(new Date());
-
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a");
-    doc.text(`Ref No: `, M, 195, { continued: true });
-    doc.font("Helvetica").fillColor("#c9972b").text(refNo);
-
-    doc.font("Helvetica-Bold").fillColor("#0d1b2a")
-      .text(`Issue Date: `, M, 213, { continued: true });
-    doc.font("Helvetica").fillColor("#c9972b").text(issueDate);
-
-    // ==================== DETAILS TABLE ====================
-    let tblY = 245;
-    const labelW = 110;
-    const valueW = 190;
+    // ---- PERSONAL INFO TABLE ----
+    let tblY = 250;
+    const labelW = 105;
+    const valueW = 175;
     const rowH = 22;
-    const rowGap = 6;
+    const rowGap = 5;
 
     const rowsData = [
       ["Student ID", s.student_id, "Roll Number", s.roll_number || "—"],
@@ -259,79 +266,92 @@ router.get("/certificate/:studentId/pdf", async (req, res) => {
       const [l1, v1, l2, v2] = rowsData[i];
       const y = tblY + i * (rowH + rowGap);
 
+      // Left column
       doc.rect(leftX, y, labelW, rowH).fillAndStroke("#fef8ed", "#c9972b");
       doc.rect(leftX + labelW, y, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
-      doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0d1b2a")
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
         .text(l1.toUpperCase(), leftX + 6, y + 7, { width: labelW - 12 });
-      doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
+      doc.font("Helvetica").fontSize(9.5).fillColor("#1a2332")
         .text(String(v1 || "—"), leftX + labelW + 6, y + 6, { width: valueW - 12 });
 
+      // Right column
       doc.rect(rightX, y, labelW, rowH).fillAndStroke("#fef8ed", "#c9972b");
       doc.rect(rightX + labelW, y, valueW, rowH).fillAndStroke("#ffffff", "#e2e8f0");
-      doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0d1b2a")
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
         .text(l2.toUpperCase(), rightX + 6, y + 7, { width: labelW - 12 });
-      doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
+      doc.font("Helvetica").fontSize(9.5).fillColor("#1a2332")
         .text(String(v2 || "—"), rightX + labelW + 6, y + 6, { width: valueW - 12 });
     }
 
-    // ==================== ADDRESS ====================
+    // ---- ADDRESS BOX ----
     const addrY = tblY + rowsData.length * (rowH + rowGap) + 8;
-    doc.rect(leftX, addrY, PW - M * 2 - 20, 44).fillAndStroke("#f8fafc", "#c9972b");
-
-    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0d1b2a")
+    doc.rect(leftX, addrY, PW - M * 2 - 20, 42).fillAndStroke("#f8fafc", "#c9972b");
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
       .text("RESIDENTIAL ADDRESS", leftX + 8, addrY + 6);
     doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
-      .text(fullAddress, leftX + 8, addrY + 20, { width: PW - M * 2 - 40, height: 20, ellipsis: true });
+      .text(fullAddress, leftX + 8, addrY + 19, { width: PW - M * 2 - 40, height: 20, ellipsis: true });
 
-    // ==================== CERTIFICATION ====================
-    const textY = addrY + 60;
-    doc.rect(M + 10, textY, PW - M * 2 - 20, 130).fillAndStroke("#fffbeb", "#c9972b");
+    // ---- CERTIFICATION TEXT ----
+    const textY = addrY + 55;
+    doc.rect(M + 10, textY, PW - M * 2 - 20, 145).fillAndStroke("#fffbeb", "#c9972b");
 
     doc.font("Helvetica-Bold").fontSize(12).fillColor("#0d1b2a")
       .text("TO WHOMSOEVER IT MAY CONCERN", M + 10, textY + 12, { width: PW - M * 2 - 20, align: "center", characterSpacing: 1 });
 
     doc.moveTo(M + 80, textY + 32).lineTo(PW - M - 80, textY + 32).lineWidth(0.5).strokeColor("#c9972b").stroke();
 
-    const certText = `This is to certify that ${s.name}, son/daughter of Shri ${s.father_name || "—"} and Smt. ${s.mother_name || "—"}, is a bonafide student of Govt. Sr. Sec. School Shilla. He/She is currently studying in Class ${s.class}${isHigher ? " (" + streamDisplay + ")" : ""} with Roll Number ${s.roll_number || "—"} during the academic session ${s.session || "—"}. His/Her date of birth as per school records is ${fmtDate(s.dob)}. This certificate is being issued on the request of the student for ${cert.purpose || "General Purpose"}.`;
+    const certText = `This is to certify that ${s.name}, son/daughter of Shri ${s.father_name || "—"} and Smt. ${s.mother_name || "—"}, is a bonafide student of Govt. Sr. Sec. School Shilla. He/She is currently studying in Class ${s.class}${isHigher ? " (" + streamDisplay + ")" : ""} with Roll Number ${s.roll_number || "—"} during the academic session ${s.session || "—"}. His/Her date of birth as per school records is ${fmtDate(s.dob)}.`;
 
     doc.font("Helvetica").fontSize(11).fillColor("#1a2332")
-      .text(certText, M + 30, textY + 48, { width: PW - M * 2 - 60, align: "justify", lineGap: 4 });
+      .text(certText, M + 30, textY + 45, { width: PW - M * 2 - 60, align: "justify", lineGap: 4 });
 
-    // ==================== SIGNATURE ====================
+    // Purpose line
+    const purposeY = textY + 105;
+    doc.rect(M + 30, purposeY, PW - M * 2 - 60, 30).fillAndStroke("#ffffff", "#c9972b");
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
+      .text("PURPOSE: ", M + 40, purposeY + 10, { continued: true });
+    doc.font("Helvetica").fillColor("#c9972b").text(purpose.toUpperCase());
+
+    // ---- PRINCIPAL SIGNATURE ----
     const sigY = PH - 165;
+    const sigX = PW - M - 200;
 
-    // School seal
-    doc.circle(M + 70, sigY + 20, 42).lineWidth(2).strokeColor("#c9972b").stroke();
-    doc.circle(M + 70, sigY + 20, 36).lineWidth(0.5).strokeColor("#c9972b").stroke();
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
-      .text("SCHOOL SEAL", M + 30, sigY + 16, { width: 80, align: "center" });
-
-    // Principal signature
-    const sigX = PW - M - 210;
-
-    const principalSigBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
-    if (principalSigBuf) {
-      try { doc.image(principalSigBuf, sigX + 40, sigY - 25, { width: 120, height: 55 }); } catch (e) {}
+    if (principalBuf) {
+      try { doc.image(principalBuf, sigX + 40, sigY - 30, { width: 120, height: 60 }); } catch (e) {}
     }
 
-    doc.moveTo(sigX, sigY + 35).lineTo(sigX + 180, sigY + 35).lineWidth(1.5).strokeColor("#0d1b2a").stroke();
+    doc.moveTo(sigX, sigY + 38).lineTo(sigX + 180, sigY + 38).lineWidth(1.5).strokeColor("#0d1b2a").stroke();
     doc.font("Helvetica-Bold").fontSize(11).fillColor("#0d1b2a")
-      .text("Principal", sigX, sigY + 42, { width: 180, align: "center" });
+      .text("Principal", sigX, sigY + 45, { width: 180, align: "center" });
     doc.font("Helvetica").fontSize(9).fillColor("#5a6a7e")
-      .text("Govt. Sr. Sec. School Shilla", sigX, sigY + 58, { width: 180, align: "center" });
+      .text("Govt. Sr. Sec. School Shilla", sigX, sigY + 60, { width: 180, align: "center" });
 
-    // ==================== FOOTER ====================
+    // ---- SCHOOL SEAL PLACEHOLDER (left) ----
+    doc.circle(M + 80, sigY + 20, 45).lineWidth(2).strokeColor("#c9972b").stroke();
+    doc.circle(M + 80, sigY + 20, 38).lineWidth(0.5).strokeColor("#c9972b").stroke();
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
+      .text("SCHOOL SEAL", M + 40, sigY + 16, { width: 80, align: "center" });
+
+    // ---- QR CODE (bottom left) ----
+    if (qrBuf) {
+      try {
+        doc.image(qrBuf, M + 200, sigY - 5, { width: 70, height: 70 });
+        doc.font("Helvetica-Bold").fontSize(7).fillColor("#0d1b2a")
+          .text("SCAN TO VERIFY", M + 195, sigY + 70, { width: 80, align: "center" });
+      } catch (e) {}
+    }
+
+    // ---- FOOTER ----
     const footerY = PH - 75;
-
     doc.moveTo(M + 10, footerY).lineTo(PW - M - 10, footerY).lineWidth(0.5).strokeColor("#c9972b").stroke();
 
     doc.font("Helvetica").fontSize(8).fillColor("#64748b")
-      .text(`Verification Code: `, M + 15, footerY + 8, { continued: true });
+      .text("Verification Code: ", M + 15, footerY + 8, { continued: true });
     doc.font("Helvetica-Bold").fillColor("#c9972b").text(refNo);
 
     doc.font("Helvetica").fillColor("#64748b")
-      .text(`Issued on: `, M + 15, footerY + 22, { continued: true });
-    doc.font("Helvetica-Bold").fillColor("#0d1b2a").text(issueDate);
+      .text("Issued on: ", M + 15, footerY + 22, { continued: true });
+    doc.font("Helvetica-Bold").fillColor("#0d1b2a").text(fmtDateLong(issueDate));
 
     doc.font("Helvetica-Oblique").fontSize(7).fillColor("#94a3b8")
       .text("This is a computer-generated certificate issued by GSSS Shilla.", M + 15, footerY + 38, { width: PW - M * 2 - 30, align: "center" });
@@ -362,7 +382,6 @@ router.post("/status-bulk", requireAdmin, async (req, res) => {
     rows.forEach(r => { map[r.student_id] = !!r.is_enabled; });
     res.json({ success: true, map });
   } catch (err) {
-    console.error("❌ status-bulk error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -398,7 +417,6 @@ router.post("/enable", requireAdmin, async (req, res) => {
 
     res.json({ success: true, message: `Bonafide enabled for ${students[0].name} ✅` });
   } catch (err) {
-    console.error("❌ enable error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -420,7 +438,6 @@ router.post("/disable", requireAdmin, async (req, res) => {
 
     res.json({ success: true, message: `Bonafide disabled ✅` });
   } catch (err) {
-    console.error("❌ disable error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -457,7 +474,6 @@ router.post("/enable-class", requireAdmin, async (req, res) => {
 
     res.json({ success: true, message: `Bonafide enabled for ${count} students in Class ${cls} ✅`, count });
   } catch (err) {
-    console.error("❌ enable-class error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -488,7 +504,6 @@ router.post("/disable-class", requireAdmin, async (req, res) => {
 
     res.json({ success: true, message: `Bonafide disabled for ${count} students in Class ${cls}`, count });
   } catch (err) {
-    console.error("❌ disable-class error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
