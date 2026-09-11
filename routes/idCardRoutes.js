@@ -19,7 +19,7 @@ const SCHOOL = {
   name: "GOVT. SR. SEC. SCHOOL SHILLA",
 
   address:
-    "Shilla, Nerwa, Distt. Shimla, Himachal Pradesh - 171210",
+    "Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh - 171210",
 
   logoUrl:
     "https://gsssshilla07.pages.dev/logo(1).png",
@@ -1011,7 +1011,7 @@ function drawPrincipalSignature(
 ) {
 
   const signatureHeight =
-    17;
+    30;
 
 
   if (principalBuf) {
@@ -1095,7 +1095,7 @@ function drawStudentSignature(
 ) {
 
   const signatureHeight =
-    11;
+    18;
 
 
   if (signatureBuf) {
@@ -1812,7 +1812,7 @@ function drawBackCard(
   // ========================================
 
   const footerY =
-    y + H - 24;
+    y + H - 30;
 
 
   drawPrincipalSignature(
