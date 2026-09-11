@@ -103,6 +103,12 @@ const rules = () => [
   body("gender").isIn(["Male", "Female", "Other"]).withMessage("Gender required"),
   body("category").isIn(["General", "SC", "ST", "OBC", "EWS", "Other"]).withMessage("Category required"),
   body("address").trim().notEmpty().withMessage("Address required")
+  body("pincode").matches(/^\d{6}$/).withMessage("Pincode must be 6 digits"),
+body("village").trim().notEmpty().withMessage("Village/Town required"),
+body("postOffice").trim().notEmpty().withMessage("Post Office required"),
+body("tehsil").trim().notEmpty().withMessage("Tehsil required"),
+body("district").trim().notEmpty().withMessage("District required"),
+body("state").trim().notEmpty().withMessage("State required")
 ];
 
 const validate = (req, res, next) => {
@@ -144,6 +150,7 @@ const destroyAsset = async (publicId, url) => {
     console.error("❌ settings table create error:", err.message);
   }
 })();
+
 
 // ============================================================
 // GET ALL STUDENTS
