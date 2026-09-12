@@ -813,14 +813,14 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     }
 
     // ---- Certificate code — bottom-center, above footer ----
-    const certCodeY = innerBottomEdge - 30;
+    const certCodeY = innerBottomEdge - 50;
     doc.font("Courier-Bold").fontSize(11).fillColor(themePrimary)
       .text(certCode, 0, certCodeY, { width: PW, align: "center", characterSpacing: 3 });
     doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8")
       .text("Certificate ID", 0, certCodeY + 16, { width: PW, align: "center", characterSpacing: 1 });
 
     // ---- Footer text — INSIDE inner border, at very bottom ----
-    const footerY = contentY + contentH - 8; // 8px above border bottom
+    const footerY = contentY + contentH - 20; // 8px above border bottom
     doc.font("Helvetica-Oblique").fontSize(7).fillColor("#94a3b8")
       .text(`Issued on ${fmtDate(new Date())} • This is a computer-generated certificate issued by GSSS Shilla.`, 0, footerY, { width: PW, align: "center" });
 
