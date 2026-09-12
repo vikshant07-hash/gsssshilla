@@ -607,7 +607,7 @@ router.post("/student/submit/:attemptId", async (req, res) => {
 });
 
 // ============================================================
-// CERTIFICATE PDF — Professional, QR, Watermark, Patterns
+// CERTIFICATE PDF — Professional (Signature fixed at 10px from bottom border)
 // ============================================================
 router.get("/certificate/:attemptId/pdf", async (req, res) => {
   try {
@@ -624,25 +624,21 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     if (!events.length) return res.status(404).json({ success: false, message: "Event not found" });
     const event = events[0];
 
-    // Certificate code
     const certCode = generateCertCode(attempt.id, attempt.student_id);
-
-    // Determine pass/fail
     const passed = Number(attempt.percentage) >= Number(event.pass_percentage);
     const certTitle = passed ? "CERTIFICATE OF ACHIEVEMENT" : "CERTIFICATE OF PARTICIPATION";
 
-    // Colour theme — gradient colours
-    const themePrimary = passed ? "#0f766e" : "#7c2d12";     // Teal or Rust
-    const themeAccent = passed ? "#10b981" : "#f59e0b";      // Emerald or Amber
+    // Colour theme
+    const themePrimary = passed ? "#0f766e" : "#7c2d12";
+    const themeAccent = passed ? "#10b981" : "#f59e0b";
     const themeDark = "#0d1b2a";
     const themeGold = "#c9972b";
-    const themeLight = passed ? "#ecfdf5" : "#fffbeb";
 
     // Fetch assets
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
 
-    // QR code with verification URL
+    // QR code
     const verifyUrl = `https://gsssshilla07.pages.dev/verify-certificate.html?code=${encodeURIComponent(certCode)}&attempt=${attemptId}`;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(verifyUrl)}&color=0d1b2a&bgcolor=ffffff`;
     const qrBuf = await fetchImageBuffer(qrUrl);
@@ -657,14 +653,12 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     const PH = doc.page.height;  // ~595
 
     // ==================== BACKGROUND PATTERN ====================
-    // Soft diagonal stripes (colourful)
     doc.save();
     for (let i = -PH; i < PW + PH; i += 40) {
       doc.moveTo(i, 0).lineTo(i + PH, PH).lineWidth(0.4).strokeColor(passed ? "#d1fae5" : "#fef3c7").stroke();
     }
     doc.restore();
 
-    // Corner circle patterns (decorative)
     doc.save();
     doc.opacity(0.06);
     doc.circle(0, 0, 200).fill(themePrimary);
@@ -673,7 +667,6 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.circle(0, PH, 180).fill(themeAccent);
     doc.restore();
 
-    // Small dots pattern
     doc.save();
     doc.opacity(0.08);
     for (let x = 0; x < PW; x += 25) {
@@ -683,7 +676,7 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     }
     doc.restore();
 
-    // ==================== LOGO WATERMARK (CENTER) ====================
+    // ==================== LOGO WATERMARK ====================
     if (logoBuf) {
       doc.save();
       doc.opacity(0.06);
@@ -691,7 +684,7 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
       doc.restore();
     }
 
-    // Large text watermark
+    // Text watermark
     doc.save();
     doc.opacity(0.035);
     doc.fontSize(110).font("Times-BoldItalic").fillColor(themePrimary);
@@ -700,12 +693,10 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.restore();
 
     // ==================== OUTER BORDERS ====================
-    // Outer gradient border (multiple strokes for gradient effect)
     doc.rect(15, 15, PW - 30, PH - 30).lineWidth(6).strokeColor(themePrimary).stroke();
     doc.rect(22, 22, PW - 44, PH - 44).lineWidth(2).strokeColor(themeGold).stroke();
     doc.rect(28, 28, PW - 56, PH - 56).lineWidth(0.8).strokeColor(themeAccent).stroke();
 
-    // Corner decorative squares
     const cornerSize = 20;
     [ [22, 22], [PW - 22 - cornerSize, 22], [22, PH - 22 - cornerSize], [PW - 22 - cornerSize, PH - 22 - cornerSize] ]
       .forEach(([x, y]) => {
@@ -732,19 +723,17 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.font("Helvetica").fontSize(9).fillColor("#94a3b8")
       .text("Affiliated to H.P. Board of School Education, Dharamshala", 0, y, { width: PW, align: "center", characterSpacing: 1 });
 
-    // ==================== DIVIDER ====================
     y += 22;
     doc.moveTo(PW / 2 - 300, y).lineTo(PW / 2 + 300, y).lineWidth(2.5).strokeColor(themeGold).stroke();
     y += 5;
     doc.moveTo(PW / 2 - 300, y).lineTo(PW / 2 + 300, y).lineWidth(0.5).strokeColor(themeAccent).stroke();
 
-    // ==================== TITLE (with gradient-ish effect) ====================
+    // ==================== TITLE ====================
     y += 24;
     doc.font("Times-Bold").fontSize(34).fillColor(themePrimary)
       .text(certTitle, 0, y, { width: PW, align: "center", characterSpacing: 4 });
 
     y += 42;
-    // Subtitle with serif italic
     doc.font("Times-Italic").fontSize(15).fillColor("#5a6a7e")
       .text("This is proudly presented to", 0, y, { width: PW, align: "center" });
 
@@ -753,7 +742,6 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.font("Times-BoldItalic").fontSize(42).fillColor(themeDark)
       .text((attempt.student_name || "").toUpperCase(), 0, y, { width: PW, align: "center", characterSpacing: 1 });
 
-    // Gold underline
     y += 58;
     doc.moveTo(PW / 2 - 220, y).lineTo(PW / 2 + 220, y).lineWidth(1.5).strokeColor(themeGold).stroke();
 
@@ -769,31 +757,60 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.font("Times-Roman").fontSize(14).fillColor(themeDark)
       .text(certText, PW / 2 - 340, y, { width: 680, align: "center", lineGap: 6 });
 
-    // ==================== SIGNATURE SECTION ====================
-    const sigY = PH - 140;
+    // ==================== BOTTOM AREA — SIGNATURE + QR ====================
+    // Signature sits just ABOVE the bottom border line (border inner edge is at PH - 28)
+    // We place signature block so its bottom (label text) is ~10-15px above the border.
 
-    // Principal signature (only "Principal" text)
-    if (principalBuf) {
-      try { doc.image(principalBuf, PW / 2 + 130, sigY - 38, { width: 110, height: 55 }); } catch (e) {}
-    }
-    doc.moveTo(PW / 2 + 100, sigY + 22).lineTo(PW / 2 + 270, sigY + 22).lineWidth(1.5).strokeColor(themeDark).stroke();
-    doc.font("Times-Bold").fontSize(14).fillColor(themeDark)
-      .text("Principal", PW / 2 + 100, sigY + 30, { width: 170, align: "center" });
-
-    // ==================== QR CODE (bottom-left) ====================
+    // QR code (bottom-left) — 10px from left border, 10px from bottom border
     const qrSize = 90;
+    const qrMargin = 10;
+    const qrX = 28 + qrMargin;                 // inside inner gold border
+    const qrY = PH - 28 - qrMargin - qrSize;   // above bottom border
+
     if (qrBuf) {
-      doc.rect(60 - 3, sigY - 3, qrSize + 6, qrSize + 6).lineWidth(1.5).strokeColor(themeGold).stroke();
-      try { doc.image(qrBuf, 60, sigY, { width: qrSize, height: qrSize }); } catch (e) {}
+      doc.rect(qrX - 3, qrY - 3, qrSize + 6, qrSize + 6).lineWidth(1.5).strokeColor(themeGold).stroke();
+      try { doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize }); } catch (e) {}
     }
     doc.font("Helvetica-Bold").fontSize(8).fillColor(themeDark)
-      .text("SCAN TO VERIFY", 55, sigY + qrSize + 5, { width: qrSize + 10, align: "center", characterSpacing: 0.5 });
+      .text("SCAN TO VERIFY", qrX - 5, qrY + qrSize + 3, { width: qrSize + 10, align: "center", characterSpacing: 0.5 });
+
+    // Principal signature — positioned so that "Principal" label sits ~10px above bottom border
+    // Layout from bottom up:
+    //   bottom border (inner) : PH - 28
+    //   "Principal" label      : PH - 28 - 10 = PH - 38
+    //   signature line         : just above label, at PH - 46
+    //   signature image        : above the line, at PH - 46 - imageHeight
+
+    const sigLineY = PH - 46;        // dotted line y
+    const sigImgH = 40;              // signature image height
+    const sigImgW = 120;             // signature image width
+
+    const sigCenterX = PW - 200;     // horizontal center for principal block (right side)
+    const sigBoxW = 200;
+
+    // Signature image (fit within sigBoxW)
+    if (principalBuf) {
+      try {
+        doc.image(principalBuf, sigCenterX - sigImgW / 2, sigLineY - sigImgH + 3, {
+          fit: [sigImgW, sigImgH],
+          align: "center",
+          valign: "bottom"
+        });
+      } catch (e) {}
+    }
+
+    // Signature line
+    doc.moveTo(sigCenterX - 100, sigLineY).lineTo(sigCenterX + 100, sigLineY).lineWidth(1.5).strokeColor(themeDark).stroke();
+
+    // "Principal" text — sits just below the line, 10px above bottom border
+    doc.font("Times-Bold").fontSize(14).fillColor(themeDark)
+      .text("Principal", sigCenterX - 100, sigLineY + 4, { width: 200, align: "center" });
 
     // ==================== CERTIFICATE CODE (bottom-center) ====================
     doc.font("Courier-Bold").fontSize(11).fillColor(themePrimary)
-      .text(certCode, 0, sigY + 25, { width: PW, align: "center", characterSpacing: 2 });
+      .text(certCode, 0, PH - 70, { width: PW, align: "center", characterSpacing: 2 });
     doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
-      .text("Certificate ID", 0, sigY + 42, { width: PW, align: "center", characterSpacing: 1 });
+      .text("Certificate ID", 0, PH - 54, { width: PW, align: "center", characterSpacing: 1 });
 
     // ==================== FOOTER ====================
     doc.font("Helvetica-Oblique").fontSize(7.5).fillColor("#94a3b8")
@@ -806,27 +823,19 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
   }
 });
 
-
 // ============================================================
 // PUBLIC — Verify by attempt ID
 // ============================================================
 router.get("/verify/attempt/:attemptId", async (req, res) => {
   try {
     const { attemptId } = req.params;
-
     const attempts = await q("SELECT * FROM quiz_attempts WHERE id = ?", [attemptId]);
-    if (!attempts.length) {
-      return res.status(404).json({ success: false, message: "Certificate not found" });
-    }
+    if (!attempts.length) return res.status(404).json({ success: false, message: "Certificate not found" });
     const attempt = attempts[0];
-
-    if (attempt.status === "InProgress") {
-      return res.status(400).json({ success: false, message: "Certificate not yet issued" });
-    }
+    if (attempt.status === "InProgress") return res.status(400).json({ success: false, message: "Certificate not yet issued" });
 
     const events = await q("SELECT * FROM quiz_events WHERE id = ?", [attempt.event_id]);
     const event = events.length ? events[0] : {};
-
     const students = await q("SELECT student_id, name, class, father_name, mother_name, student_photo_url FROM Nstudent WHERE student_id = ?", [attempt.student_id]);
     const student = students.length ? students[0] : null;
 
@@ -845,52 +854,32 @@ router.get("/verify/attempt/:attemptId", async (req, res) => {
         submitted_at: attempt.submitted_at,
         started_at: attempt.started_at
       },
-      event: {
-        id: event.id,
-        title: event.title,
-        pass_percentage: event.pass_percentage
-      },
+      event: { id: event.id, title: event.title, pass_percentage: event.pass_percentage },
       student
     });
   } catch (err) {
-    console.error("❌ verify attempt error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ============================================================
-// PUBLIC — Verify by certificate code
-// (e.g. GSSS-QZ-XXXXX)
+// PUBLIC — Verify by code
 // ============================================================
 router.get("/verify/code/:code", async (req, res) => {
   try {
     const { code } = req.params;
-
-    // Since we generate code deterministically, we search by matching format
-    // For now, try to match by parsing attempt id from code suffix, or by direct lookup
-    // Simpler: search any attempt whose generated code matches.
-
-    // Generate a code from any recent attempt and compare — quick way is to
-    // scan recent attempts (limit 500) and match the code.
     const attempts = await q(
-      `SELECT * FROM quiz_attempts 
-       WHERE status IN ('Submitted','AutoSubmitted')
-       ORDER BY id DESC LIMIT 500`
+      `SELECT * FROM quiz_attempts WHERE status IN ('Submitted','AutoSubmitted') ORDER BY id DESC LIMIT 500`
     );
-
     let matched = null;
     for (const a of attempts) {
       const expected = generateCertCode(a.id, a.student_id);
       if (expected === code) { matched = a; break; }
     }
-
-    if (!matched) {
-      return res.status(404).json({ success: false, message: "Certificate code not found" });
-    }
+    if (!matched) return res.status(404).json({ success: false, message: "Certificate code not found" });
 
     const events = await q("SELECT * FROM quiz_events WHERE id = ?", [matched.event_id]);
     const event = events.length ? events[0] : {};
-
     const students = await q("SELECT student_id, name, class, father_name, mother_name, student_photo_url FROM Nstudent WHERE student_id = ?", [matched.student_id]);
     const student = students.length ? students[0] : null;
 
@@ -909,15 +898,10 @@ router.get("/verify/code/:code", async (req, res) => {
         submitted_at: matched.submitted_at,
         started_at: matched.started_at
       },
-      event: {
-        id: event.id,
-        title: event.title,
-        pass_percentage: event.pass_percentage
-      },
+      event: { id: event.id, title: event.title, pass_percentage: event.pass_percentage },
       student
     });
   } catch (err) {
-    console.error("❌ verify code error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
