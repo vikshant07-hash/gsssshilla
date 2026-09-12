@@ -287,19 +287,55 @@ function drawPhotoPlaceholder(doc, x, y, w, h) {
 const SIG_IMG_H = 18;      // fixed height for signature image box
 const SIG_LABEL_H = 7.5;   // height reserved for the name line + label
 
+
+// ============================================================
+// PRINCIPAL SIGNATURE
+// ------------------------------------------------------------
+// Layout (top → bottom):
+//   [ Signature Image ]   ← upar, overlap kar sakti hai
+//   [ Principal       ]   ← FIXED position (line ke just upar)
+//   ─────────────────     ← line (bottom, FIXED)
+//
+// "Principal" text ALWAYS stays fixed and is drawn AFTER the
+// image, so it remains visible even if the signature overlaps it.
+// ============================================================
 function drawPrincipalSignature(doc, principalBuf, x, y, width = 78) {
-  const imgH = SIG_IMG_H;
-  const imgW = width;
+  const labelFontSize = 5.4;
+  const labelH = 7;            // height reserved for "Principal" text
+  const lineGap = 1.5;         // gap between label and line
 
-  // Draw image strictly inside the box (clipped)
-  drawImageInBox(doc, principalBuf, x, y, imgW, imgH);
+  // ---- FIXED positions (never change based on image) ----
+  const lineY = y + SIG_IMG_H + labelH + lineGap;   // signature line (bottom)
+  const labelY = lineY - labelH - 0.5;              // "Principal" label
 
-  const lineY = y + imgH + 1.5;
-  doc.moveTo(x, lineY).lineTo(x + width, lineY).lineWidth(0.6).strokeColor(THEME.muted).stroke();
-  doc.font("Helvetica-Bold").fontSize(5.4).fillColor(THEME.dark)
-    .text("Principal", x, lineY + 1.2, { width, align: "center", lineBreak: false });
+  // 1. Signature image — drawn FIRST, clipped inside a box that may
+  //    overlap the label area. Image is drawn so its bottom sits
+  //    just above the line (or slightly over it — see `imgBottom`).
+  const imgBottom = lineY + 4;   // image may extend a bit past the line
+  const imgTop = y;
+  const imgBoxH = imgBottom - imgTop;
 
-  return lineY + 1.2 + SIG_LABEL_H;
+  drawImageInBox(doc, principalBuf, x, imgTop, width, imgBoxH, {
+    valign: "bottom"   // pin image to the bottom of the box (near line)
+  });
+
+  // 2. "Principal" label — drawn AFTER image, so it always stays visible
+  //    (text sits ON TOP of any overlapping signature pixels)
+  doc.font("Helvetica-Bold").fontSize(labelFontSize).fillColor(THEME.white);
+  // White halo/background behind text so it stays readable over signature
+  doc.save();
+  doc.opacity(0.9);
+  doc.rect(x + width / 2 - 20, labelY - 0.5, 40, labelH + 1).fill(THEME.white);
+  doc.restore();
+
+  doc.font("Helvetica-Bold").fontSize(labelFontSize).fillColor(THEME.dark)
+    .text("Principal", x, labelY, { width, align: "center", lineBreak: false });
+
+  // 3. Signature line — drawn LAST so it stays crisp over the image
+  doc.moveTo(x, lineY).lineTo(x + width, lineY)
+    .lineWidth(0.6).strokeColor(THEME.muted).stroke();
+
+  return lineY + 5;
 }
 
 function drawStudentSignature(doc, signatureBuf, x, y, width) {
