@@ -31,8 +31,7 @@ const CARD_W = 243;
 const CARD_H = 153;
 
 // ============================================================
-// A4 PAGE SETTINGS — 5 cards per sheet, front+back side by side,
-// with dashed cut-guides + corner cut-marks so nothing is wasted.
+// A4 PAGE SETTINGS — 5 rows (front+back) per A4 portrait sheet
 // ============================================================
 const GAP_COL = 12;
 const GAP_ROW = 8;
@@ -42,7 +41,7 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const IMAGE_TIMEOUT = 10000;
 
 // ============================================================
-// COLOR THEME — deep navy/royal-blue gradient + rich gold accents
+// COLOR THEME
 // ============================================================
 const THEME = {
   navyDeep: "#0B1740",
@@ -136,7 +135,7 @@ function fitText(doc, text, maxWidth, startSize = 6.6, minSize = 4.8) {
 }
 
 // ============================================================
-// CUT MARKS (corner ticks) — printed just outside every card edge
+// CUT MARKS
 // ============================================================
 function drawCutMarks(doc, x, y, w, h, len = 7, offset = 3) {
   doc.save();
@@ -153,7 +152,7 @@ function drawCutMarks(doc, x, y, w, h, len = 7, offset = 3) {
 }
 
 // ============================================================
-// CARD FRAME — subtle gradient wash + gold hairline + accent bar
+// CARD FRAME
 // ============================================================
 function drawCardFrame(doc, x, y) {
   const W = CARD_W, H = CARD_H;
@@ -165,14 +164,12 @@ function drawCardFrame(doc, x, y) {
 
   doc.roundedRect(x + 2.5, y + 2.5, W - 5, H - 5, 7).lineWidth(0.8).strokeColor(THEME.goldStart).stroke();
 
-  // Faint watermark emblem — school initials, very low opacity, behind content
   doc.save();
   doc.opacity(0.05);
   doc.font("Helvetica-Bold").fontSize(58).fillColor(THEME.blueStart)
     .text("GSSS", x, y + H / 2 - 30, { width: W, align: "center" });
   doc.restore();
 
-  // Left accent bar
   const bar = doc.linearGradient(x, y, x, y + H);
   bar.stop(0, THEME.goldEnd).stop(1, THEME.goldStart);
   doc.roundedRect(x + 2.5, y + 2.5, 4, H - 5, 2).fill(bar);
@@ -195,7 +192,11 @@ function drawHeader(doc, x, y, logoBuf) {
       doc.save();
       doc.circle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2 + 1.5).fill(THEME.white);
       doc.restore();
+      // Clip logo strictly inside its circle-box
+      doc.save();
+      doc.rect(logoX, logoY, logoSize, logoSize).clip();
       doc.image(logoBuf, logoX, logoY, { fit: [logoSize, logoSize], align: "center", valign: "center" });
+      doc.restore();
     } catch (err) {}
   }
 
@@ -208,7 +209,7 @@ function drawHeader(doc, x, y, logoBuf) {
 }
 
 // ============================================================
-// BADGE (ribbon under header)
+// BADGE
 // ============================================================
 function drawBadge(doc, x, y, text) {
   doc.font("Helvetica-Bold").fontSize(6.4);
@@ -227,16 +228,40 @@ function drawBadge(doc, x, y, text) {
 }
 
 // ============================================================
+// GENERIC CLIPPED IMAGE DRAWER
+// ------------------------------------------------------------
+// Draws an image STRICTLY inside the given box. Even if the source
+// image is huge, it will be scaled to fit and clipped so it can
+// never spill over surrounding text or outside the card.
+// ============================================================
+function drawImageInBox(doc, imgBuf, bx, by, bw, bh, opts = {}) {
+  if (!imgBuf || bw <= 0 || bh <= 0) return false;
+  try {
+    doc.save();
+    doc.rect(bx, by, bw, bh).clip();
+    doc.image(imgBuf, bx, by, {
+      fit: [bw, bh],
+      align: opts.align || "center",
+      valign: opts.valign || "center"
+    });
+    doc.restore();
+    return true;
+  } catch (err) {
+    try { doc.restore(); } catch (_) {}
+    return false;
+  }
+}
+
+// ============================================================
 // PHOTO
 // ============================================================
 function drawStudentPhoto(doc, photoBuf, x, y) {
   const photoW = 56, photoH = 60;
   doc.rect(x - 2, y - 2, photoW + 4, photoH + 4).fillAndStroke(THEME.white, THEME.goldStart);
   doc.lineWidth(0.9);
-  if (photoBuf) {
-    try { doc.image(photoBuf, x, y, { fit: [photoW, photoH], align: "center", valign: "center" }); }
-    catch (err) { drawPhotoPlaceholder(doc, x, y, photoW, photoH); }
-  } else {
+
+  const drawn = drawImageInBox(doc, photoBuf, x, y, photoW, photoH);
+  if (!drawn) {
     drawPhotoPlaceholder(doc, x, y, photoW, photoH);
   }
   return { photoW, photoH };
@@ -250,38 +275,49 @@ function drawPhotoPlaceholder(doc, x, y, w, h) {
 
 // ============================================================
 // SIGNATURES
+// ------------------------------------------------------------
+// Both signatures are drawn inside a small FIXED-HEIGHT clipped box.
+// The image is scaled down to fit inside this box and clipped so
+// it can NEVER overlap the text or bleed outside the card.
+//
+// Return value = the Y coordinate of the BOTTOM of the block, so
+// the caller can place things beneath it safely.
 // ============================================================
-// y = TOP of the block (not the line) — everything lays out downward
-// from here so it can never bleed into content drawn above it.
-function drawPrincipalSignature(doc, principalBuf, x, y, width = 104) {
-  const imgH = 40;
-  if (principalBuf) {
-    try { doc.image(principalBuf, x + 6, y, { fit: [width - 12, imgH], align: "center", valign: "bottom" }); }
-    catch (err) {}
-  }
+
+const SIG_IMG_H = 18;      // fixed height for signature image box
+const SIG_LABEL_H = 7.5;   // height reserved for the name line + label
+
+function drawPrincipalSignature(doc, principalBuf, x, y, width = 78) {
+  const imgH = SIG_IMG_H;
+  const imgW = width;
+
+  // Draw image strictly inside the box (clipped)
+  drawImageInBox(doc, principalBuf, x, y, imgW, imgH);
+
   const lineY = y + imgH + 1.5;
   doc.moveTo(x, lineY).lineTo(x + width, lineY).lineWidth(0.6).strokeColor(THEME.muted).stroke();
-  doc.font("Helvetica-Bold").fontSize(5.6).fillColor(THEME.dark)
-    .text("Principal", x, lineY + 1.3, { width, align: "center" });
-  return lineY + 1.3 + 6.5; // bottom Y actually used
+  doc.font("Helvetica-Bold").fontSize(5.4).fillColor(THEME.dark)
+    .text("Principal", x, lineY + 1.2, { width, align: "center", lineBreak: false });
+
+  return lineY + 1.2 + SIG_LABEL_H;
 }
 
 function drawStudentSignature(doc, signatureBuf, x, y, width) {
-  const imgH = 40;
-  if (signatureBuf) {
-    try { doc.image(signatureBuf, x + 2, y, { fit: [width - 4, imgH], align: "center", valign: "bottom" }); }
-    catch (err) {}
-  }
+  const imgH = SIG_IMG_H;
+  const imgW = width - 4;
+
+  drawImageInBox(doc, signatureBuf, x + 2, y, imgW, imgH);
+
   const lineY = y + imgH + 1.5;
   doc.moveTo(x + 2, lineY).lineTo(x + width - 2, lineY).lineWidth(0.5).strokeColor(THEME.muted).stroke();
-  doc.font("Helvetica").fontSize(4.6).fillColor(THEME.muted)
-    .text("Student Signature", x, lineY + 1.2, { width, align: "center" });
-  return lineY + 1.2 + 5.5; // bottom Y actually used
+  doc.font("Helvetica").fontSize(4.4).fillColor(THEME.muted)
+    .text("Student Signature", x, lineY + 1.1, { width, align: "center", lineBreak: false });
+
+  return lineY + 1.1 + SIG_LABEL_H;
 }
 
 // ============================================================
-// INFO ROW — one label:value pair. Pass a narrower `width` and
-// pair two calls on the same y to get "2 fields per line".
+// INFO ROW
 // ============================================================
 function drawInfoRow(doc, x, y, width, label, value, opts = {}) {
   const labelW = opts.labelW || 46;
@@ -301,14 +337,16 @@ function drawInfoRow(doc, x, y, width, label, value, opts = {}) {
 }
 
 // ============================================================
-// INSTRUCTIONS BOX — fills the space freed up on the back by
-// removing the (duplicate) principal signature from that side.
+// INSTRUCTIONS BOX (back side, fills space freed by removing
+// duplicate principal signature)
 // ============================================================
 function drawInstructionsBox(doc, x, y, width, height) {
+  if (height < 18) height = 18;
+
   doc.roundedRect(x, y, width, height, 4).fillAndStroke(THEME.light, THEME.border).lineWidth(0.5);
 
   doc.font("Helvetica-Bold").fontSize(5.4).fillColor(THEME.danger)
-    .text("IMPORTANT INSTRUCTIONS", x + 6, y + 2.5, { width: width - 12 });
+    .text("IMPORTANT INSTRUCTIONS", x + 6, y + 2.5, { width: width - 12, lineBreak: false });
 
   const rules = [
     "Property of the school — carry daily in school premises.",
@@ -318,14 +356,15 @@ function drawInstructionsBox(doc, x, y, width, height) {
 
   let ry = y + 10.5;
   rules.forEach((rule) => {
-    doc.font("Helvetica-Bold").fontSize(4.5).fillColor(THEME.dark).text("•", x + 6, ry, { width: 6 });
+    if (ry + 7 > y + height - 6) return; // don't spill outside box
+    doc.font("Helvetica-Bold").fontSize(4.5).fillColor(THEME.dark).text("•", x + 6, ry, { width: 6, lineBreak: false });
     doc.font("Helvetica").fontSize(4.5).fillColor(THEME.text)
-      .text(rule, x + 12, ry, { width: width - 18 });
+      .text(rule, x + 12, ry, { width: width - 18, lineBreak: false });
     ry += 6.5;
   });
 
   doc.font("Helvetica").fontSize(4.2).fillColor(THEME.muted)
-    .text(`Issued: ${getTodayIndia()}   •   Helpline: ${SCHOOL.helpline}`, x + 6, y + height - 7, { width: width - 12 });
+    .text(`Issued: ${getTodayIndia()}   •   Helpline: ${SCHOOL.helpline}`, x + 6, y + height - 7, { width: width - 12, lineBreak: false });
 }
 
 // ============================================================
@@ -339,16 +378,21 @@ function drawFrontCard(doc, x, y, student, buffers) {
   drawBadge(doc, x, badgeY, "Student ID Card");
   const contentY = badgeY + 16;
 
-  // Photo + student signature (right column)
+  // ---- Right column: photo + student signature + valid upto ----
   const photoX = x + W - 66, photoY = contentY;
   const photo = drawStudentPhoto(doc, buffers.photoBuf, photoX, photoY);
-  const rightBottom = drawStudentSignature(doc, buffers.signatureBuf, photoX - 3, photoY + photo.photoH + 4, photo.photoW + 6);
 
-  // "Valid Upto" sits under the student signature, in the same right column
-  doc.font("Helvetica").fontSize(4.6).fillColor(THEME.muted)
-    .text("Valid Upto: " + sessionValidUpto(student.session), photoX - 3, rightBottom + 2, { width: photo.photoW + 6, align: "center" });
+  // Student signature is placed BELOW the photo, strictly clipped
+  const sigTop = photoY + photo.photoH + 3;
+  const sigBottom = drawStudentSignature(doc, buffers.signatureBuf, photoX - 3, sigTop, photo.photoW + 6);
 
-  // Detail rows (left column)
+  // Valid upto sits under the student signature (same right column)
+  doc.font("Helvetica").fontSize(4.4).fillColor(THEME.muted)
+    .text("Valid Upto: " + sessionValidUpto(student.session),
+      photoX - 3, sigBottom + 0.5,
+      { width: photo.photoW + 6, align: "center", lineBreak: false });
+
+  // ---- Left column: detail rows ----
   const infoX = x + 10;
   const infoW = photoX - infoX - 8;
   const rowH = 11.5;
@@ -362,13 +406,11 @@ function drawFrontCard(doc, x, y, student, buffers) {
   drawInfoRow(doc, infoX, ry, infoW, "Mother", student.mother_name, { labelW: 42 });
   ry += rowH;
 
-  // Two fields per line: D.O.B. | Class
   const halfW = (infoW - 8) / 2;
   drawInfoRow(doc, infoX, ry, halfW, "D.O.B.", fmtDate(student.dob), { labelW: 32, fontSize: 6.2 });
   drawInfoRow(doc, infoX + halfW + 8, ry, halfW, "Class", `${student.class || "—"}${streamSuffix}`, { labelW: 32, fontSize: 6.2 });
   ry += rowH;
 
-  // Two fields per line: Roll No. | Student ID
   drawInfoRow(doc, infoX, ry, halfW, "Roll No.", student.roll_number, { labelW: 32, fontSize: 6.2 });
   drawInfoRow(doc, infoX + halfW + 8, ry, halfW, "Stud. ID", student.student_id, { labelW: 32, fontSize: 6.2 });
   ry += rowH;
@@ -376,15 +418,15 @@ function drawFrontCard(doc, x, y, student, buffers) {
   drawInfoRow(doc, infoX, ry, infoW, "Session", student.session, { labelW: 42 });
   ry += rowH;
 
-  // Footer — Principal signature (front side ONLY; back side uses the
-  // freed space for the instructions box instead)
-  const footerY = ry + 4;
+  // ---- Footer: principal signature ----
+  // Compute bottom limit for the signature block so it always
+  // stays well inside the card.
+  const footerY = Math.min(ry + 3, y + H - 26);
   drawPrincipalSignature(doc, buffers.principalBuf, x + 10, footerY, 78);
 }
 
 // ============================================================
-// BACK CARD — no principal signature here; the freed space is
-// used for the instructions box instead.
+// BACK CARD
 // ============================================================
 function drawBackCard(doc, x, y, student, buffers) {
   const W = CARD_W, H = CARD_H;
@@ -394,20 +436,20 @@ function drawBackCard(doc, x, y, student, buffers) {
   drawBadge(doc, x, badgeY, "Address & Verification");
   const contentY = badgeY + 16;
 
+  // ---- Right column: QR ----
   const qrSize = 42;
   const qrX = x + W - qrSize - 10;
   const qrY = contentY;
 
   if (buffers.qrBuf) {
-    try {
-      doc.rect(qrX - 2, qrY - 2, qrSize + 4, qrSize + 4).fillAndStroke(THEME.white, THEME.goldStart).lineWidth(0.9);
-      doc.image(buffers.qrBuf, qrX, qrY, { fit: [qrSize, qrSize] });
-    } catch (err) {}
+    doc.rect(qrX - 2, qrY - 2, qrSize + 4, qrSize + 4).fillAndStroke(THEME.white, THEME.goldStart).lineWidth(0.9);
+    drawImageInBox(doc, buffers.qrBuf, qrX, qrY, qrSize, qrSize);
   }
   doc.font("Helvetica-Bold").fontSize(4.4).fillColor(THEME.dark)
-    .text("SCAN TO VERIFY", qrX - 6, qrY + qrSize + 3, { width: qrSize + 12, align: "center" });
+    .text("SCAN TO VERIFY", qrX - 6, qrY + qrSize + 3, { width: qrSize + 12, align: "center", lineBreak: false });
   const qrColumnBottom = qrY + qrSize + 3 + 6;
 
+  // ---- Left column: info rows ----
   const infoX = x + 10;
   const infoRight = qrX - 10;
   const infoW = infoRight - infoX;
@@ -433,11 +475,8 @@ function drawBackCard(doc, x, y, student, buffers) {
   drawInfoRow(doc, infoX + halfW + 8, row3Y, halfW, "APAAR ID", student.apaar_id, { labelW: 34, fontSize: 6.2 });
   const rowsColumnBottom = row3Y + 11;
 
-  // Instructions box fills whatever is left below — this is the space
-  // that used to hold a (redundant) second principal signature. Its
-  // top is computed from whichever column (QR or the info rows)
-  // finishes lower, so it can never overlap either one.
-  const boxY = Math.max(qrColumnBottom, rowsColumnBottom) + 4;
+  // ---- Instructions box fills the space below ----
+  const boxY = Math.max(qrColumnBottom, rowsColumnBottom) + 3;
   const boxHeight = y + H - 6 - boxY;
   drawInstructionsBox(doc, x + 8, boxY, W - 16, boxHeight);
 }
@@ -457,7 +496,7 @@ async function buildBuffersFor(student, sharedLogoBuf, sharedPrincipalBuf) {
 }
 
 // ============================================================
-// PAGE METRICS — 5 rows (front+back) per A4 portrait sheet
+// PAGE METRICS
 // ============================================================
 function pageMetrics(doc) {
   const PW = doc.page.width, PH = doc.page.height;
@@ -470,7 +509,7 @@ function pageMetrics(doc) {
 
 function drawPageFooter(doc, text) {
   const { PW, PH } = pageMetrics(doc);
-  doc.font("Helvetica").fontSize(5.5).fillColor("#94A3B8").text(text, 0, PH - 11, { width: PW, align: "center" });
+  doc.font("Helvetica").fontSize(5.5).fillColor("#94A3B8").text(text, 0, PH - 11, { width: PW, align: "center", lineBreak: false });
 }
 
 function drawPageGuides(doc) {
@@ -488,7 +527,7 @@ function drawPageGuides(doc) {
 }
 
 // ============================================================
-// RENDER A FULL SET OF STUDENTS (paginated, 5 per sheet)
+// RENDER FULL SET
 // ============================================================
 async function renderStudentsGrid(doc, students, sharedLogoBuf, sharedPrincipalBuf, footerText) {
   let metrics = pageMetrics(doc);
@@ -596,10 +635,7 @@ router.get("/generate-class/:class/pdf", async (req, res) => {
 });
 
 // ============================================================
-// ROUTE — SELECTED STUDENTS TOGETHER (any mix, any class)
-// Accepts either:
-//   GET  /generate-selected/pdf?ids=ID1,ID2,ID3
-//   POST /generate-selected/pdf   body: { "ids": ["ID1","ID2","ID3"] }
+// ROUTE — SELECTED STUDENTS (any mix)
 // ============================================================
 async function handleSelected(req, res) {
   try {
@@ -625,7 +661,6 @@ async function handleSelected(req, res) {
       return res.status(404).json({ success: false, message: "No matching students found" });
     }
 
-    // Preserve the order the caller selected them in
     const order = new Map(ids.map((id, idx) => [id, idx]));
     students.sort((a, b) => (order.get(String(a.student_id)) ?? 0) - (order.get(String(b.student_id)) ?? 0));
 
