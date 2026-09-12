@@ -105,8 +105,7 @@ router.post("/events", requireAdmin, async (req, res) => {
 
     if (!title || !cls) return res.status(400).json({ success: false, message: "Title and class required" });
     if (!durationMinutes || durationMinutes < 1) return res.status(400).json({ success: false, message: "Duration required" });
-    if (!totalQuestions || totalQuestions < 20) return res.status(400).json({ success: false, message: "At least 20 questions required" });
-
+    if (!totalQuestions || totalQuestions < 3) return res.status(400).json({ success: false, message: "At least 3 questions required" });
     const streamVal = ["11","12"].includes(String(cls)) ? (stream || "Non-Specialized") : "Non-Specialized";
 
     let status = "Draft";
