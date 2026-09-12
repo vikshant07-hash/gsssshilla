@@ -1,4 +1,3 @@
-
 const express = require("express");
 const router = express.Router();
 
@@ -17,2713 +16,634 @@ const q = (sql, params = []) => db.query(sql, params);
 
 const SCHOOL = {
   name: "GOVT. SR. SEC. SCHOOL SHILLA",
-
-  address:
-    "Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh - 171210",
-
-  logoUrl:
-    "https://gsssshilla07.pages.dev/logo(1).png",
-
-  principalSignatureUrl:
-    "https://gsssshilla07.pages.dev/principal.png",
-
-  verificationUrl:
-    "https://gsssshilla07.pages.dev/verify",
-
-  issuedBy:
-    "Govt. Sr. Sec. School Shilla"
+  address: "Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh - 171210",
+  logoUrl: "https://gsssshilla07.pages.dev/logo(1).png",
+  principalSignatureUrl: "https://gsssshilla07.pages.dev/principal.png",
+  verificationUrl: "https://gsssshilla07.pages.dev/verify",
+  helpline: "01782-XXXXXX",
+  issuedBy: "Govt. Sr. Sec. School Shilla"
 };
 
-
 // ============================================================
-// CARD SIZE
-// CR80 STANDARD PVC ID CARD
+// CARD SIZE - CR80 STANDARD PVC ID CARD (86mm x 54mm)
 // ============================================================
-
 const CARD_W = 243;
 const CARD_H = 153;
 
-
 // ============================================================
-// A4 PAGE SETTINGS
+// A4 PAGE SETTINGS — 5 cards per sheet, front+back side by side,
+// with dashed cut-guides + corner cut-marks so nothing is wasted.
 // ============================================================
-
 const GAP_COL = 12;
 const GAP_ROW = 8;
-
 const ROWS_PER_PAGE = 5;
 
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const IMAGE_TIMEOUT = 10000;
 
 // ============================================================
-// IMAGE SETTINGS
+// COLOR THEME — deep navy/royal-blue gradient + rich gold accents
 // ============================================================
-
-const MAX_IMAGE_SIZE =
-  5 * 1024 * 1024;
-
-const IMAGE_TIMEOUT =
-  10000;
-
-
-// ============================================================
-// COLOR THEME
-// ============================================================
-
 const THEME = {
-
-  blueStart: "#142B72",
-
-  blueEnd: "#3D63D8",
-
-  goldStart: "#B8860B",
-
-  goldEnd: "#E9C46A",
-
-  dark: "#102033",
-
-  text: "#1E293B",
-
-  muted: "#64748B",
-
-  light: "#F8FAFC",
-
-  border: "#CBD5E1",
-
+  navyDeep: "#0B1740",
+  blueStart: "#0F2167",
+  blueEnd: "#2F58D6",
+  goldStart: "#9A6A0A",
+  goldEnd: "#F0C24B",
+  panelStart: "#FFFFFF",
+  panelEnd: "#EEF2FF",
+  dark: "#0B1526",
+  text: "#152238",
+  muted: "#5B6B84",
+  light: "#F4F7FC",
+  border: "#C7D2E4",
   white: "#FFFFFF",
-
-  success: "#15803D"
-
+  success: "#15803D",
+  danger: "#9A3412"
 };
 
-
-// ============================================================
-// SAFE IMAGE URL VALIDATION
-// ============================================================
-
 function isValidImageUrl(url) {
-
   if (!url) return false;
-
   try {
-
-    const parsed =
-      new URL(url);
-
-    return (
-      parsed.protocol === "https:" ||
-      parsed.protocol === "http:"
-    );
-
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
   } catch {
-
     return false;
-
   }
-
 }
 
-
-// ============================================================
-// FETCH IMAGE BUFFER
-// ============================================================
-
-function fetchImageBuffer(
-  url,
-  redirects = 0
-) {
-
+function fetchImageBuffer(url, redirects = 0) {
   return new Promise((resolve) => {
-
-    if (
-      !isValidImageUrl(url) ||
-      redirects > 5
-    ) {
-      return resolve(null);
-    }
-
-
-    const client =
-      url.startsWith("https")
-        ? https
-        : http;
-
-
-    const req =
-      client.get(url, (resp) => {
-
-
-        // ========================================
-        // REDIRECT SUPPORT
-        // ========================================
-
-        if (
-          [301, 302, 307, 308]
-            .includes(resp.statusCode) &&
-          resp.headers.location
-        ) {
-
-          resp.resume();
-
-          return resolve(
-            fetchImageBuffer(
-              resp.headers.location,
-              redirects + 1
-            )
-          );
-
-        }
-
-
-        // ========================================
-        // STATUS CHECK
-        // ========================================
-
-        if (
-          resp.statusCode !== 200
-        ) {
-
-          resp.resume();
-
-          return resolve(null);
-
-        }
-
-
-        // ========================================
-        // CONTENT TYPE CHECK
-        // ========================================
-
-        const contentType =
-          resp.headers["content-type"] ||
-          "";
-
-        if (
-          !contentType.startsWith("image/")
-        ) {
-
-          resp.resume();
-
-          return resolve(null);
-
-        }
-
-
-        const chunks = [];
-
-        let totalSize = 0;
-
-
-        resp.on(
-          "data",
-          (chunk) => {
-
-            totalSize +=
-              chunk.length;
-
-
-            if (
-              totalSize >
-              MAX_IMAGE_SIZE
-            ) {
-
-              req.destroy();
-
-              return resolve(null);
-
-            }
-
-
-            chunks.push(chunk);
-
-          }
-        );
-
-
-        resp.on(
-          "end",
-          () => {
-
-            resolve(
-              Buffer.concat(chunks)
-            );
-
-          }
-        );
-
-
-      });
-
-
-    req.on(
-      "error",
-      () => resolve(null)
-    );
-
-
-    req.setTimeout(
-      IMAGE_TIMEOUT,
-      () => {
-
-        req.destroy();
-
-        resolve(null);
-
+    if (!isValidImageUrl(url) || redirects > 5) return resolve(null);
+    const client = url.startsWith("https") ? https : http;
+    const req = client.get(url, (resp) => {
+      if ([301, 302, 307, 308].includes(resp.statusCode) && resp.headers.location) {
+        resp.resume();
+        return resolve(fetchImageBuffer(resp.headers.location, redirects + 1));
       }
-    );
-
+      if (resp.statusCode !== 200) { resp.resume(); return resolve(null); }
+      const contentType = resp.headers["content-type"] || "";
+      if (!contentType.startsWith("image/")) { resp.resume(); return resolve(null); }
+      const chunks = [];
+      let totalSize = 0;
+      resp.on("data", (chunk) => {
+        totalSize += chunk.length;
+        if (totalSize > MAX_IMAGE_SIZE) { req.destroy(); return resolve(null); }
+        chunks.push(chunk);
+      });
+      resp.on("end", () => resolve(Buffer.concat(chunks)));
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(IMAGE_TIMEOUT, () => { req.destroy(); resolve(null); });
   });
-
 }
-
-
-// ============================================================
-// DATE FORMAT
-// ============================================================
 
 function fmtDate(date) {
-
   if (!date) return "—";
-
-  const dt =
-    new Date(date);
-
-  if (isNaN(dt)) {
-
-    return String(date);
-
-  }
-
-  return dt.toLocaleDateString(
-    "en-IN",
-    {
-
-      timeZone:
-        "Asia/Kolkata",
-
-      day:
-        "2-digit",
-
-      month:
-        "2-digit",
-
-      year:
-        "numeric"
-
-    }
-  );
-
+  const dt = new Date(date);
+  if (isNaN(dt)) return String(date);
+  return dt.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" });
 }
-
-
-// ============================================================
-// MASK AADHAR
-// ============================================================
 
 function maskAadhar(value) {
-
   if (!value) return "—";
-
-  const number =
-    String(value)
-      .replace(/\s/g, "");
-
-
-  if (
-    number.length < 4
-  ) {
-
-    return "XXXX XXXX XXXX";
-
-  }
-
-
-  return (
-    "XXXX XXXX " +
-    number.slice(-4)
-  );
-
+  const number = String(value).replace(/\s/g, "");
+  if (number.length < 4) return "XXXX XXXX XXXX";
+  return "XXXX XXXX " + number.slice(-4);
 }
-
-
-// ============================================================
-// SESSION VALIDITY
-// ============================================================
 
 function sessionValidUpto(session) {
-
-  if (!session) {
-
-    return "—";
-
-  }
-
-
-  const match =
-    String(session)
-      .match(
-        /(\d{4})\D?(\d{2,4})/
-      );
-
-
-  if (!match) {
-
-    return String(session);
-
-  }
-
-
-  let endYear =
-    match[2];
-
-
-  if (
-    endYear.length === 2
-  ) {
-
-    endYear =
-      "20" + endYear;
-
-  }
-
-
-  return (
-    "31/03/" +
-    endYear
-  );
-
+  if (!session) return "—";
+  const match = String(session).match(/(\d{4})\D?(\d{2,4})/);
+  if (!match) return String(session);
+  let endYear = match[2];
+  if (endYear.length === 2) endYear = "20" + endYear;
+  return "31/03/" + endYear;
 }
-
-
-// ============================================================
-// CURRENT INDIA DATE
-// ============================================================
 
 function getTodayIndia() {
-
-  return new Date()
-    .toLocaleDateString(
-      "en-IN",
-      {
-
-        timeZone:
-          "Asia/Kolkata",
-
-        day:
-          "2-digit",
-
-        month:
-          "2-digit",
-
-        year:
-          "numeric"
-
-      }
-    );
-
+  return new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
-
-// ============================================================
-// TEXT FIT HELPER
-// PREVENTS OVERFLOW
-// ============================================================
-
-function fitText(
-  doc,
-  text,
-  maxWidth,
-  startSize = 6,
-  minSize = 4
-) {
-
-  let size =
-    startSize;
-
+function fitText(doc, text, maxWidth, startSize = 6.6, minSize = 4.8) {
+  let size = startSize;
   doc.fontSize(size);
-
-
-  while (
-    doc.widthOfString(
-      String(text)
-    ) > maxWidth &&
-    size > minSize
-  ) {
-
+  while (doc.widthOfString(String(text)) > maxWidth && size > minSize) {
     size -= 0.2;
-
     doc.fontSize(size);
-
   }
-
-
   return size;
-
 }
 
-
 // ============================================================
-// DRAW CUT MARKS
+// CUT MARKS (corner ticks) — printed just outside every card edge
 // ============================================================
-
-function drawCutMarks(
-  doc,
-  x,
-  y,
-  w,
-  h,
-  len = 7,
-  offset = 3
-) {
-
+function drawCutMarks(doc, x, y, w, h, len = 7, offset = 3) {
   doc.save();
+  doc.lineWidth(0.5).strokeColor("#94A3B8");
+  doc.moveTo(x - offset, y).lineTo(x - offset - len, y).stroke();
+  doc.moveTo(x, y - offset).lineTo(x, y - offset - len).stroke();
+  doc.moveTo(x + w + offset, y).lineTo(x + w + offset + len, y).stroke();
+  doc.moveTo(x + w, y - offset).lineTo(x + w, y - offset - len).stroke();
+  doc.moveTo(x - offset, y + h).lineTo(x - offset - len, y + h).stroke();
+  doc.moveTo(x, y + h + offset).lineTo(x, y + h + offset + len).stroke();
+  doc.moveTo(x + w + offset, y + h).lineTo(x + w + offset + len, y + h).stroke();
+  doc.moveTo(x + w, y + h + offset).lineTo(x + w, y + h + offset + len).stroke();
+  doc.restore();
+}
 
-  doc
-    .lineWidth(0.5)
-    .strokeColor("#94A3B8");
+// ============================================================
+// CARD FRAME — subtle gradient wash + gold hairline + accent bar
+// ============================================================
+function drawCardFrame(doc, x, y) {
+  const W = CARD_W, H = CARD_H;
 
+  const bg = doc.linearGradient(x, y, x + W, y + H);
+  bg.stop(0, THEME.panelStart).stop(1, THEME.panelEnd);
+  doc.roundedRect(x, y, W, H, 9).fillAndStroke(bg, THEME.dark);
+  doc.lineWidth(1).strokeColor(THEME.dark).stroke();
 
-  // TOP LEFT
+  doc.roundedRect(x + 2.5, y + 2.5, W - 5, H - 5, 7).lineWidth(0.8).strokeColor(THEME.goldStart).stroke();
 
-  doc
-    .moveTo(
-      x - offset,
-      y
-    )
-    .lineTo(
-      x - offset - len,
-      y
-    )
-    .stroke();
-
-  doc
-    .moveTo(
-      x,
-      y - offset
-    )
-    .lineTo(
-      x,
-      y - offset - len
-    )
-    .stroke();
-
-
-  // TOP RIGHT
-
-  doc
-    .moveTo(
-      x + w + offset,
-      y
-    )
-    .lineTo(
-      x + w + offset + len,
-      y
-    )
-    .stroke();
-
-  doc
-    .moveTo(
-      x + w,
-      y - offset
-    )
-    .lineTo(
-      x + w,
-      y - offset - len
-    )
-    .stroke();
-
-
-  // BOTTOM LEFT
-
-  doc
-    .moveTo(
-      x - offset,
-      y + h
-    )
-    .lineTo(
-      x - offset - len,
-      y + h
-    )
-    .stroke();
-
-  doc
-    .moveTo(
-      x,
-      y + h + offset
-    )
-    .lineTo(
-      x,
-      y + h + offset + len
-    )
-    .stroke();
-
-
-  // BOTTOM RIGHT
-
-  doc
-    .moveTo(
-      x + w + offset,
-      y + h
-    )
-    .lineTo(
-      x + w + offset + len,
-      y + h
-    )
-    .stroke();
-
-  doc
-    .moveTo(
-      x + w,
-      y + h + offset
-    )
-    .lineTo(
-      x + w,
-      y + h + offset + len
-    )
-    .stroke();
-
-
+  // Faint watermark emblem — school initials, very low opacity, behind content
+  doc.save();
+  doc.opacity(0.05);
+  doc.font("Helvetica-Bold").fontSize(58).fillColor(THEME.blueStart)
+    .text("GSSS", x, y + H / 2 - 30, { width: W, align: "center" });
   doc.restore();
 
+  // Left accent bar
+  const bar = doc.linearGradient(x, y, x, y + H);
+  bar.stop(0, THEME.goldEnd).stop(1, THEME.goldStart);
+  doc.roundedRect(x + 2.5, y + 2.5, 4, H - 5, 2).fill(bar);
 }
 
-
 // ============================================================
-// DRAW CARD BACKGROUND
+// HEADER BANNER
 // ============================================================
-
-function drawCardFrame(
-  doc,
-  x,
-  y
-) {
-
+function drawHeader(doc, x, y, logoBuf) {
   const W = CARD_W;
-  const H = CARD_H;
+  const headerH = 30;
 
+  const gradient = doc.linearGradient(x, y, x + W, y + headerH);
+  gradient.stop(0, THEME.navyDeep).stop(0.55, THEME.blueStart).stop(1, THEME.blueEnd);
+  doc.roundedRect(x + 3, y + 3, W - 6, headerH, 6).fill(gradient);
 
-  // OUTER CARD
-
-  doc
-    .roundedRect(
-      x,
-      y,
-      W,
-      H,
-      8
-    )
-    .fillAndStroke(
-      THEME.white,
-      THEME.dark
-    );
-
-
-  // INNER BORDER
-
-  doc
-    .roundedRect(
-      x + 2.5,
-      y + 2.5,
-      W - 5,
-      H - 5,
-      6
-    )
-    .lineWidth(0.8)
-    .strokeColor(
-      THEME.goldStart
-    )
-    .stroke();
-
-}
-
-
-// ============================================================
-// DRAW HEADER
-// ============================================================
-
-function drawHeader(
-  doc,
-  x,
-  y,
-  logoBuf
-) {
-
-  const W = CARD_W;
-
-  const headerH =
-    27;
-
-
-  // HEADER GRADIENT
-
-  const gradient =
-    doc.linearGradient(
-      x,
-      y,
-      x + W,
-      y + headerH
-    );
-
-
-  gradient
-    .stop(
-      0,
-      THEME.blueStart
-    )
-    .stop(
-      1,
-      THEME.blueEnd
-    );
-
-
-  doc
-    .roundedRect(
-      x + 3,
-      y + 3,
-      W - 6,
-      headerH,
-      6
-    )
-    .fill(gradient);
-
-
-  // LOGO - BIGGER
-
-  const logoSize =
-    23;
-
-  const logoX =
-    x + 7;
-
-  const logoY =
-    y + 5;
-
-
+  const logoSize = 27, logoX = x + 8, logoY = y + 4.5;
   if (logoBuf) {
-
     try {
-
-      doc.image(
-        logoBuf,
-        logoX,
-        logoY,
-        {
-          fit: [
-            logoSize,
-            logoSize
-          ]
-        }
-      );
-
+      doc.save();
+      doc.circle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2 + 1.5).fill(THEME.white);
+      doc.restore();
+      doc.image(logoBuf, logoX, logoY, { fit: [logoSize, logoSize], align: "center", valign: "center" });
     } catch (err) {}
-
   }
 
-
-  // SCHOOL NAME
-
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(8.5)
-    .fillColor(
-      THEME.white
-    )
-    .text(
-      SCHOOL.name,
-      x + 34,
-      y + 7,
-      {
-
-        width:
-          W - 42,
-
-        align:
-          "center",
-
-        lineBreak:
-          false
-
-      }
-    );
-
-
-  // ADDRESS
-
-  doc
-    .font("Helvetica")
-    .fontSize(5.1)
-    .fillColor("#E0E7FF")
-    .text(
-      SCHOOL.address,
-      x + 34,
-      y + 17,
-      {
-
-        width:
-          W - 42,
-
-        align:
-          "center"
-
-      }
-    );
-
+  doc.font("Helvetica-Bold").fontSize(9.6).fillColor(THEME.white)
+    .text(SCHOOL.name, x + 38, y + 6.5, { width: W - 46, align: "center", lineBreak: false });
+  doc.font("Helvetica").fontSize(5.8).fillColor("#DCE5FF")
+    .text(SCHOOL.address, x + 38, y + 18, { width: W - 46, align: "center" });
 
   return headerH;
-
 }
 
-
 // ============================================================
-// DRAW BADGE
+// BADGE (ribbon under header)
 // ============================================================
+function drawBadge(doc, x, y, text) {
+  doc.font("Helvetica-Bold").fontSize(6.4);
+  const textW = doc.widthOfString(text.toUpperCase());
+  const badgeW = Math.max(90, textW + 24);
+  const badgeH = 12;
+  const badgeX = x + (CARD_W - badgeW) / 2;
 
-function drawBadge(
-  doc,
-  x,
-  y,
-  text
-) {
+  const gradient = doc.linearGradient(badgeX, y, badgeX + badgeW, y);
+  gradient.stop(0, THEME.goldStart).stop(0.5, THEME.goldEnd).stop(1, THEME.goldStart);
+  doc.roundedRect(badgeX, y, badgeW, badgeH, 6).fill(gradient);
+  doc.roundedRect(badgeX, y, badgeW, badgeH, 6).lineWidth(0.4).strokeColor(THEME.dark).stroke();
 
-  const badgeW =
-    text === "STUDENT ID CARD"
-      ? 84
-      : 112;
-
-  const badgeH =
-    10;
-
-
-  const badgeX =
-    x +
-    (
-      CARD_W - badgeW
-    ) / 2;
-
-
-  const gradient =
-    doc.linearGradient(
-      badgeX,
-      y,
-      badgeX + badgeW,
-      y
-    );
-
-
-  gradient
-    .stop(
-      0,
-      THEME.goldStart
-    )
-    .stop(
-      1,
-      THEME.goldEnd
-    );
-
-
-  doc
-    .roundedRect(
-      badgeX,
-      y,
-      badgeW,
-      badgeH,
-      5
-    )
-    .fill(gradient);
-
-
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(5.7)
-    .fillColor(
-      THEME.white
-    )
-    .text(
-      text,
-      badgeX,
-      y + 2.7,
-      {
-
-        width:
-          badgeW,
-
-        align:
-          "center",
-
-        characterSpacing:
-          0.35
-
-      }
-    );
-
-
+  doc.font("Helvetica-Bold").fontSize(6.4).fillColor(THEME.white)
+    .text(text.toUpperCase(), badgeX, y + 3.1, { width: badgeW, align: "center", characterSpacing: 0.4 });
 }
 
-
 // ============================================================
-// DRAW STUDENT PHOTO
+// PHOTO
 // ============================================================
-
-function drawStudentPhoto(
-  doc,
-  photoBuf,
-  x,
-  y
-) {
-
-  const photoW =
-    48;
-
-  const photoH =
-    57;
-
-
-  // PHOTO BORDER
-
-  doc
-    .rect(
-      x - 2,
-      y - 2,
-      photoW + 4,
-      photoH + 4
-    )
-    .lineWidth(0.8)
-    .strokeColor(
-      THEME.goldStart
-    )
-    .stroke();
-
-
+function drawStudentPhoto(doc, photoBuf, x, y) {
+  const photoW = 56, photoH = 60;
+  doc.rect(x - 2, y - 2, photoW + 4, photoH + 4).fillAndStroke(THEME.white, THEME.goldStart);
+  doc.lineWidth(0.9);
   if (photoBuf) {
-
-    try {
-
-      doc.image(
-        photoBuf,
-        x,
-        y,
-        {
-
-          fit: [
-            photoW,
-            photoH
-          ],
-
-          align:
-            "center",
-
-          valign:
-            "center"
-
-        }
-      );
-
-    } catch (err) {
-
-      drawPhotoPlaceholder(
-        doc,
-        x,
-        y,
-        photoW,
-        photoH
-      );
-
-    }
-
+    try { doc.image(photoBuf, x, y, { fit: [photoW, photoH], align: "center", valign: "center" }); }
+    catch (err) { drawPhotoPlaceholder(doc, x, y, photoW, photoH); }
   } else {
-
-    drawPhotoPlaceholder(
-      doc,
-      x,
-      y,
-      photoW,
-      photoH
-    );
-
+    drawPhotoPlaceholder(doc, x, y, photoW, photoH);
   }
-
-
-  return {
-    photoW,
-    photoH
-  };
-
+  return { photoW, photoH };
 }
 
-
-// ============================================================
-// PHOTO PLACEHOLDER
-// ============================================================
-
-function drawPhotoPlaceholder(
-  doc,
-  x,
-  y,
-  w,
-  h
-) {
-
-  doc
-    .rect(
-      x,
-      y,
-      w,
-      h
-    )
-    .fillAndStroke(
-      THEME.light,
-      THEME.border
-    );
-
-
-  doc
-    .font("Helvetica")
-    .fontSize(5.5)
-    .fillColor(
-      THEME.muted
-    )
-    .text(
-      "STUDENT PHOTO",
-      x,
-      y + h / 2 - 3,
-      {
-
-        width: w,
-
-        align:
-          "center"
-
-      }
-    );
-
+function drawPhotoPlaceholder(doc, x, y, w, h) {
+  doc.rect(x, y, w, h).fillAndStroke(THEME.light, THEME.border);
+  doc.font("Helvetica").fontSize(6).fillColor(THEME.muted)
+    .text("STUDENT\nPHOTO", x, y + h / 2 - 8, { width: w, align: "center" });
 }
 
-
 // ============================================================
-// DRAW PRINCIPAL SIGNATURE
+// SIGNATURES
 // ============================================================
-
-function drawPrincipalSignature(
-  doc,
-  principalBuf,
-  x,
-  y,
-  width = 58
-) {
-
-  const signatureHeight =
-    30;
-
-
+// y = TOP of the block (not the line) — everything lays out downward
+// from here so it can never bleed into content drawn above it.
+function drawPrincipalSignature(doc, principalBuf, x, y, width = 74) {
+  const imgH = 11;
   if (principalBuf) {
-
-    try {
-
-      doc.image(
-        principalBuf,
-        x + 4,
-        y - 8,
-        {
-
-          fit: [
-            width - 8,
-            signatureHeight
-          ],
-
-          align:
-            "center",
-
-          valign:
-            "bottom"
-
-        }
-      );
-
-    } catch (err) {}
-
+    try { doc.image(principalBuf, x + 6, y, { fit: [width - 12, imgH], align: "center", valign: "bottom" }); }
+    catch (err) {}
   }
-
-
-  doc
-    .moveTo(
-      x,
-      y + 10
-    )
-    .lineTo(
-      x + width,
-      y + 10
-    )
-    .lineWidth(0.5)
-    .strokeColor(
-      THEME.muted
-    )
-    .stroke();
-
-
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(5.2)
-    .fillColor(
-      THEME.dark
-    )
-    .text(
-      "Principal",
-      x,
-      y + 12,
-      {
-
-        width,
-
-        align:
-          "center"
-
-      }
-    );
-
+  const lineY = y + imgH + 1.5;
+  doc.moveTo(x, lineY).lineTo(x + width, lineY).lineWidth(0.6).strokeColor(THEME.muted).stroke();
+  doc.font("Helvetica-Bold").fontSize(5.6).fillColor(THEME.dark)
+    .text("Principal", x, lineY + 1.3, { width, align: "center" });
+  return lineY + 1.3 + 6.5; // bottom Y actually used
 }
 
-
-// ============================================================
-// DRAW STUDENT SIGNATURE
-// ============================================================
-
-function drawStudentSignature(
-  doc,
-  signatureBuf,
-  x,
-  y,
-  width
-) {
-
-  const signatureHeight =
-    18;
-
-
+function drawStudentSignature(doc, signatureBuf, x, y, width) {
+  const imgH = 11;
   if (signatureBuf) {
-
-    try {
-
-      doc.image(
-        signatureBuf,
-        x + 2,
-        y,
-        {
-
-          fit: [
-            width - 4,
-            signatureHeight
-          ],
-
-          align:
-            "center",
-
-          valign:
-            "bottom"
-
-        }
-      );
-
-    } catch (err) {}
-
+    try { doc.image(signatureBuf, x + 2, y, { fit: [width - 4, imgH], align: "center", valign: "bottom" }); }
+    catch (err) {}
   }
-
-
-  doc
-    .moveTo(
-      x + 2,
-      y + 12
-    )
-    .lineTo(
-      x + width - 2,
-      y + 12
-    )
-    .lineWidth(0.4)
-    .strokeColor(
-      THEME.muted
-    )
-    .stroke();
-
-
-  doc
-    .font("Helvetica")
-    .fontSize(4.5)
-    .fillColor(
-      THEME.muted
-    )
-    .text(
-      "Student Signature",
-      x,
-      y + 13.5,
-      {
-
-        width,
-
-        align:
-          "center"
-
-      }
-    );
-
+  const lineY = y + imgH + 1.5;
+  doc.moveTo(x + 2, lineY).lineTo(x + width - 2, lineY).lineWidth(0.5).strokeColor(THEME.muted).stroke();
+  doc.font("Helvetica").fontSize(4.6).fillColor(THEME.muted)
+    .text("Student Signature", x, lineY + 1.2, { width, align: "center" });
+  return lineY + 1.2 + 5.5; // bottom Y actually used
 }
 
+// ============================================================
+// INFO ROW — one label:value pair. Pass a narrower `width` and
+// pair two calls on the same y to get "2 fields per line".
+// ============================================================
+function drawInfoRow(doc, x, y, width, label, value, opts = {}) {
+  const labelW = opts.labelW || 46;
+  const fontSize = opts.fontSize || 6.6;
+  const rowH = opts.rowH || 12;
+
+  doc.font("Helvetica-Bold").fontSize(fontSize).fillColor(THEME.text)
+    .text(label, x, y, { width: labelW - 5, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(fontSize)
+    .text(":", x + labelW - 5, y, { width: 6 });
+
+  const valX = x + labelW + 1;
+  const valW = width - labelW - 1;
+  doc.font("Helvetica").fillColor(THEME.text);
+  fitText(doc, value || "—", valW, fontSize + 0.2, 5);
+  doc.text(String(value || "—"), valX, y, { width: valW, height: rowH, ellipsis: true, lineBreak: false });
+}
 
 // ============================================================
-// DRAW FRONT CARD
+// INSTRUCTIONS BOX — fills the space freed up on the back by
+// removing the (duplicate) principal signature from that side.
 // ============================================================
+function drawInstructionsBox(doc, x, y, width, height) {
+  doc.roundedRect(x, y, width, height, 4).fillAndStroke(THEME.light, THEME.border).lineWidth(0.5);
 
-function drawFrontCard(
-  doc,
-  x,
-  y,
-  student,
-  buffers
-) {
+  doc.font("Helvetica-Bold").fontSize(5.4).fillColor(THEME.danger)
+    .text("IMPORTANT INSTRUCTIONS", x + 6, y + 2.5, { width: width - 12 });
 
-  const W =
-    CARD_W;
-
-  const H =
-    CARD_H;
-
-
-  drawCardFrame(
-    doc,
-    x,
-    y
-  );
-
-
-  const headerH =
-    drawHeader(
-      doc,
-      x,
-      y,
-      buffers.logoBuf
-    );
-
-
-  const badgeY =
-    y + headerH + 7;
-
-
-  drawBadge(
-    doc,
-    x,
-    badgeY,
-    "STUDENT ID CARD"
-  );
-
-
-  const contentY =
-    badgeY + 15;
-
-
-  // ========================================
-  // PHOTO AREA
-  // ========================================
-
-  const photoX =
-    x + W - 55;
-
-  const photoY =
-    contentY;
-
-
-  const photo =
-    drawStudentPhoto(
-      doc,
-      buffers.photoBuf,
-      photoX,
-      photoY
-    );
-
-
-  drawStudentSignature(
-    doc,
-    buffers.signatureBuf,
-    photoX,
-    photoY +
-      photo.photoH +
-      4,
-    photo.photoW
-  );
-
-
-  // ========================================
-  // INFORMATION AREA
-  // ========================================
-
-  const infoX =
-    x + 8;
-
-  const infoW =
-    photoX -
-    infoX -
-    8;
-
-
-  const labelW =
-    41;
-
-  const valueX =
-    infoX +
-    labelW +
-    2;
-
-  const valueW =
-    infoW -
-    labelW -
-    2;
-
-
-  const rowH =
-    9.5;
-
-
-  const rows = [
-
-    [
-      "Name",
-      student.name
-    ],
-
-    [
-      "Father",
-      student.father_name
-    ],
-
-    [
-      "Mother",
-      student.mother_name
-    ],
-
-    [
-      "D.O.B.",
-      fmtDate(
-        student.dob
-      )
-    ],
-
-    [
-      "Class",
-      `${student.class || "—"}${
-        ["11", "12"]
-          .includes(
-            String(
-              student.class
-            )
-          ) &&
-        student.stream
-          ? " - " +
-            student.stream
-          : ""
-      }`
-    ],
-
-    [
-      "Roll No.",
-      student.roll_number
-    ],
-
-    [
-      "Student ID",
-      student.student_id
-    ],
-
-    [
-      "Session",
-      student.session
-    ]
-
+  const rules = [
+    "Property of the school — carry daily in school premises.",
+    "If found, please return to the school office at once.",
+    "Not transferable • report loss or damage immediately."
   ];
 
+  let ry = y + 10.5;
+  rules.forEach((rule) => {
+    doc.font("Helvetica-Bold").fontSize(4.5).fillColor(THEME.dark).text("•", x + 6, ry, { width: 6 });
+    doc.font("Helvetica").fontSize(4.5).fillColor(THEME.text)
+      .text(rule, x + 12, ry, { width: width - 18 });
+    ry += 6.5;
+  });
 
-  rows.forEach(
-    ([label, value], index) => {
-
-      const rowY =
-        contentY +
-        index * rowH;
-
-
-      // LABEL
-
-      doc
-        .font(
-          "Helvetica-Bold"
-        )
-        .fontSize(5.7)
-        .fillColor(
-          THEME.text
-        )
-        .text(
-          label,
-          infoX,
-          rowY,
-          {
-
-            width:
-              labelW - 5,
-
-            lineBreak:
-              false
-
-          }
-        );
-
-
-      // COLON
-
-      doc
-        .font(
-          "Helvetica-Bold"
-        )
-        .fontSize(5.7)
-        .text(
-          ":",
-          infoX +
-            labelW -
-            4,
-          rowY,
-          {
-
-            width: 5
-
-          }
-        );
-
-
-      // VALUE
-
-      doc
-        .font(
-          "Helvetica"
-        )
-        .fillColor(
-          THEME.text
-        );
-
-
-      fitText(
-        doc,
-        value || "—",
-        valueW,
-        6,
-        4.8
-      );
-
-
-      doc.text(
-        String(
-          value || "—"
-        ),
-        valueX,
-        rowY,
-        {
-
-          width:
-            valueW,
-
-          height:
-            rowH,
-
-          ellipsis:
-            true,
-
-          lineBreak:
-            false
-
-        }
-      );
-
-    }
-  );
-
-
-  // ========================================
-  // FOOTER AREA
-  // ========================================
-
-  const footerY =
-    y + H - 25;
-
-
-  // PRINCIPAL SIGNATURE
-
-  drawPrincipalSignature(
-    doc,
-    buffers.principalBuf,
-    x + 11,
-    footerY,
-    62
-  );
-
-
-  // VALIDITY
-
-  doc
-    .font(
-      "Helvetica"
-    )
-    .fontSize(4.8)
-    .fillColor(
-      THEME.muted
-    )
-    .text(
-      "Valid upto:",
-      x + W - 75,
-      footerY + 11,
-      {
-
-        width: 67,
-
-        align:
-          "center"
-
-      }
-    );
-
-
-  doc
-    .font(
-      "Helvetica-Bold"
-    )
-    .fontSize(5.2)
-    .fillColor(
-      THEME.dark
-    )
-    .text(
-      sessionValidUpto(
-        student.session
-      ),
-      x + W - 75,
-      footerY + 17,
-      {
-
-        width: 67,
-
-        align:
-          "center"
-
-      }
-    );
-
+  doc.font("Helvetica").fontSize(4.2).fillColor(THEME.muted)
+    .text(`Issued: ${getTodayIndia()}   •   Helpline: ${SCHOOL.helpline}`, x + 6, y + height - 7, { width: width - 12 });
 }
 
+// ============================================================
+// FRONT CARD
+// ============================================================
+function drawFrontCard(doc, x, y, student, buffers) {
+  const W = CARD_W, H = CARD_H;
+  drawCardFrame(doc, x, y);
+  const headerH = drawHeader(doc, x, y, buffers.logoBuf);
+  const badgeY = y + headerH + 7;
+  drawBadge(doc, x, badgeY, "Student ID Card");
+  const contentY = badgeY + 16;
+
+  // Photo + student signature (right column)
+  const photoX = x + W - 66, photoY = contentY;
+  const photo = drawStudentPhoto(doc, buffers.photoBuf, photoX, photoY);
+  const rightBottom = drawStudentSignature(doc, buffers.signatureBuf, photoX - 3, photoY + photo.photoH + 4, photo.photoW + 6);
+
+  // "Valid Upto" sits under the student signature, in the same right column
+  doc.font("Helvetica").fontSize(4.6).fillColor(THEME.muted)
+    .text("Valid Upto: " + sessionValidUpto(student.session), photoX - 3, rightBottom + 2, { width: photo.photoW + 6, align: "center" });
+
+  // Detail rows (left column)
+  const infoX = x + 10;
+  const infoW = photoX - infoX - 8;
+  const rowH = 11.5;
+  const streamSuffix = ["11", "12"].includes(String(student.class)) && student.stream ? " - " + student.stream : "";
+
+  drawInfoRow(doc, infoX, contentY, infoW, "Name", student.name, { fontSize: 7.2, labelW: 34, rowH: 13 });
+
+  let ry = contentY + 13.5;
+  drawInfoRow(doc, infoX, ry, infoW, "Father", student.father_name, { labelW: 42 });
+  ry += rowH;
+  drawInfoRow(doc, infoX, ry, infoW, "Mother", student.mother_name, { labelW: 42 });
+  ry += rowH;
+
+  // Two fields per line: D.O.B. | Class
+  const halfW = (infoW - 8) / 2;
+  drawInfoRow(doc, infoX, ry, halfW, "D.O.B.", fmtDate(student.dob), { labelW: 32, fontSize: 6.2 });
+  drawInfoRow(doc, infoX + halfW + 8, ry, halfW, "Class", `${student.class || "—"}${streamSuffix}`, { labelW: 32, fontSize: 6.2 });
+  ry += rowH;
+
+  // Two fields per line: Roll No. | Student ID
+  drawInfoRow(doc, infoX, ry, halfW, "Roll No.", student.roll_number, { labelW: 32, fontSize: 6.2 });
+  drawInfoRow(doc, infoX + halfW + 8, ry, halfW, "Stud. ID", student.student_id, { labelW: 32, fontSize: 6.2 });
+  ry += rowH;
+
+  drawInfoRow(doc, infoX, ry, infoW, "Session", student.session, { labelW: 42 });
+  ry += rowH;
+
+  // Footer — Principal signature (front side ONLY; back side uses the
+  // freed space for the instructions box instead)
+  const footerY = ry + 4;
+  drawPrincipalSignature(doc, buffers.principalBuf, x + 10, footerY, 78);
+}
 
 // ============================================================
-// DRAW BACK CARD
+// BACK CARD — no principal signature here; the freed space is
+// used for the instructions box instead.
 // ============================================================
+function drawBackCard(doc, x, y, student, buffers) {
+  const W = CARD_W, H = CARD_H;
+  drawCardFrame(doc, x, y);
+  const headerH = drawHeader(doc, x, y, buffers.logoBuf);
+  const badgeY = y + headerH + 7;
+  drawBadge(doc, x, badgeY, "Address & Verification");
+  const contentY = badgeY + 16;
 
-function drawBackCard(
-  doc,
-  x,
-  y,
-  student,
-  buffers
-) {
-
-  const W =
-    CARD_W;
-
-  const H =
-    CARD_H;
-
-
-  drawCardFrame(
-    doc,
-    x,
-    y
-  );
-
-
-  const headerH =
-    drawHeader(
-      doc,
-      x,
-      y,
-      buffers.logoBuf
-    );
-
-
-  const badgeY =
-    y + headerH + 7;
-
-
-  drawBadge(
-    doc,
-    x,
-    badgeY,
-    "ADDRESS & VERIFICATION"
-  );
-
-
-  const contentY =
-    badgeY + 17;
-
-
-  // ========================================
-  // QR AREA
-  // ========================================
-
-  const qrSize =
-    42;
-
-  const qrX =
-    x + W - qrSize - 10;
-
-  const qrY =
-    y + H - qrSize - 30;
-
+  const qrSize = 42;
+  const qrX = x + W - qrSize - 10;
+  const qrY = contentY;
 
   if (buffers.qrBuf) {
-
     try {
-
-      doc
-        .rect(
-          qrX - 2,
-          qrY - 2,
-          qrSize + 4,
-          qrSize + 4
-        )
-        .lineWidth(0.7)
-        .strokeColor(
-          THEME.goldStart
-        )
-        .stroke();
-
-
-      doc.image(
-        buffers.qrBuf,
-        qrX,
-        qrY,
-        {
-
-          fit: [
-            qrSize,
-            qrSize
-          ]
-
-        }
-      );
-
+      doc.rect(qrX - 2, qrY - 2, qrSize + 4, qrSize + 4).fillAndStroke(THEME.white, THEME.goldStart).lineWidth(0.9);
+      doc.image(buffers.qrBuf, qrX, qrY, { fit: [qrSize, qrSize] });
     } catch (err) {}
-
   }
-
-
-  // ========================================
-  // ADDRESS + INFO
-  // ========================================
-
-  const infoX =
-    x + 8;
-
-  const labelW =
-    44;
-
-  const valueX =
-    infoX +
-    labelW +
-    2;
-
-
-  const infoRight =
-    qrX - 10;
-
-
-  const valueW =
-    infoRight -
-    valueX;
-
-
-  // FULL ADDRESS
-
-  const fullAddress =
-    [
-
-      student.village,
-
-      student.post_office
-        ? "PO " +
-          student.post_office
-        : "",
-
-      student.tehsil
-        ? "Teh. " +
-          student.tehsil
-        : "",
-
-      student.district
-        ? "Distt. " +
-          student.district
-        : "",
-
-      student.state,
-
-      student.pincode
-
-    ]
-      .filter(Boolean)
-      .join(", ")
-    ||
-    student.address
-    ||
-    "—";
-
-
-  const rows = [
-
-    [
-      "Address",
-      fullAddress,
-      25
-    ],
-
-    [
-      "Mobile No.",
-      student.mobile_number,
-      9
-    ],
-
-    [
-      "Email",
-      student.email_id,
-      9
-    ],
-
-    [
-      "APAAR ID",
-      student.apaar_id,
-      9
-    ]
-
-  ];
-
-
-  let currentY =
-    contentY;
-
-
-  rows.forEach(
-    ([label, value, height]) => {
-
-
-      doc
-        .font(
-          "Helvetica-Bold"
-        )
-        .fontSize(5.7)
-        .fillColor(
-          THEME.text
-        )
-        .text(
-          label,
-          infoX,
-          currentY,
-          {
-
-            width:
-              labelW - 4
-
-          }
-        );
-
-
-      doc
-        .text(
-          ":",
-          infoX +
-            labelW -
-            4,
-          currentY
-        );
-
-
-      doc
-        .font(
-          "Helvetica"
-        )
-        .fontSize(
-          label === "Address"
-            ? 5.2
-            : 5.7
-        )
-        .fillColor(
-          THEME.text
-        )
-        .text(
-          String(
-            value || "—"
-          ),
-          valueX,
-          currentY,
-          {
-
-            width:
-              valueW,
-
-            height,
-
-            ellipsis:
-              true
-
-          }
-        );
-
-
-      currentY +=
-        height + 3;
-
-    }
-  );
-
-
-  // ========================================
-  // QR LABEL
-  // ========================================
-
-  doc
-    .font(
-      "Helvetica-Bold"
-    )
-    .fontSize(4.4)
-    .fillColor(
-      THEME.dark
-    )
-    .text(
-      "SCAN TO VERIFY",
-      qrX - 5,
-      qrY + qrSize + 3,
-      {
-
-        width:
-          qrSize + 10,
-
-        align:
-          "center"
-
-      }
-    );
-
-
-  // ========================================
-  // PRINCIPAL SIGNATURE
-  // ========================================
-
-  const footerY =
-    y + H - 30;
-
-
-  drawPrincipalSignature(
-    doc,
-    buffers.principalBuf,
-    x + 12,
-    footerY,
-    65
-  );
-
-
-  // ========================================
-  // ISSUE DATE
-  // ========================================
-
-  doc
-    .font(
-      "Helvetica"
-    )
-    .fontSize(4.5)
-    .fillColor(
-      THEME.muted
-    )
-    .text(
-      "Issued: " +
-      getTodayIndia(),
-      x + 80,
-      y + H - 15,
-      {
-
-        width:
-          65,
-
-        align:
-          "center"
-
-      }
-    );
-
-
-  // ========================================
-  // SCHOOL PROPERTY TEXT
-  // ========================================
-
-  doc
-    .font(
-      "Helvetica"
-    )
-    .fontSize(4.2)
-    .fillColor(
-      THEME.muted
-    )
-    .text(
-      "This card is the property of the school.",
-      x + 80,
-      y + H - 8,
-      {
-
-        width:
-          110,
-
-        align:
-          "center"
-
-      }
-    );
-
+  doc.font("Helvetica-Bold").fontSize(4.4).fillColor(THEME.dark)
+    .text("SCAN TO VERIFY", qrX - 6, qrY + qrSize + 3, { width: qrSize + 12, align: "center" });
+  const qrColumnBottom = qrY + qrSize + 3 + 6;
+
+  const infoX = x + 10;
+  const infoRight = qrX - 10;
+  const infoW = infoRight - infoX;
+
+  const fullAddress = [
+    student.village,
+    student.post_office ? "PO " + student.post_office : "",
+    student.tehsil ? "Teh. " + student.tehsil : "",
+    student.district ? "Distt. " + student.district : "",
+    student.state,
+    student.pincode
+  ].filter(Boolean).join(", ") || student.address || "—";
+
+  drawInfoRow(doc, infoX, contentY, infoW, "Address", fullAddress, { labelW: 42, fontSize: 6, rowH: 19 });
+
+  const halfW = (infoW - 8) / 2;
+  const row2Y = contentY + 20;
+  drawInfoRow(doc, infoX, row2Y, halfW, "Mobile", student.mobile_number, { labelW: 34, fontSize: 6.2 });
+  drawInfoRow(doc, infoX + halfW + 8, row2Y, halfW, "Aadhar", maskAadhar(student.aadhar_number), { labelW: 34, fontSize: 6.2 });
+
+  const row3Y = row2Y + 11;
+  drawInfoRow(doc, infoX, row3Y, halfW, "Email", student.email_id, { labelW: 34, fontSize: 6.2 });
+  drawInfoRow(doc, infoX + halfW + 8, row3Y, halfW, "APAAR ID", student.apaar_id, { labelW: 34, fontSize: 6.2 });
+  const rowsColumnBottom = row3Y + 11;
+
+  // Instructions box fills whatever is left below — this is the space
+  // that used to hold a (redundant) second principal signature. Its
+  // top is computed from whichever column (QR or the info rows)
+  // finishes lower, so it can never overlap either one.
+  const boxY = Math.max(qrColumnBottom, rowsColumnBottom) + 4;
+  const boxHeight = y + H - 6 - boxY;
+  drawInstructionsBox(doc, x + 8, boxY, W - 16, boxHeight);
 }
 
-
 // ============================================================
-// BUILD BUFFERS
+// BUILD IMAGE BUFFERS FOR A STUDENT
 // ============================================================
-
-async function buildBuffersFor(
-  student,
-  sharedLogoBuf,
-  sharedPrincipalBuf
-) {
-
-
-  // ========================================
-  // QR VERIFICATION DATA
-  // ========================================
-
-  const verificationUrl =
-    `${SCHOOL.verificationUrl}/${encodeURIComponent(
-      student.student_id
-    )}`;
-
-
-  const qrData =
-    verificationUrl;
-
-
-  // ========================================
-  // FETCH ALL
-  // ========================================
-
-  const [
-
-    photoBuf,
-
-    signatureBuf,
-
-    qrBuf
-
-  ] =
-    await Promise.all([
-
-      fetchImageBuffer(
-        student.student_photo_url
-      ),
-
-      fetchImageBuffer(
-        student.signature_url
-      ),
-
-      QRCode.toBuffer(
-        qrData,
-        {
-
-          width: 250,
-
-          margin: 1,
-
-          errorCorrectionLevel:
-            "M"
-
-        }
-      )
-
-    ]);
-
-
-  return {
-
-    logoBuf:
-      sharedLogoBuf,
-
-    principalBuf:
-      sharedPrincipalBuf,
-
-    photoBuf,
-
-    signatureBuf,
-
-    qrBuf
-
-  };
-
+async function buildBuffersFor(student, sharedLogoBuf, sharedPrincipalBuf) {
+  const verificationUrl = `${SCHOOL.verificationUrl}/${encodeURIComponent(student.student_id)}`;
+  const qrData = verificationUrl;
+  const [photoBuf, signatureBuf, qrBuf] = await Promise.all([
+    fetchImageBuffer(student.student_photo_url),
+    fetchImageBuffer(student.signature_url),
+    QRCode.toBuffer(qrData, { width: 250, margin: 1, errorCorrectionLevel: "M" })
+  ]);
+  return { logoBuf: sharedLogoBuf, principalBuf: sharedPrincipalBuf, photoBuf, signatureBuf, qrBuf };
 }
 
-
 // ============================================================
-// PAGE METRICS
+// PAGE METRICS — 5 rows (front+back) per A4 portrait sheet
 // ============================================================
-
 function pageMetrics(doc) {
-
-  const PW =
-    doc.page.width;
-
-  const PH =
-    doc.page.height;
-
-
-  const totalW =
-    CARD_W * 2 +
-    GAP_COL;
-
-
-  const totalH =
-    CARD_H *
-      ROWS_PER_PAGE +
-    GAP_ROW *
-      (
-        ROWS_PER_PAGE - 1
-      );
-
-
-  const startX =
-    (
-      PW -
-      totalW
-    ) / 2;
-
-
-  const startY =
-    (
-      PH -
-      totalH
-    ) / 2;
-
-
-  return {
-
-    PW,
-
-    PH,
-
-    startX,
-
-    startY
-
-  };
-
+  const PW = doc.page.width, PH = doc.page.height;
+  const totalW = CARD_W * 2 + GAP_COL;
+  const totalH = CARD_H * ROWS_PER_PAGE + GAP_ROW * (ROWS_PER_PAGE - 1);
+  const startX = (PW - totalW) / 2;
+  const startY = (PH - totalH) / 2;
+  return { PW, PH, startX, startY };
 }
 
-
-// ============================================================
-// PAGE FOOTER
-// ============================================================
-
-function drawPageFooter(
-  doc,
-  text
-) {
-
-  const {
-
-    PW,
-
-    PH
-
-  } =
-    pageMetrics(doc);
-
-
-  doc
-    .font(
-      "Helvetica"
-    )
-    .fontSize(5.5)
-    .fillColor(
-      "#94A3B8"
-    )
-    .text(
-      text,
-      0,
-      PH - 11,
-      {
-
-        width:
-          PW,
-
-        align:
-          "center"
-
-      }
-    );
-
+function drawPageFooter(doc, text) {
+  const { PW, PH } = pageMetrics(doc);
+  doc.font("Helvetica").fontSize(5.5).fillColor("#94A3B8").text(text, 0, PH - 11, { width: PW, align: "center" });
 }
-
-
-// ============================================================
-// DRAW PAGE GUIDES
-// ============================================================
 
 function drawPageGuides(doc) {
-
-  const {
-
-    startX,
-
-    startY
-
-  } =
-    pageMetrics(doc);
-
-
+  const { startX, startY } = pageMetrics(doc);
   doc.save();
-
-  doc
-    .dash(2, {
-      space: 2
-    })
-    .lineWidth(0.3)
-    .strokeColor(
-      "#CBD5E1"
-    );
-
-
-  // VERTICAL GUIDE
-
-  const guideX =
-    startX +
-    CARD_W +
-    GAP_COL / 2;
-
-
-  doc
-    .moveTo(
-      guideX,
-      startY - 3
-    )
-    .lineTo(
-      guideX,
-      startY +
-      ROWS_PER_PAGE *
-      CARD_H +
-      GAP_ROW *
-      (
-        ROWS_PER_PAGE - 1
-      ) +
-      3
-    )
-    .stroke();
-
-
-  // HORIZONTAL GUIDES
-
-  for (
-    let i = 1;
-    i < ROWS_PER_PAGE;
-    i++
-  ) {
-
-    const guideY =
-      startY +
-      i *
-      CARD_H +
-      (
-        i - 0.5
-      ) *
-      GAP_ROW;
-
-
-    doc
-      .moveTo(
-        startX - 3,
-        guideY
-      )
-      .lineTo(
-        startX +
-        CARD_W * 2 +
-        GAP_COL +
-        3,
-        guideY
-      )
-      .stroke();
-
+  doc.dash(2, { space: 2 }).lineWidth(0.3).strokeColor("#CBD5E1");
+  const guideX = startX + CARD_W + GAP_COL / 2;
+  doc.moveTo(guideX, startY - 3).lineTo(guideX, startY + ROWS_PER_PAGE * CARD_H + GAP_ROW * (ROWS_PER_PAGE - 1) + 3).stroke();
+  for (let i = 1; i < ROWS_PER_PAGE; i++) {
+    const guideY = startY + i * CARD_H + (i - 0.5) * GAP_ROW;
+    doc.moveTo(startX - 3, guideY).lineTo(startX + CARD_W * 2 + GAP_COL + 3, guideY).stroke();
   }
-
-
   doc.undash();
-
   doc.restore();
-
 }
 
-
 // ============================================================
-// RENDER STUDENTS GRID
+// RENDER A FULL SET OF STUDENTS (paginated, 5 per sheet)
 // ============================================================
-
-async function renderStudentsGrid(
-  doc,
-  students,
-  sharedLogoBuf,
-  sharedPrincipalBuf,
-  footerText
-) {
-
-  let metrics =
-    pageMetrics(doc);
-
-
+async function renderStudentsGrid(doc, students, sharedLogoBuf, sharedPrincipalBuf, footerText) {
+  let metrics = pageMetrics(doc);
   drawPageGuides(doc);
 
-
-  for (
-    let i = 0;
-    i < students.length;
-    i++
-  ) {
-
-
-    // ========================================
-    // NEW PAGE
-    // ========================================
-
-    if (
-      i > 0 &&
-      i %
-        ROWS_PER_PAGE ===
-        0
-    ) {
-
-      drawPageFooter(
-        doc,
-        footerText
-      );
-
-
-      doc.addPage(
-        {
-
-          size:
-            "A4",
-
-          layout:
-            "portrait",
-
-          margin: 0
-
-        }
-      );
-
-
-      metrics =
-        pageMetrics(doc);
-
-
+  for (let i = 0; i < students.length; i++) {
+    if (i > 0 && i % ROWS_PER_PAGE === 0) {
+      drawPageFooter(doc, footerText);
+      doc.addPage({ size: "A4", layout: "portrait", margin: 0 });
+      metrics = pageMetrics(doc);
       drawPageGuides(doc);
-
     }
 
+    const rowIndex = i % ROWS_PER_PAGE;
+    const rowY = metrics.startY + rowIndex * (CARD_H + GAP_ROW);
+    const frontX = metrics.startX;
+    const backX = metrics.startX + CARD_W + GAP_COL;
+    const student = students[i];
+    const buffers = await buildBuffersFor(student, sharedLogoBuf, sharedPrincipalBuf);
 
-    const rowIndex =
-      i %
-      ROWS_PER_PAGE;
-
-
-    const rowY =
-      metrics.startY +
-      rowIndex *
-      (
-        CARD_H +
-        GAP_ROW
-      );
-
-
-    const frontX =
-      metrics.startX;
-
-
-    const backX =
-      metrics.startX +
-      CARD_W +
-      GAP_COL;
-
-
-    const student =
-      students[i];
-
-
-    const buffers =
-      await buildBuffersFor(
-        student,
-        sharedLogoBuf,
-        sharedPrincipalBuf
-      );
-
-
-    // ========================================
-    // FRONT
-    // ========================================
-
-    drawFrontCard(
-      doc,
-      frontX,
-      rowY,
-      student,
-      buffers
-    );
-
-
-    // ========================================
-    // BACK
-    // ========================================
-
-    drawBackCard(
-      doc,
-      backX,
-      rowY,
-      student,
-      buffers
-    );
-
-
-    // ========================================
-    // CUT MARKS
-    // ========================================
-
-    drawCutMarks(
-      doc,
-      frontX,
-      rowY,
-      CARD_W,
-      CARD_H
-    );
-
-
-    drawCutMarks(
-      doc,
-      backX,
-      rowY,
-      CARD_W,
-      CARD_H
-    );
-
+    drawFrontCard(doc, frontX, rowY, student, buffers);
+    drawBackCard(doc, backX, rowY, student, buffers);
+    drawCutMarks(doc, frontX, rowY, CARD_W, CARD_H);
+    drawCutMarks(doc, backX, rowY, CARD_W, CARD_H);
   }
 
-
-  // ========================================
-  // LAST PAGE FOOTER
-  // ========================================
-
-  drawPageFooter(
-    doc,
-    footerText
-  );
-
+  drawPageFooter(doc, footerText);
 }
 
+// ============================================================
+// SHARED PDF RESPONSE HELPER
+// ============================================================
+async function sendIdCardPdf(res, students, filename, title, footerText) {
+  const [logoBuf, principalBuf] = await Promise.all([
+    fetchImageBuffer(SCHOOL.logoUrl),
+    fetchImageBuffer(SCHOOL.principalSignatureUrl)
+  ]);
+
+  const doc = new PDFDocument({
+    size: "A4", layout: "portrait", margin: 0,
+    info: { Title: title, Author: SCHOOL.name, Subject: "Student Identification Card(s)" }
+  });
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+  doc.pipe(res);
+
+  await renderStudentsGrid(doc, students, logoBuf, principalBuf, footerText);
+  doc.end();
+}
 
 // ============================================================
-// ROUTE
-// SINGLE STUDENT
-// PUBLIC
+// ROUTE — SINGLE STUDENT
 // ============================================================
+router.get("/generate/:studentId/pdf", async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const rows = await q(`SELECT * FROM Nstudent WHERE student_id = ? LIMIT 1`, [studentId]);
+    if (!rows.length) return res.status(404).json({ success: false, message: "Student not found" });
+    const student = rows[0];
 
-router.get(
-  "/generate/:studentId/pdf",
-  async (
-    req,
-    res
-  ) => {
+    await sendIdCardPdf(
+      res,
+      [student],
+      `idcard-${student.student_id}.pdf`,
+      `Student ID Card - ${student.student_id}`,
+      "Official Student ID Card • Govt. Sr. Sec. School Shilla"
+    );
+  } catch (err) {
+    console.error("ID Card PDF Error:", err);
+    if (!res.headersSent) res.status(500).json({ success: false, message: "Unable to generate ID card PDF" });
+  }
+});
 
-    try {
+// ============================================================
+// ROUTE — WHOLE CLASS (BULK)
+// ============================================================
+router.get("/generate-class/:class/pdf", async (req, res) => {
+  try {
+    const cls = req.params.class;
+    const session = req.query.session;
+    const where = ["class = ?"];
+    const params = [cls];
+    if (session) { where.push("session = ?"); params.push(session); }
 
-      const {
-        studentId
-      } =
-        req.params;
+    const students = await q(
+      `SELECT * FROM Nstudent WHERE ${where.join(" AND ")} ORDER BY CAST(roll_number AS UNSIGNED) ASC, name ASC`,
+      params
+    );
 
+    if (!students.length) return res.status(404).json({ success: false, message: "No students found" });
 
-      const rows =
-        await q(
-          `
-          SELECT *
-          FROM Nstudent
-          WHERE student_id = ?
-          LIMIT 1
-          `,
-          [
-            studentId
-          ]
-        );
+    const totalPages = Math.ceil(students.length / ROWS_PER_PAGE);
+    await sendIdCardPdf(
+      res,
+      students,
+      `idcards-class-${cls}.pdf`,
+      `Class ${cls} Student ID Cards`,
+      `Class ${cls} • ${students.length} Students • ${totalPages} Page(s) • Official ID Cards`
+    );
+  } catch (err) {
+    console.error("Bulk ID Card PDF Error:", err);
+    if (!res.headersSent) res.status(500).json({ success: false, message: "Unable to generate class ID cards" });
+  }
+});
 
+// ============================================================
+// ROUTE — SELECTED STUDENTS TOGETHER (any mix, any class)
+// Accepts either:
+//   GET  /generate-selected/pdf?ids=ID1,ID2,ID3
+//   POST /generate-selected/pdf   body: { "ids": ["ID1","ID2","ID3"] }
+// ============================================================
+async function handleSelected(req, res) {
+  try {
+    const rawIds = req.method === "GET"
+      ? (req.query.ids || "")
+      : (req.body && req.body.ids);
 
-      if (
-        !rows.length
-      ) {
+    const ids = Array.isArray(rawIds)
+      ? rawIds.map((v) => String(v).trim()).filter(Boolean)
+      : String(rawIds).split(",").map((v) => v.trim()).filter(Boolean);
 
-        return res
-          .status(404)
-          .json(
-            {
-
-              success:
-                false,
-
-              message:
-                "Student not found"
-
-            }
-          );
-
-      }
-
-
-      const student =
-        rows[0];
-
-
-      // ========================================
-      // SCHOOL IMAGES
-      // ========================================
-
-      const [
-
-        logoBuf,
-
-        principalBuf
-
-      ] =
-        await Promise.all([
-
-          fetchImageBuffer(
-            SCHOOL.logoUrl
-          ),
-
-          fetchImageBuffer(
-            SCHOOL.principalSignatureUrl
-          )
-
-        ]);
-
-
-      // ========================================
-      // PDF
-      // ========================================
-
-      const doc =
-        new PDFDocument(
-          {
-
-            size:
-              "A4",
-
-            layout:
-              "portrait",
-
-            margin: 0,
-
-            info:
-              {
-
-                Title:
-                  `Student ID Card - ${student.student_id}`,
-
-                Author:
-                  SCHOOL.name,
-
-                Subject:
-                  "Official Student Identification Card"
-
-              }
-
-          }
-        );
-
-
-      res.setHeader(
-        "Content-Type",
-        "application/pdf"
-      );
-
-
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="idcard-${student.student_id}.pdf"`
-      );
-
-
-      doc.pipe(res);
-
-
-      await renderStudentsGrid(
-        doc,
-        [
-          student
-        ],
-        logoBuf,
-        principalBuf,
-        "Official Student ID Card • Govt. Sr. Sec. School Shilla"
-      );
-
-
-      doc.end();
-
-
-    } catch (err) {
-
-      console.error(
-        "ID Card PDF Error:",
-        err
-      );
-
-
-      if (
-        !res.headersSent
-      ) {
-
-        res
-          .status(500)
-          .json(
-            {
-
-              success:
-                false,
-
-              message:
-                "Unable to generate ID card PDF"
-
-            }
-          );
-
-      }
-
+    if (!ids.length) {
+      return res.status(400).json({ success: false, message: "No student IDs provided" });
     }
 
-  }
-);
-
-
-// ============================================================
-// ROUTE
-// BULK CLASS PDF
-// PUBLIC
-// ============================================================
-
-router.get(
-  "/generate-class/:class/pdf",
-  async (
-    req,
-    res
-  ) => {
-
-    try {
-
-      const cls =
-        req.params.class;
-
-
-      const session =
-        req.query.session;
-
-
-      const where =
-        [
-          "class = ?"
-        ];
-
-
-      const params =
-        [
-          cls
-        ];
-
-
-      if (session) {
-
-        where.push(
-          "session = ?"
-        );
-
-        params.push(
-          session
-        );
-
-      }
-
-
-      const students =
-        await q(
-          `
-          SELECT *
-          FROM Nstudent
-          WHERE ${where.join(" AND ")}
-          ORDER BY
-            CAST(roll_number AS UNSIGNED) ASC,
-            name ASC
-          `,
-          params
-        );
-
-
-      if (
-        !students.length
-      ) {
-
-        return res
-          .status(404)
-          .json(
-            {
-
-              success:
-                false,
-
-              message:
-                "No students found"
-
-            }
-          );
-
-      }
-
-
-      // ========================================
-      // SCHOOL IMAGES
-      // ========================================
-
-      const [
-
-        logoBuf,
-
-        principalBuf
-
-      ] =
-        await Promise.all([
-
-          fetchImageBuffer(
-            SCHOOL.logoUrl
-          ),
-
-          fetchImageBuffer(
-            SCHOOL.principalSignatureUrl
-          )
-
-        ]);
-
-
-      // ========================================
-      // PDF
-      // ========================================
-
-      const doc =
-        new PDFDocument(
-          {
-
-            size:
-              "A4",
-
-            layout:
-              "portrait",
-
-            margin: 0,
-
-            info:
-              {
-
-                Title:
-                  `Class ${cls} Student ID Cards`,
-
-                Author:
-                  SCHOOL.name,
-
-                Subject:
-                  "Bulk Student ID Cards"
-
-              }
-
-          }
-        );
-
-
-      res.setHeader(
-        "Content-Type",
-        "application/pdf"
-      );
-
-
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="idcards-class-${cls}.pdf"`
-      );
-
-
-      doc.pipe(res);
-
-
-      const totalPages =
-        Math.ceil(
-          students.length /
-          ROWS_PER_PAGE
-        );
-
-
-      const footerText =
-        `Class ${cls} • ${students.length} Students • ${totalPages} Page(s) • Official ID Cards`;
-
-
-      await renderStudentsGrid(
-        doc,
-        students,
-        logoBuf,
-        principalBuf,
-        footerText
-      );
-
-
-      doc.end();
-
-
-    } catch (err) {
-
-      console.error(
-        "Bulk ID Card PDF Error:",
-        err
-      );
-
-
-      if (
-        !res.headersSent
-      ) {
-
-        res
-          .status(500)
-          .json(
-            {
-
-              success:
-                false,
-
-              message:
-                "Unable to generate class ID cards"
-
-            }
-          );
-
-      }
-
+    const placeholders = ids.map(() => "?").join(",");
+    const students = await q(
+      `SELECT * FROM Nstudent WHERE student_id IN (${placeholders})`,
+      ids
+    );
+
+    if (!students.length) {
+      return res.status(404).json({ success: false, message: "No matching students found" });
     }
 
+    // Preserve the order the caller selected them in
+    const order = new Map(ids.map((id, idx) => [id, idx]));
+    students.sort((a, b) => (order.get(String(a.student_id)) ?? 0) - (order.get(String(b.student_id)) ?? 0));
+
+    const totalPages = Math.ceil(students.length / ROWS_PER_PAGE);
+    await sendIdCardPdf(
+      res,
+      students,
+      `idcards-selected.pdf`,
+      `Selected Student ID Cards`,
+      `Selected Students • ${students.length} Students • ${totalPages} Page(s) • Official ID Cards`
+    );
+  } catch (err) {
+    console.error("Selected ID Card PDF Error:", err);
+    if (!res.headersSent) res.status(500).json({ success: false, message: "Unable to generate selected ID cards" });
   }
-);
+}
 
+router.get("/generate-selected/pdf", handleSelected);
+router.post("/generate-selected/pdf", handleSelected);
 
-module.exports =
-  router;
-
+module.exports = router;
