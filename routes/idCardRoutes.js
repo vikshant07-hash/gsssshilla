@@ -13,7 +13,6 @@ const q = (sql, params = []) => db.query(sql, params);
 // ============================================================
 // SCHOOL CONFIG
 // ============================================================
-
 const SCHOOL = {
   name: "GOVT. SR. SEC. SCHOOL SHILLA",
   address: "Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh - 171210",
@@ -25,13 +24,13 @@ const SCHOOL = {
 };
 
 // ============================================================
-// CARD SIZE - CR80 STANDARD PVC ID CARD (86mm x 54mm)
+// CARD SIZE - CR80 STANDARD (86mm x 54mm)
 // ============================================================
 const CARD_W = 243;
 const CARD_H = 153;
 
 // ============================================================
-// A4 PAGE SETTINGS — 5 rows (front+back) per A4 portrait sheet
+// A4 PAGE SETTINGS
 // ============================================================
 const GAP_COL = 12;
 const GAP_ROW = 8;
@@ -143,7 +142,7 @@ function drawCutMarks(doc, x, y, w, h, len = 7, offset = 3) {
   doc.moveTo(x - offset, y).lineTo(x - offset - len, y).stroke();
   doc.moveTo(x, y - offset).lineTo(x, y - offset - len).stroke();
   doc.moveTo(x + w + offset, y).lineTo(x + w + offset + len, y).stroke();
-  doc.moveTo(x + w, y - offset).lineTo(x + w, y - offset - len).stroke();
+  doc.moveTo(x + w, y - offset).lineTo(x, y - offset - len).stroke();
   doc.moveTo(x - offset, y + h).lineTo(x - offset - len, y + h).stroke();
   doc.moveTo(x, y + h + offset).lineTo(x, y + h + offset + len).stroke();
   doc.moveTo(x + w + offset, y + h).lineTo(x + w + offset + len, y + h).stroke();
@@ -192,7 +191,6 @@ function drawHeader(doc, x, y, logoBuf) {
       doc.save();
       doc.circle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2 + 1.5).fill(THEME.white);
       doc.restore();
-      // Clip logo strictly inside its circle-box
       doc.save();
       doc.rect(logoX, logoY, logoSize, logoSize).clip();
       doc.image(logoBuf, logoX, logoY, { fit: [logoSize, logoSize], align: "center", valign: "center" });
@@ -228,11 +226,7 @@ function drawBadge(doc, x, y, text) {
 }
 
 // ============================================================
-// GENERIC CLIPPED IMAGE DRAWER
-// ------------------------------------------------------------
-// Draws an image STRICTLY inside the given box. Even if the source
-// image is huge, it will be scaled to fit and clipped so it can
-// never spill over surrounding text or outside the card.
+// CLIPPED IMAGE DRAWER
 // ============================================================
 function drawImageInBox(doc, imgBuf, bx, by, bw, bh, opts = {}) {
   if (!imgBuf || bw <= 0 || bh <= 0) return false;
@@ -274,91 +268,70 @@ function drawPhotoPlaceholder(doc, x, y, w, h) {
 }
 
 // ============================================================
-// SIGNATURES
-// ------------------------------------------------------------
-// Both signatures are drawn inside a small FIXED-HEIGHT clipped box.
-// The image is scaled down to fit inside this box and clipped so
-// it can NEVER overlap the text or bleed outside the card.
-//
-// Return value = the Y coordinate of the BOTTOM of the block, so
-// the caller can place things beneath it safely.
+// STUDENT SIGNATURE (right column, below photo)
 // ============================================================
-
-const SIG_IMG_H = 18;      // fixed height for signature image box
-const SIG_LABEL_H = 7.5;   // height reserved for the name line + label
-
-
-// ============================================================
-// PRINCIPAL SIGNATURE
-// ------------------------------------------------------------
-// Layout (top → bottom):
-//   [ Signature Image ]   ← upar, overlap kar sakti hai
-//   [ Principal       ]   ← FIXED position (line ke just upar)
-//   ─────────────────     ← line (bottom, FIXED)
-//
-// "Principal" text ALWAYS stays fixed and is drawn AFTER the
-// image, so it remains visible even if the signature overlaps it.
-// ============================================================
-// ============================================================
-// PRINCIPAL SIGNATURE (stamp style)
-// ------------------------------------------------------------
-// Layout (top → bottom):
-//
-//      ┌───────────────┐
-//      │  Signature    │   ← 70px tall image, drawn LAST
-//      │  (stamp)      │     so it sits ON TOP of the text
-//      └───────────────┘
-//           Principal        ← text (fixed, line ke just upar)
-//      ─────────────────     ← line (fixed, bottom)
-//
-// - Text position FIXED (never moves)
-// - Line position FIXED
-// - Image is 70px tall and drawn AFTER text → appears in FRONT,
-//   overlapping the text like a stamp.
-// ============================================================
-function drawPrincipalSignature(doc, principalBuf, x, y, width = 78) {
-  const IMG_H   = 70;      // aapki requirement: image 70px tall
-  const LABEL_H = 7;       // "Principal" text height
-  const LINE_GAP = 1;
-
-  // Image box overlaps the label — image sits ABOVE the label and
-  // extends DOWN over the label area (stamp effect)
-  const imgTop    = y;                        // image starts here (top)
-  const labelY    = y + IMG_H - LABEL_H - 1;  // label INSIDE image bottom area
-  const lineY     = labelY + LABEL_H + LINE_GAP; // line below label
-
-  // 1. Draw "Principal" label FIRST (so image can overlay it)
-  doc.font("Helvetica-Bold").fontSize(5.4).fillColor(THEME.dark)
-    .text("Principal", x, labelY, { width, align: "center", lineBreak: false });
-
-  // 2. Draw the line (also first, so image can overlay it slightly)
-  doc.moveTo(x, lineY).lineTo(x + width, lineY)
-    .lineWidth(0.6).strokeColor(THEME.muted).stroke();
-
-  // 3. Draw the image LAST → it appears in FRONT, stamping over the text
-  //    Clip it strictly inside its own box so it can't spill sideways.
-  drawImageInBox(doc, principalBuf, x, imgTop, width, IMG_H + 4, {
-    align: "center",
-    valign: "bottom"
-  });
-
-  return lineY + 1;
-}
-
-
-
 function drawStudentSignature(doc, signatureBuf, x, y, width) {
-  const imgH = SIG_IMG_H;
-  const imgW = width - 4;
+  const imgH = 18;
+  const labelH = 7.5;
 
-  drawImageInBox(doc, signatureBuf, x + 2, y, imgW, imgH);
+  drawImageInBox(doc, signatureBuf, x + 2, y, width - 4, imgH);
 
   const lineY = y + imgH + 1.5;
-  doc.moveTo(x + 2, lineY).lineTo(x + width - 2, lineY).lineWidth(0.5).strokeColor(THEME.muted).stroke();
+  doc.moveTo(x + 2, lineY).lineTo(x + width - 2, lineY)
+    .lineWidth(0.5).strokeColor(THEME.muted).stroke();
   doc.font("Helvetica").fontSize(4.4).fillColor(THEME.muted)
     .text("Student Signature", x, lineY + 1.1, { width, align: "center", lineBreak: false });
 
-  return lineY + 1.1 + SIG_LABEL_H;
+  return lineY + 1.1 + labelH;
+}
+
+// ============================================================
+// PRINCIPAL STAMP
+// ------------------------------------------------------------
+// - Stamp image is drawn LAST (in front of all text)
+// - It's clipped to stay STRICTLY INSIDE the card boundary
+// - Position is anchored to the card's bottom-left corner
+// - "Principal" text + signature line are drawn FIRST, then the
+//   image is stamped ON TOP so it looks like a real rubber stamp.
+// ============================================================
+const STAMP_SIZE = 70;   // 70px stamp as you requested
+
+function drawPrincipalStamp(doc, principalBuf, cardX, cardY) {
+  // Anchor stamp inside card with a small margin from the left/bottom edges
+  const margin = 6;
+  const stampX = cardX + margin;
+  const stampY = cardY + CARD_H - STAMP_SIZE - margin;
+
+  // 1. Draw the signature line + "Principal" label FIRST (text ke upar
+  //    stamp aayegi). Line is anchored just above the card's bottom edge.
+  const lineWidth = 60;
+  const lineX = cardX + 10;
+  const lineY = cardY + CARD_H - margin - 4;   // 4px above bottom margin
+
+  doc.moveTo(lineX, lineY).lineTo(lineX + lineWidth, lineY)
+    .lineWidth(0.6).strokeColor(THEME.muted).stroke();
+
+  doc.font("Helvetica-Bold").fontSize(5.4).fillColor(THEME.dark)
+    .text("Principal", lineX, lineY - 7, { width: lineWidth, align: "center", lineBreak: false });
+
+  // 2. Draw the stamp image LAST, clipped to the CARD boundaries so it
+  //    can NEVER spill outside the card. It will overlap the "Principal"
+  //    text (stamp-on-text effect).
+  if (principalBuf) {
+    try {
+      doc.save();
+      // Clip to the card's inner rounded rectangle area
+      doc.roundedRect(cardX + 3, cardY + 3, CARD_W - 6, CARD_H - 6, 8).clip();
+      doc.image(principalBuf, stampX, stampY, {
+        fit: [STAMP_SIZE, STAMP_SIZE],
+        align: "center",
+        valign: "center"
+      });
+      doc.restore();
+    } catch (err) {
+      try { doc.restore(); } catch (_) {}
+    }
+  }
 }
 
 // ============================================================
@@ -382,8 +355,7 @@ function drawInfoRow(doc, x, y, width, label, value, opts = {}) {
 }
 
 // ============================================================
-// INSTRUCTIONS BOX (back side, fills space freed by removing
-// duplicate principal signature)
+// INSTRUCTIONS BOX
 // ============================================================
 function drawInstructionsBox(doc, x, y, width, height) {
   if (height < 18) height = 18;
@@ -401,7 +373,7 @@ function drawInstructionsBox(doc, x, y, width, height) {
 
   let ry = y + 10.5;
   rules.forEach((rule) => {
-    if (ry + 7 > y + height - 6) return; // don't spill outside box
+    if (ry + 7 > y + height - 6) return;
     doc.font("Helvetica-Bold").fontSize(4.5).fillColor(THEME.dark).text("•", x + 6, ry, { width: 6, lineBreak: false });
     doc.font("Helvetica").fontSize(4.5).fillColor(THEME.text)
       .text(rule, x + 12, ry, { width: width - 18, lineBreak: false });
@@ -427,11 +399,9 @@ function drawFrontCard(doc, x, y, student, buffers) {
   const photoX = x + W - 66, photoY = contentY;
   const photo = drawStudentPhoto(doc, buffers.photoBuf, photoX, photoY);
 
-  // Student signature is placed BELOW the photo, strictly clipped
   const sigTop = photoY + photo.photoH + 3;
   const sigBottom = drawStudentSignature(doc, buffers.signatureBuf, photoX - 3, sigTop, photo.photoW + 6);
 
-  // Valid upto sits under the student signature (same right column)
   doc.font("Helvetica").fontSize(4.4).fillColor(THEME.muted)
     .text("Valid Upto: " + sessionValidUpto(student.session),
       photoX - 3, sigBottom + 0.5,
@@ -461,13 +431,10 @@ function drawFrontCard(doc, x, y, student, buffers) {
   ry += rowH;
 
   drawInfoRow(doc, infoX, ry, infoW, "Session", student.session, { labelW: 42 });
-  ry += rowH;
 
-  // ---- Footer: principal signature ----
-  // Compute bottom limit for the signature block so it always
-  // stays well inside the card.
-  const footerY = Math.min(ry + 3, y + H - 26);
-  drawPrincipalSignature(doc, buffers.principalBuf, x + 10, footerY, 78);
+  // ---- PRINCIPAL STAMP: drawn LAST so it appears OVER text ----
+  // Anchored to bottom-left, clipped inside card boundaries.
+  drawPrincipalStamp(doc, buffers.principalBuf, x, y);
 }
 
 // ============================================================
@@ -481,7 +448,6 @@ function drawBackCard(doc, x, y, student, buffers) {
   drawBadge(doc, x, badgeY, "Address & Verification");
   const contentY = badgeY + 16;
 
-  // ---- Right column: QR ----
   const qrSize = 42;
   const qrX = x + W - qrSize - 10;
   const qrY = contentY;
@@ -494,7 +460,6 @@ function drawBackCard(doc, x, y, student, buffers) {
     .text("SCAN TO VERIFY", qrX - 6, qrY + qrSize + 3, { width: qrSize + 12, align: "center", lineBreak: false });
   const qrColumnBottom = qrY + qrSize + 3 + 6;
 
-  // ---- Left column: info rows ----
   const infoX = x + 10;
   const infoRight = qrX - 10;
   const infoW = infoRight - infoX;
@@ -520,7 +485,6 @@ function drawBackCard(doc, x, y, student, buffers) {
   drawInfoRow(doc, infoX + halfW + 8, row3Y, halfW, "APAAR ID", student.apaar_id, { labelW: 34, fontSize: 6.2 });
   const rowsColumnBottom = row3Y + 11;
 
-  // ---- Instructions box fills the space below ----
   const boxY = Math.max(qrColumnBottom, rowsColumnBottom) + 3;
   const boxHeight = y + H - 6 - boxY;
   drawInstructionsBox(doc, x + 8, boxY, W - 16, boxHeight);
@@ -680,7 +644,7 @@ router.get("/generate-class/:class/pdf", async (req, res) => {
 });
 
 // ============================================================
-// ROUTE — SELECTED STUDENTS (any mix)
+// ROUTE — SELECTED STUDENTS
 // ============================================================
 async function handleSelected(req, res) {
   try {
