@@ -34,24 +34,28 @@ const fetchImageBuffer = (url) => new Promise((resolve) => {
   }).on("error", () => resolve(null));
 });
 
-const fmtDateTime = (d) => {
-  if (!d) return "—";
-  const dt = new Date(d);
-  return isNaN(dt) ? d : dt.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-};
-
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d);
   return isNaN(dt) ? d : dt.toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
 };
 
+const generateCertCode = (attemptId, studentId) => {
+  const raw = `CERT-${attemptId}-${studentId}-${Date.now()}`;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw.charCodeAt(i);
+    hash = ((hash << 5) - hash) + c;
+    hash = hash & hash;
+  }
+  return `GSSS-QZ-${Math.abs(hash).toString(36).toUpperCase().substring(0, 10)}`;
+};
+
 // ============================================================
-// AUTO-START / AUTO-END ENGINE (runs every 30 seconds)
+// AUTO-START / AUTO-END ENGINE
 // ============================================================
 setInterval(async () => {
   try {
-    // Auto-start scheduled events
     const toStart = await q(
       `SELECT * FROM quiz_events 
        WHERE status = 'Scheduled' 
@@ -59,36 +63,29 @@ setInterval(async () => {
          AND scheduled_start <= NOW()
          AND is_active = 1`
     );
-
     for (const evt of toStart) {
       const qCount = await q("SELECT COUNT(*) as c FROM quiz_questions WHERE event_id = ?", [evt.id]);
       if (qCount[0].c >= 1) {
         await q("UPDATE quiz_events SET status = 'Live', started_at = NOW() WHERE id = ?", [evt.id]);
-        console.log(`🟢 Auto-started quiz #${evt.id}: ${evt.title}`);
+        console.log(`🟢 Auto-started quiz #${evt.id}`);
       }
     }
-
-    // Auto-end scheduled events
     const toEnd = await q(
       `SELECT * FROM quiz_events 
        WHERE status = 'Live' 
          AND scheduled_end IS NOT NULL 
          AND scheduled_end <= NOW()`
     );
-
     for (const evt of toEnd) {
       await q("UPDATE quiz_events SET status = 'Ended', ended_at = NOW() WHERE id = ?", [evt.id]);
-      // Auto-submit in-progress attempts
       await q(
         `UPDATE quiz_attempts SET status = 'AutoSubmitted', submitted_at = NOW()
          WHERE event_id = ? AND status = 'InProgress'`,
         [evt.id]
       );
-      console.log(`🔴 Auto-ended quiz #${evt.id}: ${evt.title}`);
+      console.log(`🔴 Auto-ended quiz #${evt.id}`);
     }
-  } catch (err) {
-    // silent
-  }
+  } catch (err) {}
 }, 30000);
 
 // ============================================================
@@ -106,6 +103,7 @@ router.post("/events", requireAdmin, async (req, res) => {
     if (!title || !cls) return res.status(400).json({ success: false, message: "Title and class required" });
     if (!durationMinutes || durationMinutes < 1) return res.status(400).json({ success: false, message: "Duration required" });
     if (!totalQuestions || totalQuestions < 3) return res.status(400).json({ success: false, message: "At least 3 questions required" });
+
     const streamVal = ["11","12"].includes(String(cls)) ? (stream || "Non-Specialized") : "Non-Specialized";
 
     let status = "Draft";
@@ -132,7 +130,6 @@ router.post("/events", requireAdmin, async (req, res) => {
       ]
     );
 
-    // If status is Live (started immediately)
     if (status === "Live") {
       await q("UPDATE quiz_events SET started_at = NOW() WHERE id = ?", [result.insertId]);
     }
@@ -168,7 +165,6 @@ router.get("/events", requireAdmin, async (req, res) => {
          e.created_at DESC`,
       params
     );
-
     res.json({ success: true, data: rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -176,19 +172,17 @@ router.get("/events", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — GET SINGLE EVENT + QUESTIONS
+// ADMIN — GET SINGLE
 // ============================================================
 router.get("/events/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const rows = await q("SELECT * FROM quiz_events WHERE id = ?", [id]);
     if (!rows.length) return res.status(404).json({ success: false, message: "Event not found" });
-
     const questions = await q(
       "SELECT * FROM quiz_questions WHERE event_id = ? ORDER BY question_no ASC",
       [id]
     );
-
     res.json({ success: true, data: rows[0], questions });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -196,17 +190,15 @@ router.get("/events/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — SAVE QUESTIONS (bulk replace)
+// ADMIN — SAVE QUESTIONS
 // ============================================================
 router.post("/events/:id/questions", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { questions } = req.body;
-
     if (!Array.isArray(questions) || !questions.length) {
       return res.status(400).json({ success: false, message: "Questions array required" });
     }
-
     const eventRows = await q("SELECT * FROM quiz_events WHERE id = ?", [id]);
     if (!eventRows.length) return res.status(404).json({ success: false, message: "Event not found" });
 
@@ -232,9 +224,7 @@ router.post("/events/:id/questions", requireAdmin, async (req, res) => {
       );
       inserted++;
     }
-
     await q("UPDATE quiz_events SET total_questions = ?, total_marks = ? WHERE id = ?", [inserted, inserted, id]);
-
     res.json({ success: true, message: `${inserted} questions saved ✅`, count: inserted });
   } catch (err) {
     console.error("❌ save questions error:", err);
@@ -243,7 +233,7 @@ router.post("/events/:id/questions", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — UPDATE EVENT
+// ADMIN — UPDATE
 // ============================================================
 router.put("/events/:id", requireAdmin, async (req, res) => {
   try {
@@ -253,7 +243,6 @@ router.put("/events/:id", requireAdmin, async (req, res) => {
       scheduledStart, scheduledEnd, passPercentage,
       randomizeQuestions, showResultImmediately
     } = req.body;
-
     const rows = await q("SELECT * FROM quiz_events WHERE id = ?", [id]);
     if (!rows.length) return res.status(404).json({ success: false, message: "Event not found" });
     const e = rows[0];
@@ -277,7 +266,6 @@ router.put("/events/:id", requireAdmin, async (req, res) => {
         id
       ]
     );
-
     const updated = await q("SELECT * FROM quiz_events WHERE id = ?", [id]);
     res.json({ success: true, message: "Event updated ✅", data: updated[0] });
   } catch (err) {
@@ -286,17 +274,15 @@ router.put("/events/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — GO LIVE NOW
+// ADMIN — GO LIVE
 // ============================================================
 router.post("/events/:id/go-live", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const rows = await q("SELECT * FROM quiz_events WHERE id = ?", [id]);
     if (!rows.length) return res.status(404).json({ success: false, message: "Event not found" });
-
     const qCount = await q("SELECT COUNT(*) as c FROM quiz_questions WHERE event_id = ?", [id]);
     if (!qCount[0].c) return res.status(400).json({ success: false, message: "Add questions first" });
-
     await q("UPDATE quiz_events SET status = 'Live', started_at = NOW() WHERE id = ?", [id]);
     res.json({ success: true, message: "Quiz is now LIVE ✅" });
   } catch (err) {
@@ -305,7 +291,7 @@ router.post("/events/:id/go-live", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — END NOW
+// ADMIN — END
 // ============================================================
 router.post("/events/:id/end", requireAdmin, async (req, res) => {
   try {
@@ -331,14 +317,14 @@ router.post("/events/:id/reset", requireAdmin, async (req, res) => {
     await q("DELETE FROM quiz_answers WHERE event_id = ?", [id]);
     await q("DELETE FROM quiz_attempts WHERE event_id = ?", [id]);
     await q("UPDATE quiz_events SET status = 'Draft', started_at = NULL, ended_at = NULL WHERE id = ?", [id]);
-    res.json({ success: true, message: "Event reset — all attempts cleared ✅" });
+    res.json({ success: true, message: "Event reset ✅" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ============================================================
-// ADMIN — DELETE EVENT
+// ADMIN — DELETE
 // ============================================================
 router.delete("/events/:id", requireAdmin, async (req, res) => {
   try {
@@ -354,7 +340,7 @@ router.delete("/events/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — ATTEMPTS LIST
+// ADMIN — ATTEMPTS
 // ============================================================
 router.get("/events/:id/attempts", requireAdmin, async (req, res) => {
   try {
@@ -371,7 +357,7 @@ router.get("/events/:id/attempts", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — Available quizzes
+// STUDENT — Available
 // ============================================================
 router.post("/student/available", async (req, res) => {
   try {
@@ -379,7 +365,6 @@ router.post("/student/available", async (req, res) => {
     if (!studentId || !studentClass) {
       return res.status(400).json({ success: false, message: "Student ID and class required" });
     }
-
     const student = await q(
       "SELECT * FROM Nstudent WHERE student_id = ? AND class = ?",
       [studentId, studentClass]
@@ -390,8 +375,6 @@ router.post("/student/available", async (req, res) => {
     if (email && student[0].email_id && student[0].email_id.toLowerCase() !== email.toLowerCase()) {
       return res.status(403).json({ success: false, message: "Email does not match our records" });
     }
-
-    const streamVal = ["11","12"].includes(String(studentClass)) ? (student[0].stream || "Non-Specialized") : "Non-Specialized";
 
     const events = await q(
       `SELECT e.*, 
@@ -427,13 +410,13 @@ router.post("/student/available", async (req, res) => {
       }))
     });
   } catch (err) {
-    console.error("❌ available quizzes error:", err);
+    console.error("❌ available error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ============================================================
-// STUDENT — Start quiz
+// STUDENT — Start
 // ============================================================
 router.post("/student/start/:eventId", async (req, res) => {
   try {
@@ -448,8 +431,6 @@ router.post("/student/start/:eventId", async (req, res) => {
     if (event.status !== "Live") {
       return res.status(400).json({ success: false, message: "Quiz is not live right now" });
     }
-
-    // Check schedule window
     if (event.scheduled_end && new Date() > new Date(event.scheduled_end)) {
       return res.status(400).json({ success: false, message: "Quiz time has expired" });
     }
@@ -488,7 +469,6 @@ router.post("/student/start/:eventId", async (req, res) => {
       "SELECT id, question_no, question_en, question_hi, option_a_en, option_b_en, option_c_en, option_d_en, option_a_hi, option_b_hi, option_c_hi, option_d_hi, marks FROM quiz_questions WHERE event_id = ? ORDER BY question_no ASC",
       [eventId]
     );
-
     if (event.randomize_questions) {
       questions = questions.sort(() => Math.random() - 0.5);
     }
@@ -498,7 +478,6 @@ router.post("/student/start/:eventId", async (req, res) => {
       [attemptId]
     );
 
-    // Calculate remaining time
     const startedAt = new Date(existing.length ? existing[0].started_at : new Date());
     const elapsedSeconds = Math.floor((Date.now() - startedAt.getTime()) / 1000);
     const durationSeconds = event.duration_minutes * 60;
@@ -523,13 +502,12 @@ router.post("/student/start/:eventId", async (req, res) => {
       answered
     });
   } catch (err) {
-    console.error("❌ start quiz error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ============================================================
-// STUDENT — Save answer
+// STUDENT — Answer
 // ============================================================
 router.post("/student/answer", async (req, res) => {
   try {
@@ -578,7 +556,6 @@ router.post("/student/answer", async (req, res) => {
         [attemptId, attempts[0].event_id, questionId, selectedAnswer || null, isCorrect, marksAwarded]
       );
     }
-
     res.json({ success: true, saved: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -591,22 +568,18 @@ router.post("/student/answer", async (req, res) => {
 router.post("/student/submit/:attemptId", async (req, res) => {
   try {
     const { attemptId } = req.params;
-
     const attempts = await q("SELECT * FROM quiz_attempts WHERE id = ?", [attemptId]);
     if (!attempts.length) return res.status(404).json({ success: false, message: "Attempt not found" });
     if (attempts[0].status !== "InProgress") {
       return res.status(400).json({ success: false, message: "Already submitted" });
     }
     const attempt = attempts[0];
-
     const eventRows = await q("SELECT * FROM quiz_events WHERE id = ?", [attempt.event_id]);
     const event = eventRows[0];
-
     const answers = await q("SELECT * FROM quiz_answers WHERE attempt_id = ?", [attemptId]);
 
     const totalQuestions = event.total_questions;
     let correct = 0, wrong = 0, unanswered = 0, marksObtained = 0;
-
     for (const ans of answers) {
       if (!ans.selected_answer) { unanswered++; continue; }
       if (ans.is_correct) { correct++; marksObtained += ans.marks_awarded; }
@@ -629,13 +602,12 @@ router.post("/student/submit/:attemptId", async (req, res) => {
     const updated = await q("SELECT * FROM quiz_attempts WHERE id = ?", [attemptId]);
     res.json({ success: true, message: "Quiz submitted ✅", attempt: updated[0] });
   } catch (err) {
-    console.error("❌ submit error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ============================================================
-// CERTIFICATE PDF
+// CERTIFICATE PDF — Professional, QR, Watermark, Patterns
 // ============================================================
 router.get("/certificate/:attemptId/pdf", async (req, res) => {
   try {
@@ -652,99 +624,180 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     if (!events.length) return res.status(404).json({ success: false, message: "Event not found" });
     const event = events[0];
 
+    // Certificate code
+    const certCode = generateCertCode(attempt.id, attempt.student_id);
+
+    // Determine pass/fail
+    const passed = Number(attempt.percentage) >= Number(event.pass_percentage);
+    const certTitle = passed ? "CERTIFICATE OF ACHIEVEMENT" : "CERTIFICATE OF PARTICIPATION";
+
+    // Colour theme — gradient colours
+    const themePrimary = passed ? "#0f766e" : "#7c2d12";     // Teal or Rust
+    const themeAccent = passed ? "#10b981" : "#f59e0b";      // Emerald or Amber
+    const themeDark = "#0d1b2a";
+    const themeGold = "#c9972b";
+    const themeLight = passed ? "#ecfdf5" : "#fffbeb";
+
+    // Fetch assets
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
 
-    const passed = Number(attempt.percentage) >= Number(event.pass_percentage);
-    const certType = passed ? "CERTIFICATE OF ACHIEVEMENT" : "CERTIFICATE OF PARTICIPATION";
-    const certColor = passed ? "#16a34a" : "#c9972b";
-    const certBg = passed ? "#f0fdf4" : "#fef8ed";
+    // QR code with verification URL
+    const verifyUrl = `https://gsssshilla07.pages.dev/verify-certificate.html?code=${encodeURIComponent(certCode)}&attempt=${attemptId}`;
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(verifyUrl)}&color=0d1b2a&bgcolor=ffffff`;
+    const qrBuf = await fetchImageBuffer(qrUrl);
 
+    // PDF — A4 Landscape
     const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 0 });
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="certificate-${attemptId}.pdf"`);
+    res.setHeader("Content-Disposition", `inline; filename="certificate-${certCode}.pdf"`);
     doc.pipe(res);
 
-    const PW = doc.page.width;
-    const PH = doc.page.height;
+    const PW = doc.page.width;   // ~841
+    const PH = doc.page.height;  // ~595
 
-    doc.rect(20, 20, PW - 40, PH - 40).lineWidth(4).strokeColor("#c9972b").stroke();
-    doc.rect(30, 30, PW - 60, PH - 60).lineWidth(1).strokeColor("#c9972b").stroke();
-
+    // ==================== BACKGROUND PATTERN ====================
+    // Soft diagonal stripes (colourful)
     doc.save();
-    doc.opacity(0.04);
-    doc.fontSize(120).font("Helvetica-Bold").fillColor("#0d1b2a");
-    doc.rotate(-30, { origin: [PW / 2, PH / 2] });
-    doc.text("GSSS SHILLA", PW / 2 - 400, PH / 2 - 60, { width: 800, align: "center" });
+    for (let i = -PH; i < PW + PH; i += 40) {
+      doc.moveTo(i, 0).lineTo(i + PH, PH).lineWidth(0.4).strokeColor(passed ? "#d1fae5" : "#fef3c7").stroke();
+    }
     doc.restore();
 
-    let y = 55;
-    if (logoBuf) {
-      try { doc.image(logoBuf, PW / 2 - 30, y, { width: 60, height: 60 }); } catch (e) {}
+    // Corner circle patterns (decorative)
+    doc.save();
+    doc.opacity(0.06);
+    doc.circle(0, 0, 200).fill(themePrimary);
+    doc.circle(PW, PH, 250).fill(themeAccent);
+    doc.circle(PW, 0, 150).fill(themeGold);
+    doc.circle(0, PH, 180).fill(themeAccent);
+    doc.restore();
+
+    // Small dots pattern
+    doc.save();
+    doc.opacity(0.08);
+    for (let x = 0; x < PW; x += 25) {
+      for (let y = 0; y < PH; y += 25) {
+        if ((x + y) % 50 === 0) doc.circle(x, y, 0.8).fill(themePrimary);
+      }
     }
-    y += 70;
+    doc.restore();
 
-    doc.font("Helvetica-Bold").fontSize(24).fillColor("#0d1b2a")
-      .text("GOVT. SR. SEC. SCHOOL SHILLA", 0, y, { width: PW, align: "center" });
-    y += 28;
-    doc.font("Helvetica").fontSize(11).fillColor("#5a6a7e")
-      .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", 0, y, { width: PW, align: "center" });
-    y += 30;
+    // ==================== LOGO WATERMARK (CENTER) ====================
+    if (logoBuf) {
+      doc.save();
+      doc.opacity(0.06);
+      try { doc.image(logoBuf, PW / 2 - 150, PH / 2 - 150, { width: 300, height: 300 }); } catch (e) {}
+      doc.restore();
+    }
 
-    doc.moveTo(PW / 2 - 250, y).lineTo(PW / 2 + 250, y).lineWidth(2).strokeColor("#c9972b").stroke();
-    y += 25;
+    // Large text watermark
+    doc.save();
+    doc.opacity(0.035);
+    doc.fontSize(110).font("Times-BoldItalic").fillColor(themePrimary);
+    doc.rotate(-28, { origin: [PW / 2, PH / 2] });
+    doc.text("GSSS SHILLA", PW / 2 - 380, PH / 2 - 60, { width: 760, align: "center" });
+    doc.restore();
 
-    doc.font("Helvetica-Bold").fontSize(28).fillColor(certColor)
-      .text(certType, 0, y, { width: PW, align: "center", characterSpacing: 3 });
-    y += 45;
+    // ==================== OUTER BORDERS ====================
+    // Outer gradient border (multiple strokes for gradient effect)
+    doc.rect(15, 15, PW - 30, PH - 30).lineWidth(6).strokeColor(themePrimary).stroke();
+    doc.rect(22, 22, PW - 44, PH - 44).lineWidth(2).strokeColor(themeGold).stroke();
+    doc.rect(28, 28, PW - 56, PH - 56).lineWidth(0.8).strokeColor(themeAccent).stroke();
 
-    doc.font("Helvetica-Oblique").fontSize(12).fillColor("#5a6a7e")
+    // Corner decorative squares
+    const cornerSize = 20;
+    [ [22, 22], [PW - 22 - cornerSize, 22], [22, PH - 22 - cornerSize], [PW - 22 - cornerSize, PH - 22 - cornerSize] ]
+      .forEach(([x, y]) => {
+        doc.rect(x, y, cornerSize, cornerSize).fill(themeAccent);
+        doc.rect(x + 4, y + 4, cornerSize - 8, cornerSize - 8).fill(themeGold);
+      });
+
+    // ==================== HEADER ====================
+    let y = 55;
+
+    if (logoBuf) {
+      try { doc.image(logoBuf, PW / 2 - 40, y, { width: 80, height: 80 }); } catch (e) {}
+    }
+    y += 90;
+
+    doc.font("Times-Bold").fontSize(28).fillColor(themeDark)
+      .text("GOVT. SR. SEC. SCHOOL SHILLA", 0, y, { width: PW, align: "center", characterSpacing: 1 });
+
+    y += 34;
+    doc.font("Times-Italic").fontSize(12).fillColor("#5a6a7e")
+      .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", 0, y, { width: PW, align: "center", characterSpacing: 2 });
+
+    y += 20;
+    doc.font("Helvetica").fontSize(9).fillColor("#94a3b8")
+      .text("Affiliated to H.P. Board of School Education, Dharamshala", 0, y, { width: PW, align: "center", characterSpacing: 1 });
+
+    // ==================== DIVIDER ====================
+    y += 22;
+    doc.moveTo(PW / 2 - 300, y).lineTo(PW / 2 + 300, y).lineWidth(2.5).strokeColor(themeGold).stroke();
+    y += 5;
+    doc.moveTo(PW / 2 - 300, y).lineTo(PW / 2 + 300, y).lineWidth(0.5).strokeColor(themeAccent).stroke();
+
+    // ==================== TITLE (with gradient-ish effect) ====================
+    y += 24;
+    doc.font("Times-Bold").fontSize(34).fillColor(themePrimary)
+      .text(certTitle, 0, y, { width: PW, align: "center", characterSpacing: 4 });
+
+    y += 42;
+    // Subtitle with serif italic
+    doc.font("Times-Italic").fontSize(15).fillColor("#5a6a7e")
       .text("This is proudly presented to", 0, y, { width: PW, align: "center" });
+
+    // ==================== STUDENT NAME ====================
     y += 30;
+    doc.font("Times-BoldItalic").fontSize(42).fillColor(themeDark)
+      .text((attempt.student_name || "").toUpperCase(), 0, y, { width: PW, align: "center", characterSpacing: 1 });
 
-    doc.font("Helvetica-Bold").fontSize(34).fillColor("#0d1b2a")
-      .text((attempt.student_name || "").toUpperCase(), 0, y, { width: PW, align: "center" });
-    y += 48;
+    // Gold underline
+    y += 58;
+    doc.moveTo(PW / 2 - 220, y).lineTo(PW / 2 + 220, y).lineWidth(1.5).strokeColor(themeGold).stroke();
 
+    // ==================== CLASS INFO ====================
+    y += 12;
     doc.font("Helvetica").fontSize(13).fillColor("#5a6a7e")
-      .text(`Class ${attempt.student_class} · Student ID: ${attempt.student_id}`, 0, y, { width: PW, align: "center" });
-    y += 30;
+      .text(`Class ${attempt.student_class}  ·  Student ID: ${attempt.student_id}`, 0, y, { width: PW, align: "center", characterSpacing: 1 });
 
+    // ==================== CERTIFICATION TEXT ====================
+    y += 30;
     const certText = `for successfully participating in the "${event.title}" quiz event organized by Govt. Sr. Sec. School Shilla. The event was held on ${fmtDate(attempt.submitted_at || attempt.started_at)} and the participant scored ${attempt.marks_obtained} out of ${attempt.total_marks} marks (${attempt.percentage}%).`;
 
-    doc.font("Helvetica").fontSize(12).fillColor("#1a2332")
-      .text(certText, PW / 2 - 320, y, { width: 640, align: "center", lineGap: 4 });
-    y += 70;
+    doc.font("Times-Roman").fontSize(14).fillColor(themeDark)
+      .text(certText, PW / 2 - 340, y, { width: 680, align: "center", lineGap: 6 });
 
-    const boxW = 420;
-    const boxX = (PW - boxW) / 2;
-    doc.rect(boxX, y, boxW, 55).fillAndStroke(certBg, certColor);
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0d1b2a")
-      .text("SCORE", boxX, y + 8, { width: boxW, align: "center" });
-    doc.font("Helvetica-Bold").fontSize(22).fillColor(certColor)
-      .text(`${attempt.marks_obtained} / ${attempt.total_marks} (${attempt.percentage}%)`, boxX, y + 24, { width: boxW, align: "center" });
+    // ==================== SIGNATURE SECTION ====================
+    const sigY = PH - 140;
 
-    y += 80;
-
-    const sigY = PH - 130;
+    // Principal signature (only "Principal" text)
     if (principalBuf) {
-      try { doc.image(principalBuf, PW / 2 + 90, sigY - 30, { width: 110, height: 55 }); } catch (e) {}
+      try { doc.image(principalBuf, PW / 2 + 130, sigY - 38, { width: 110, height: 55 }); } catch (e) {}
     }
-    doc.moveTo(PW / 2 + 70, sigY + 30).lineTo(PW / 2 + 220, sigY + 30).lineWidth(1.2).strokeColor("#0d1b2a").stroke();
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#0d1b2a")
-      .text("Principal", PW / 2 + 70, sigY + 38, { width: 150, align: "center" });
-    doc.font("Helvetica").fontSize(10).fillColor("#5a6a7e")
-      .text("Govt. Sr. Sec. School Shilla", PW / 2 + 70, sigY + 54, { width: 150, align: "center" });
+    doc.moveTo(PW / 2 + 100, sigY + 22).lineTo(PW / 2 + 270, sigY + 22).lineWidth(1.5).strokeColor(themeDark).stroke();
+    doc.font("Times-Bold").fontSize(14).fillColor(themeDark)
+      .text("Principal", PW / 2 + 100, sigY + 30, { width: 170, align: "center" });
 
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
-      .text("Certificate ID:", 70, sigY + 20);
-    doc.font("Helvetica").fontSize(10).fillColor("#c9972b")
-      .text(`CERT-${attemptId}-${attempt.student_id}`, 70, sigY + 36);
+    // ==================== QR CODE (bottom-left) ====================
+    const qrSize = 90;
+    if (qrBuf) {
+      doc.rect(60 - 3, sigY - 3, qrSize + 6, qrSize + 6).lineWidth(1.5).strokeColor(themeGold).stroke();
+      try { doc.image(qrBuf, 60, sigY, { width: qrSize, height: qrSize }); } catch (e) {}
+    }
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(themeDark)
+      .text("SCAN TO VERIFY", 55, sigY + qrSize + 5, { width: qrSize + 10, align: "center", characterSpacing: 0.5 });
+
+    // ==================== CERTIFICATE CODE (bottom-center) ====================
+    doc.font("Courier-Bold").fontSize(11).fillColor(themePrimary)
+      .text(certCode, 0, sigY + 25, { width: PW, align: "center", characterSpacing: 2 });
     doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
-      .text(`Issued on: ${fmtDate(new Date())}`, 70, sigY + 52);
+      .text("Certificate ID", 0, sigY + 42, { width: PW, align: "center", characterSpacing: 1 });
 
-    doc.font("Helvetica-Oblique").fontSize(7).fillColor("#94a3b8")
-      .text("This is a computer-generated certificate issued by GSSS Shilla.", 0, PH - 35, { width: PW, align: "center" });
+    // ==================== FOOTER ====================
+    doc.font("Helvetica-Oblique").fontSize(7.5).fillColor("#94a3b8")
+      .text(`Issued on ${fmtDate(new Date())} • This is a computer-generated certificate issued by GSSS Shilla.`, 0, PH - 40, { width: PW, align: "center" });
 
     doc.end();
   } catch (err) {
@@ -754,7 +807,7 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — My history
+// STUDENT — History
 // ============================================================
 router.get("/student/:studentId/history", async (req, res) => {
   try {
