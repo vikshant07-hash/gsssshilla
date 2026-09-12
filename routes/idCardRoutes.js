@@ -253,8 +253,8 @@ function drawPhotoPlaceholder(doc, x, y, w, h) {
 // ============================================================
 // y = TOP of the block (not the line) — everything lays out downward
 // from here so it can never bleed into content drawn above it.
-function drawPrincipalSignature(doc, principalBuf, x, y, width = 74) {
-  const imgH = 11;
+function drawPrincipalSignature(doc, principalBuf, x, y, width = 104) {
+  const imgH = 40;
   if (principalBuf) {
     try { doc.image(principalBuf, x + 6, y, { fit: [width - 12, imgH], align: "center", valign: "bottom" }); }
     catch (err) {}
@@ -267,7 +267,7 @@ function drawPrincipalSignature(doc, principalBuf, x, y, width = 74) {
 }
 
 function drawStudentSignature(doc, signatureBuf, x, y, width) {
-  const imgH = 11;
+  const imgH = 40;
   if (signatureBuf) {
     try { doc.image(signatureBuf, x + 2, y, { fit: [width - 4, imgH], align: "center", valign: "bottom" }); }
     catch (err) {}
