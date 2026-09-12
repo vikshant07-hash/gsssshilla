@@ -3,7 +3,6 @@ const router = express.Router();
 const PDFDocument = require("pdfkit");
 const https = require("https");
 const http = require("http");
-const crypto = require("crypto");
 
 const db = require("../config/db");
 const q = (sql, params = []) => db.query(sql, params);
@@ -17,7 +16,6 @@ const requireAdmin = (req, res, next) => {
   let token = "";
   if (auth.startsWith("Bearer ")) token = auth.substring(7);
   else if (tokenQuery) token = tokenQuery;
-
   if (!token) return res.status(401).json({ success: false, message: "Unauthorized" });
   next();
 };
@@ -49,13 +47,60 @@ const fmtDate = (d) => {
 };
 
 // ============================================================
+// AUTO-START / AUTO-END ENGINE (runs every 30 seconds)
+// ============================================================
+setInterval(async () => {
+  try {
+    // Auto-start scheduled events
+    const toStart = await q(
+      `SELECT * FROM quiz_events 
+       WHERE status = 'Scheduled' 
+         AND scheduled_start IS NOT NULL 
+         AND scheduled_start <= NOW()
+         AND is_active = 1`
+    );
+
+    for (const evt of toStart) {
+      const qCount = await q("SELECT COUNT(*) as c FROM quiz_questions WHERE event_id = ?", [evt.id]);
+      if (qCount[0].c >= 1) {
+        await q("UPDATE quiz_events SET status = 'Live', started_at = NOW() WHERE id = ?", [evt.id]);
+        console.log(`🟢 Auto-started quiz #${evt.id}: ${evt.title}`);
+      }
+    }
+
+    // Auto-end scheduled events
+    const toEnd = await q(
+      `SELECT * FROM quiz_events 
+       WHERE status = 'Live' 
+         AND scheduled_end IS NOT NULL 
+         AND scheduled_end <= NOW()`
+    );
+
+    for (const evt of toEnd) {
+      await q("UPDATE quiz_events SET status = 'Ended', ended_at = NOW() WHERE id = ?", [evt.id]);
+      // Auto-submit in-progress attempts
+      await q(
+        `UPDATE quiz_attempts SET status = 'AutoSubmitted', submitted_at = NOW()
+         WHERE event_id = ? AND status = 'InProgress'`,
+        [evt.id]
+      );
+      console.log(`🔴 Auto-ended quiz #${evt.id}: ${evt.title}`);
+    }
+  } catch (err) {
+    // silent
+  }
+}, 30000);
+
+// ============================================================
 // ADMIN — CREATE EVENT
 // ============================================================
 router.post("/events", requireAdmin, async (req, res) => {
   try {
     const {
-      title, description, class: cls, stream, groups, language,
-      durationMinutes, totalQuestions, passPercentage, scheduledAt, randomizeQuestions, showResultImmediately
+      title, description, class: cls, stream, groupNames, language,
+      durationMinutes, totalQuestions, passPercentage,
+      scheduledStart, scheduledEnd,
+      randomizeQuestions, showResultImmediately
     } = req.body;
 
     if (!title || !cls) return res.status(400).json({ success: false, message: "Title and class required" });
@@ -64,16 +109,34 @@ router.post("/events", requireAdmin, async (req, res) => {
 
     const streamVal = ["11","12"].includes(String(cls)) ? (stream || "Non-Specialized") : "Non-Specialized";
 
+    let status = "Draft";
+    if (scheduledStart) {
+      const startTime = new Date(scheduledStart);
+      if (startTime <= new Date()) status = "Live";
+      else status = "Scheduled";
+    }
+
     const result = await q(
       `INSERT INTO quiz_events 
-        (title, description, class, stream, groups, language, duration_minutes, total_questions, 
-         total_marks, pass_percentage, scheduled_at, randomize_questions, show_result_immediately)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [title, description || null, cls, streamVal, groups || null, language || "English",
-       parseInt(durationMinutes), parseInt(totalQuestions), parseInt(totalQuestions),
-       parseInt(passPercentage) || 40, scheduledAt || null,
-       randomizeQuestions !== false ? 1 : 0, showResultImmediately !== false ? 1 : 0]
+        (title, description, class, stream, group_names, language, duration_minutes, 
+         total_questions, total_marks, pass_percentage, status,
+         scheduled_start, scheduled_end, randomize_questions, show_result_immediately)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        title, description || null, cls, streamVal, groupNames || null, language || "English",
+        parseInt(durationMinutes), parseInt(totalQuestions), parseInt(totalQuestions),
+        parseInt(passPercentage) || 40, status,
+        scheduledStart ? new Date(scheduledStart) : null,
+        scheduledEnd ? new Date(scheduledEnd) : null,
+        randomizeQuestions !== false ? 1 : 0,
+        showResultImmediately !== false ? 1 : 0
+      ]
     );
+
+    // If status is Live (started immediately)
+    if (status === "Live") {
+      await q("UPDATE quiz_events SET started_at = NOW() WHERE id = ?", [result.insertId]);
+    }
 
     const rows = await q("SELECT * FROM quiz_events WHERE id = ?", [result.insertId]);
     res.status(201).json({ success: true, message: "Quiz event created ✅", data: rows[0] });
@@ -101,7 +164,9 @@ router.get("/events", requireAdmin, async (req, res) => {
         (SELECT COUNT(*) FROM quiz_attempts WHERE event_id = e.id AND status IN ('Submitted','AutoSubmitted')) as attempts_count,
         (SELECT COUNT(*) FROM quiz_attempts WHERE event_id = e.id AND status = 'InProgress') as in_progress_count
        FROM quiz_events e ${whereSql}
-       ORDER BY e.created_at DESC`,
+       ORDER BY 
+         CASE e.status WHEN 'Live' THEN 1 WHEN 'Scheduled' THEN 2 WHEN 'Draft' THEN 3 ELSE 4 END,
+         e.created_at DESC`,
       params
     );
 
@@ -112,7 +177,7 @@ router.get("/events", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — GET SINGLE EVENT WITH QUESTIONS
+// ADMIN — GET SINGLE EVENT + QUESTIONS
 // ============================================================
 router.get("/events/:id", requireAdmin, async (req, res) => {
   try {
@@ -132,7 +197,7 @@ router.get("/events/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — ADD / BULK ADD QUESTIONS
+// ADMIN — SAVE QUESTIONS (bulk replace)
 // ============================================================
 router.post("/events/:id/questions", requireAdmin, async (req, res) => {
   try {
@@ -146,42 +211,29 @@ router.post("/events/:id/questions", requireAdmin, async (req, res) => {
     const eventRows = await q("SELECT * FROM quiz_events WHERE id = ?", [id]);
     if (!eventRows.length) return res.status(404).json({ success: false, message: "Event not found" });
 
-    // Delete existing
     await q("DELETE FROM quiz_questions WHERE event_id = ?", [id]);
 
-    // Insert new
     let inserted = 0;
     for (let i = 0; i < questions.length; i++) {
-      const question = questions[i];
+      const qq = questions[i];
       await q(
         `INSERT INTO quiz_questions 
           (event_id, question_no, question_en, question_hi, 
            option_a_en, option_b_en, option_c_en, option_d_en,
            option_a_hi, option_b_hi, option_c_hi, option_d_hi,
-           correct_answer, marks, explanation_en, explanation_hi)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           correct_answer, marks)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id, i + 1,
-          question.questionEn || question.question_en || "",
-          question.questionHi || question.question_hi || null,
-          question.optionAEn || question.option_a_en || "",
-          question.optionBEn || question.option_b_en || "",
-          question.optionCEn || question.option_c_en || "",
-          question.optionDEn || question.option_d_en || "",
-          question.optionAHi || question.option_a_hi || null,
-          question.optionBHi || question.option_b_hi || null,
-          question.optionCHi || question.option_c_hi || null,
-          question.optionDHi || question.option_d_hi || null,
-          question.correctAnswer || "A",
-          question.marks || 1,
-          question.explanationEn || null,
-          question.explanationHi || null
+          qq.questionEn || "", qq.questionHi || null,
+          qq.optionAEn || "", qq.optionBEn || "", qq.optionCEn || "", qq.optionDEn || "",
+          qq.optionAHi || null, qq.optionBHi || null, qq.optionCHi || null, qq.optionDHi || null,
+          qq.correctAnswer || "A", qq.marks || 1
         ]
       );
       inserted++;
     }
 
-    // Update event total
     await q("UPDATE quiz_events SET total_questions = ?, total_marks = ? WHERE id = ?", [inserted, inserted, id]);
 
     res.json({ success: true, message: `${inserted} questions saved ✅`, count: inserted });
@@ -197,26 +249,32 @@ router.post("/events/:id/questions", requireAdmin, async (req, res) => {
 router.put("/events/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, durationMinutes, status, scheduledAt, passPercentage, randomizeQuestions, showResultImmediately } = req.body;
+    const {
+      title, description, durationMinutes, status,
+      scheduledStart, scheduledEnd, passPercentage,
+      randomizeQuestions, showResultImmediately
+    } = req.body;
 
     const rows = await q("SELECT * FROM quiz_events WHERE id = ?", [id]);
     if (!rows.length) return res.status(404).json({ success: false, message: "Event not found" });
+    const e = rows[0];
 
     await q(
       `UPDATE quiz_events SET 
         title = ?, description = ?, duration_minutes = ?, status = ?, 
-        scheduled_at = ?, pass_percentage = ?, 
+        scheduled_start = ?, scheduled_end = ?, pass_percentage = ?, 
         randomize_questions = ?, show_result_immediately = ?
        WHERE id = ?`,
       [
-        title || rows[0].title,
-        description !== undefined ? description : rows[0].description,
-        durationMinutes || rows[0].duration_minutes,
-        status || rows[0].status,
-        scheduledAt !== undefined ? scheduledAt : rows[0].scheduled_at,
-        passPercentage || rows[0].pass_percentage,
-        randomizeQuestions !== undefined ? (randomizeQuestions ? 1 : 0) : rows[0].randomize_questions,
-        showResultImmediately !== undefined ? (showResultImmediately ? 1 : 0) : rows[0].show_result_immediately,
+        title || e.title,
+        description !== undefined ? description : e.description,
+        durationMinutes || e.duration_minutes,
+        status || e.status,
+        scheduledStart !== undefined ? (scheduledStart ? new Date(scheduledStart) : null) : e.scheduled_start,
+        scheduledEnd !== undefined ? (scheduledEnd ? new Date(scheduledEnd) : null) : e.scheduled_end,
+        passPercentage || e.pass_percentage,
+        randomizeQuestions !== undefined ? (randomizeQuestions ? 1 : 0) : e.randomize_questions,
+        showResultImmediately !== undefined ? (showResultImmediately ? 1 : 0) : e.show_result_immediately,
         id
       ]
     );
@@ -229,7 +287,7 @@ router.put("/events/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — GO LIVE / END / RESET
+// ADMIN — GO LIVE NOW
 // ============================================================
 router.post("/events/:id/go-live", requireAdmin, async (req, res) => {
   try {
@@ -240,25 +298,20 @@ router.post("/events/:id/go-live", requireAdmin, async (req, res) => {
     const qCount = await q("SELECT COUNT(*) as c FROM quiz_questions WHERE event_id = ?", [id]);
     if (!qCount[0].c) return res.status(400).json({ success: false, message: "Add questions first" });
 
-    await q(
-      "UPDATE quiz_events SET status = 'Live', started_at = NOW() WHERE id = ?",
-      [id]
-    );
-
+    await q("UPDATE quiz_events SET status = 'Live', started_at = NOW() WHERE id = ?", [id]);
     res.json({ success: true, message: "Quiz is now LIVE ✅" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
+// ============================================================
+// ADMIN — END NOW
+// ============================================================
 router.post("/events/:id/end", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    await q(
-      "UPDATE quiz_events SET status = 'Ended', ended_at = NOW() WHERE id = ?",
-      [id]
-    );
-    // Auto-submit all in-progress attempts
+    await q("UPDATE quiz_events SET status = 'Ended', ended_at = NOW() WHERE id = ?", [id]);
     await q(
       `UPDATE quiz_attempts SET status = 'AutoSubmitted', submitted_at = NOW() 
        WHERE event_id = ? AND status = 'InProgress'`,
@@ -270,6 +323,9 @@ router.post("/events/:id/end", requireAdmin, async (req, res) => {
   }
 });
 
+// ============================================================
+// ADMIN — RESET
+// ============================================================
 router.post("/events/:id/reset", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -299,13 +355,14 @@ router.delete("/events/:id", requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// ADMIN — VIEW ATTEMPTS (Students who took the quiz)
+// ADMIN — ATTEMPTS LIST
 // ============================================================
 router.get("/events/:id/attempts", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const rows = await q(
-      `SELECT * FROM quiz_attempts WHERE event_id = ? ORDER BY marks_obtained DESC, time_taken_seconds ASC`,
+      `SELECT * FROM quiz_attempts WHERE event_id = ? 
+       ORDER BY marks_obtained DESC, time_taken_seconds ASC`,
       [id]
     );
     res.json({ success: true, data: rows, total: rows.length });
@@ -314,30 +371,8 @@ router.get("/events/:id/attempts", requireAdmin, async (req, res) => {
   }
 });
 
-router.get("/attempts/:attemptId/details", requireAdmin, async (req, res) => {
-  try {
-    const { attemptId } = req.params;
-    const attempts = await q("SELECT * FROM quiz_attempts WHERE id = ?", [attemptId]);
-    if (!attempts.length) return res.status(404).json({ success: false, message: "Attempt not found" });
-
-    const answers = await q(
-      `SELECT qa.*, qq.question_en, qq.question_hi, qq.correct_answer,
-        qq.option_a_en, qq.option_b_en, qq.option_c_en, qq.option_d_en,
-        qq.option_a_hi, qq.option_b_hi, qq.option_c_hi, qq.option_d_hi
-       FROM quiz_answers qa 
-       JOIN quiz_questions qq ON qq.id = qa.question_id
-       WHERE qa.attempt_id = ? ORDER BY qq.question_no ASC`,
-      [attemptId]
-    );
-
-    res.json({ success: true, data: attempts[0], answers });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
 // ============================================================
-// STUDENT — Get available quizzes
+// STUDENT — Available quizzes
 // ============================================================
 router.post("/student/available", async (req, res) => {
   try {
@@ -346,7 +381,6 @@ router.post("/student/available", async (req, res) => {
       return res.status(400).json({ success: false, message: "Student ID and class required" });
     }
 
-    // Verify student exists in Nstudent with matching email
     const student = await q(
       "SELECT * FROM Nstudent WHERE student_id = ? AND class = ?",
       [studentId, studentClass]
@@ -360,21 +394,21 @@ router.post("/student/available", async (req, res) => {
 
     const streamVal = ["11","12"].includes(String(studentClass)) ? (student[0].stream || "Non-Specialized") : "Non-Specialized";
 
-    // Get events matching student's class + stream
     const events = await q(
       `SELECT e.*, 
         (SELECT COUNT(*) FROM quiz_attempts WHERE event_id = e.id AND student_id = ?) as my_attempt_count,
         (SELECT status FROM quiz_attempts WHERE event_id = e.id AND student_id = ? LIMIT 1) as my_status,
-        (SELECT marks_obtained FROM quiz_attempts WHERE event_id = e.id AND student_id = ? LIMIT 1) as my_marks
+        (SELECT marks_obtained FROM quiz_attempts WHERE event_id = e.id AND student_id = ? LIMIT 1) as my_marks,
+        (SELECT total_marks FROM quiz_attempts WHERE event_id = e.id AND student_id = ? LIMIT 1) as my_total_marks,
+        (SELECT id FROM quiz_attempts WHERE event_id = e.id AND student_id = ? LIMIT 1) as my_attempt_id
        FROM quiz_events e
        WHERE e.is_active = 1 
-         AND e.class = ? 
-         AND (e.stream = ? OR e.stream = 'Non-Specialized')
+         AND (e.class = ? OR e.class = 'All')
          AND e.status IN ('Live','Scheduled','Ended')
        ORDER BY 
          CASE e.status WHEN 'Live' THEN 1 WHEN 'Scheduled' THEN 2 ELSE 3 END,
          e.created_at DESC`,
-      [studentId, studentId, studentId, studentClass, streamVal]
+      [studentId, studentId, studentId, studentId, studentId, studentClass]
     );
 
     res.json({
@@ -400,13 +434,12 @@ router.post("/student/available", async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — Start quiz attempt
+// STUDENT — Start quiz
 // ============================================================
 router.post("/student/start/:eventId", async (req, res) => {
   try {
     const { eventId } = req.params;
     const { studentId } = req.body;
-
     if (!studentId) return res.status(400).json({ success: false, message: "Student ID required" });
 
     const eventRows = await q("SELECT * FROM quiz_events WHERE id = ?", [eventId]);
@@ -417,7 +450,11 @@ router.post("/student/start/:eventId", async (req, res) => {
       return res.status(400).json({ success: false, message: "Quiz is not live right now" });
     }
 
-    // Check if already attempted
+    // Check schedule window
+    if (event.scheduled_end && new Date() > new Date(event.scheduled_end)) {
+      return res.status(400).json({ success: false, message: "Quiz time has expired" });
+    }
+
     const existing = await q(
       "SELECT * FROM quiz_attempts WHERE event_id = ? AND student_id = ?",
       [eventId, studentId]
@@ -426,17 +463,14 @@ router.post("/student/start/:eventId", async (req, res) => {
       return res.status(400).json({ success: false, message: "You have already attempted this quiz" });
     }
 
-    // Get student
     const students = await q("SELECT * FROM Nstudent WHERE student_id = ?", [studentId]);
     if (!students.length) return res.status(404).json({ success: false, message: "Student not found" });
     const s = students[0];
 
-    // Check class match
-    if (String(s.class) !== String(event.class)) {
+    if (String(s.class) !== String(event.class) && event.class !== "All") {
       return res.status(403).json({ success: false, message: "This quiz is not for your class" });
     }
 
-    // Get or create attempt
     let attemptId;
     if (existing.length) {
       attemptId = existing[0].id;
@@ -444,16 +478,13 @@ router.post("/student/start/:eventId", async (req, res) => {
       const result = await q(
         `INSERT INTO quiz_attempts 
           (event_id, student_id, student_name, student_class, student_email, 
-           started_at, total_questions, total_marks, status, ip_address, user_agent)
-         VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, 'InProgress', ?, ?)`,
-        [eventId, studentId, s.name, s.class, s.email_id,
-         event.total_questions, event.total_marks,
-         req.ip || null, req.headers["user-agent"] || null]
+           started_at, total_questions, total_marks, status)
+         VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, 'InProgress')`,
+        [eventId, studentId, s.name, s.class, s.email_id, event.total_questions, event.total_marks]
       );
       attemptId = result.insertId;
     }
 
-    // Get questions
     let questions = await q(
       "SELECT id, question_no, question_en, question_hi, option_a_en, option_b_en, option_c_en, option_d_en, option_a_hi, option_b_hi, option_c_hi, option_d_hi, marks FROM quiz_questions WHERE event_id = ? ORDER BY question_no ASC",
       [eventId]
@@ -463,15 +494,21 @@ router.post("/student/start/:eventId", async (req, res) => {
       questions = questions.sort(() => Math.random() - 0.5);
     }
 
-    // Get already answered (if resuming)
     const answered = await q(
       "SELECT question_id, selected_answer FROM quiz_answers WHERE attempt_id = ?",
       [attemptId]
     );
 
+    // Calculate remaining time
+    const startedAt = new Date(existing.length ? existing[0].started_at : new Date());
+    const elapsedSeconds = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+    const durationSeconds = event.duration_minutes * 60;
+    const remainingSeconds = Math.max(0, durationSeconds - elapsedSeconds);
+
     res.json({
       success: true,
       attempt_id: attemptId,
+      remaining_seconds: remainingSeconds,
       event: {
         id: event.id,
         title: event.title,
@@ -493,7 +530,7 @@ router.post("/student/start/:eventId", async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — Save answer (autosave per question)
+// STUDENT — Save answer
 // ============================================================
 router.post("/student/answer", async (req, res) => {
   try {
@@ -502,25 +539,21 @@ router.post("/student/answer", async (req, res) => {
       return res.status(400).json({ success: false, message: "attemptId and questionId required" });
     }
 
-    // Check attempt is in progress
     const attempts = await q("SELECT * FROM quiz_attempts WHERE id = ?", [attemptId]);
     if (!attempts.length) return res.status(404).json({ success: false, message: "Attempt not found" });
     if (attempts[0].status !== "InProgress") {
       return res.status(400).json({ success: false, message: "Attempt already submitted" });
     }
 
-    // Get event
     const eventRows = await q("SELECT * FROM quiz_events WHERE id = ?", [attempts[0].event_id]);
     const event = eventRows[0];
 
-    // Check time limit
     const startedAt = new Date(attempts[0].started_at);
     const elapsed = (Date.now() - startedAt.getTime()) / 1000;
     if (elapsed > event.duration_minutes * 60) {
       return res.status(400).json({ success: false, message: "Time limit exceeded" });
     }
 
-    // Get question to check correct answer
     const questions = await q("SELECT * FROM quiz_questions WHERE id = ?", [questionId]);
     if (!questions.length) return res.status(404).json({ success: false, message: "Question not found" });
     const question = questions[0];
@@ -528,7 +561,6 @@ router.post("/student/answer", async (req, res) => {
     const isCorrect = selectedAnswer && question.correct_answer === selectedAnswer ? 1 : 0;
     const marksAwarded = isCorrect ? question.marks : 0;
 
-    // Upsert answer
     const existing = await q(
       "SELECT * FROM quiz_answers WHERE attempt_id = ? AND question_id = ?",
       [attemptId, questionId]
@@ -555,7 +587,7 @@ router.post("/student/answer", async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — Submit quiz
+// STUDENT — Submit
 // ============================================================
 router.post("/student/submit/:attemptId", async (req, res) => {
   try {
@@ -571,11 +603,7 @@ router.post("/student/submit/:attemptId", async (req, res) => {
     const eventRows = await q("SELECT * FROM quiz_events WHERE id = ?", [attempt.event_id]);
     const event = eventRows[0];
 
-    // Fetch all answers
-    const answers = await q(
-      "SELECT * FROM quiz_answers WHERE attempt_id = ?",
-      [attemptId]
-    );
+    const answers = await q("SELECT * FROM quiz_answers WHERE attempt_id = ?", [attemptId]);
 
     const totalQuestions = event.total_questions;
     let correct = 0, wrong = 0, unanswered = 0, marksObtained = 0;
@@ -600,12 +628,7 @@ router.post("/student/submit/:attemptId", async (req, res) => {
     );
 
     const updated = await q("SELECT * FROM quiz_attempts WHERE id = ?", [attemptId]);
-
-    res.json({
-      success: true,
-      message: "Quiz submitted ✅",
-      attempt: updated[0]
-    });
+    res.json({ success: true, message: "Quiz submitted ✅", attempt: updated[0] });
   } catch (err) {
     console.error("❌ submit error:", err);
     res.status(500).json({ success: false, message: err.message });
@@ -613,7 +636,7 @@ router.post("/student/submit/:attemptId", async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — Certificate PDF
+// CERTIFICATE PDF
 // ============================================================
 router.get("/certificate/:attemptId/pdf", async (req, res) => {
   try {
@@ -622,7 +645,6 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     const attempts = await q("SELECT * FROM quiz_attempts WHERE id = ?", [attemptId]);
     if (!attempts.length) return res.status(404).json({ success: false, message: "Attempt not found" });
     const attempt = attempts[0];
-
     if (attempt.status === "InProgress") {
       return res.status(400).json({ success: false, message: "Please submit the quiz first" });
     }
@@ -631,17 +653,13 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     if (!events.length) return res.status(404).json({ success: false, message: "Event not found" });
     const event = events[0];
 
-    const students = await q("SELECT * FROM Nstudent WHERE student_id = ?", [attempt.student_id]);
-    const student = students[0] || {};
-
-    // Fetch assets
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
     const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
 
     const passed = Number(attempt.percentage) >= Number(event.pass_percentage);
     const certType = passed ? "CERTIFICATE OF ACHIEVEMENT" : "CERTIFICATE OF PARTICIPATION";
     const certColor = passed ? "#16a34a" : "#c9972b";
-    const certBgColor = passed ? "#f0fdf4" : "#fef8ed";
+    const certBg = passed ? "#f0fdf4" : "#fef8ed";
 
     const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 0 });
     res.setHeader("Content-Type", "application/pdf");
@@ -651,11 +669,9 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     const PW = doc.page.width;
     const PH = doc.page.height;
 
-    // Outer border
     doc.rect(20, 20, PW - 40, PH - 40).lineWidth(4).strokeColor("#c9972b").stroke();
     doc.rect(30, 30, PW - 60, PH - 60).lineWidth(1).strokeColor("#c9972b").stroke();
 
-    // Watermark
     doc.save();
     doc.opacity(0.04);
     doc.fontSize(120).font("Helvetica-Bold").fillColor("#0d1b2a");
@@ -663,7 +679,6 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.text("GSSS SHILLA", PW / 2 - 400, PH / 2 - 60, { width: 800, align: "center" });
     doc.restore();
 
-    // Header
     let y = 55;
     if (logoBuf) {
       try { doc.image(logoBuf, PW / 2 - 30, y, { width: 60, height: 60 }); } catch (e) {}
@@ -672,49 +687,39 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
 
     doc.font("Helvetica-Bold").fontSize(24).fillColor("#0d1b2a")
       .text("GOVT. SR. SEC. SCHOOL SHILLA", 0, y, { width: PW, align: "center" });
-    y += 30;
+    y += 28;
     doc.font("Helvetica").fontSize(11).fillColor("#5a6a7e")
       .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", 0, y, { width: PW, align: "center" });
-    y += 20;
-    doc.font("Helvetica").fontSize(9).fillColor("#94a3b8")
-      .text("Affiliated to H.P. Board of School Education, Dharamshala", 0, y, { width: PW, align: "center" });
     y += 30;
 
-    // Divider
     doc.moveTo(PW / 2 - 250, y).lineTo(PW / 2 + 250, y).lineWidth(2).strokeColor("#c9972b").stroke();
     y += 25;
 
-    // Certificate title
     doc.font("Helvetica-Bold").fontSize(28).fillColor(certColor)
       .text(certType, 0, y, { width: PW, align: "center", characterSpacing: 3 });
     y += 45;
 
-    // Subtitle
     doc.font("Helvetica-Oblique").fontSize(12).fillColor("#5a6a7e")
       .text("This is proudly presented to", 0, y, { width: PW, align: "center" });
     y += 30;
 
-    // Student name
     doc.font("Helvetica-Bold").fontSize(34).fillColor("#0d1b2a")
       .text((attempt.student_name || "").toUpperCase(), 0, y, { width: PW, align: "center" });
     y += 48;
 
-    // Class info
     doc.font("Helvetica").fontSize(13).fillColor("#5a6a7e")
       .text(`Class ${attempt.student_class} · Student ID: ${attempt.student_id}`, 0, y, { width: PW, align: "center" });
     y += 30;
 
-    // Certificate text
     const certText = `for successfully participating in the "${event.title}" quiz event organized by Govt. Sr. Sec. School Shilla. The event was held on ${fmtDate(attempt.submitted_at || attempt.started_at)} and the participant scored ${attempt.marks_obtained} out of ${attempt.total_marks} marks (${attempt.percentage}%).`;
 
     doc.font("Helvetica").fontSize(12).fillColor("#1a2332")
       .text(certText, PW / 2 - 320, y, { width: 640, align: "center", lineGap: 4 });
     y += 70;
 
-    // Score box
     const boxW = 420;
     const boxX = (PW - boxW) / 2;
-    doc.rect(boxX, y, boxW, 55).fillAndStroke(certBgColor, certColor);
+    doc.rect(boxX, y, boxW, 55).fillAndStroke(certBg, certColor);
     doc.font("Helvetica-Bold").fontSize(11).fillColor("#0d1b2a")
       .text("SCORE", boxX, y + 8, { width: boxW, align: "center" });
     doc.font("Helvetica-Bold").fontSize(22).fillColor(certColor)
@@ -722,7 +727,6 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
 
     y += 80;
 
-    // Signature
     const sigY = PH - 130;
     if (principalBuf) {
       try { doc.image(principalBuf, PW / 2 + 90, sigY - 30, { width: 110, height: 55 }); } catch (e) {}
@@ -733,7 +737,6 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.font("Helvetica").fontSize(10).fillColor("#5a6a7e")
       .text("Govt. Sr. Sec. School Shilla", PW / 2 + 70, sigY + 54, { width: 150, align: "center" });
 
-    // Left side - verification
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
       .text("Certificate ID:", 70, sigY + 20);
     doc.font("Helvetica").fontSize(10).fillColor("#c9972b")
@@ -741,7 +744,6 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
       .text(`Issued on: ${fmtDate(new Date())}`, 70, sigY + 52);
 
-    // Footer
     doc.font("Helvetica-Oblique").fontSize(7).fillColor("#94a3b8")
       .text("This is a computer-generated certificate issued by GSSS Shilla.", 0, PH - 35, { width: PW, align: "center" });
 
@@ -753,7 +755,7 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
 });
 
 // ============================================================
-// STUDENT — Get my quiz history
+// STUDENT — My history
 // ============================================================
 router.get("/student/:studentId/history", async (req, res) => {
   try {
