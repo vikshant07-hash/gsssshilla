@@ -19,7 +19,7 @@ const SCHOOL = {
   logoUrl: "https://gsssshilla07.pages.dev/logo(1).png",
   principalSignatureUrl: "https://gsssshilla07.pages.dev/principal.png",
   verificationUrl: "https://gsssshilla07.pages.dev/verify",
-  helpline: "01782-XXXXXX",
+  helpline: "+91 9805444375",
   issuedBy: "Govt. Sr. Sec. School Shilla"
 };
 
@@ -294,7 +294,7 @@ function drawStudentSignature(doc, signatureBuf, x, y, width) {
 // - "Principal" text + signature line are drawn FIRST, then the
 //   image is stamped ON TOP so it looks like a real rubber stamp.
 // ============================================================
-const STAMP_SIZE = 70;   // 70px stamp as you requested
+const STAMP_SIZE = 50;   // 70px stamp as you requested
 
 function drawPrincipalStamp(doc, principalBuf, cardX, cardY) {
   // Anchor stamp inside card with a small margin from the left/bottom edges
