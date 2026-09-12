@@ -607,7 +607,7 @@ router.post("/student/submit/:attemptId", async (req, res) => {
 });
 
 // ============================================================
-// CERTIFICATE PDF — Professional (Signature fixed at 10px from bottom border)
+// CERTIFICATE PDF — Professional (New Theme, 15px margin, 70px sig)
 // ============================================================
 router.get("/certificate/:attemptId/pdf", async (req, res) => {
   try {
@@ -628,11 +628,15 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     const passed = Number(attempt.percentage) >= Number(event.pass_percentage);
     const certTitle = passed ? "CERTIFICATE OF ACHIEVEMENT" : "CERTIFICATE OF PARTICIPATION";
 
-    // Colour theme
-    const themePrimary = passed ? "#0f766e" : "#7c2d12";
-    const themeAccent = passed ? "#10b981" : "#f59e0b";
-    const themeDark = "#0d1b2a";
-    const themeGold = "#c9972b";
+    // ==================== NEW COLOUR THEMES ====================
+    // Passed → Royal Purple + Deep Indigo
+    // Failed → Deep Maroon + Burnt Orange
+    const themePrimary   = passed ? "#4c1d95" : "#7f1d1d";  // Deep purple / Deep maroon
+    const themeSecondary = passed ? "#6d28d9" : "#b91c1c";  // Purple / Red
+    const themeAccent    = passed ? "#c084fc" : "#fb923c";  // Light purple / Orange
+    const themeGold      = "#c9972b";
+    const themeDark      = "#0d1b2a";
+    const themeLight     = passed ? "#faf5ff" : "#fef2f2";
 
     // Fetch assets
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
@@ -640,7 +644,7 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
 
     // QR code
     const verifyUrl = `https://gsssshilla07.pages.dev/verify-certificate.html?code=${encodeURIComponent(certCode)}&attempt=${attemptId}`;
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(verifyUrl)}&color=0d1b2a&bgcolor=ffffff`;
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(verifyUrl)}&color=0d1b2a&bgcolor=ffffff`;
     const qrBuf = await fetchImageBuffer(qrUrl);
 
     // PDF — A4 Landscape
@@ -652,98 +656,129 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     const PW = doc.page.width;   // ~841
     const PH = doc.page.height;  // ~595
 
+    // ---- 15px MINIMUM MARGIN FROM EVERY SIDE ----
+    const MARGIN = 15;
+    const contentX = MARGIN;
+    const contentY = MARGIN;
+    const contentW = PW - MARGIN * 2;
+    const contentH = PH - MARGIN * 2;
+
     // ==================== BACKGROUND PATTERN ====================
+    // Diagonal soft stripes
     doc.save();
-    for (let i = -PH; i < PW + PH; i += 40) {
-      doc.moveTo(i, 0).lineTo(i + PH, PH).lineWidth(0.4).strokeColor(passed ? "#d1fae5" : "#fef3c7").stroke();
+    for (let i = -PH; i < PW + PH; i += 36) {
+      doc.moveTo(i, 0).lineTo(i + PH, PH).lineWidth(0.35).strokeColor(themeAccent).stroke();
     }
     doc.restore();
 
-    doc.save();
-    doc.opacity(0.06);
-    doc.circle(0, 0, 200).fill(themePrimary);
-    doc.circle(PW, PH, 250).fill(themeAccent);
-    doc.circle(PW, 0, 150).fill(themeGold);
-    doc.circle(0, PH, 180).fill(themeAccent);
-    doc.restore();
-
+    // Large corner circles
     doc.save();
     doc.opacity(0.08);
-    for (let x = 0; x < PW; x += 25) {
-      for (let y = 0; y < PH; y += 25) {
-        if ((x + y) % 50 === 0) doc.circle(x, y, 0.8).fill(themePrimary);
+    doc.circle(0, 0, 260).fill(themePrimary);
+    doc.circle(PW, PH, 300).fill(themeSecondary);
+    doc.circle(PW, 0, 180).fill(themeGold);
+    doc.circle(0, PH, 220).fill(themeAccent);
+    doc.restore();
+
+    // Dotted pattern
+    doc.save();
+    doc.opacity(0.10);
+    for (let x = 0; x < PW; x += 22) {
+      for (let y = 0; y < PH; y += 22) {
+        if ((x + y) % 44 === 0) doc.circle(x, y, 0.9).fill(themePrimary);
       }
     }
     doc.restore();
 
-    // ==================== LOGO WATERMARK ====================
+    // Small dot grid (colorful)
+    doc.save();
+    doc.opacity(0.06);
+    for (let x = 10; x < PW; x += 80) {
+      for (let y = 10; y < PH; y += 80) {
+        doc.circle(x, y, 14).fill(themeAccent);
+      }
+    }
+    doc.restore();
+
+    // ==================== LOGO WATERMARK (center) ====================
     if (logoBuf) {
       doc.save();
-      doc.opacity(0.06);
-      try { doc.image(logoBuf, PW / 2 - 150, PH / 2 - 150, { width: 300, height: 300 }); } catch (e) {}
+      doc.opacity(0.07);
+      try { doc.image(logoBuf, PW / 2 - 160, PH / 2 - 160, { width: 320, height: 320 }); } catch (e) {}
       doc.restore();
     }
 
-    // Text watermark
+    // Text watermark (diagonal)
     doc.save();
     doc.opacity(0.035);
-    doc.fontSize(110).font("Times-BoldItalic").fillColor(themePrimary);
+    doc.fontSize(120).font("Times-BoldItalic").fillColor(themePrimary);
     doc.rotate(-28, { origin: [PW / 2, PH / 2] });
-    doc.text("GSSS SHILLA", PW / 2 - 380, PH / 2 - 60, { width: 760, align: "center" });
+    doc.text("GSSS SHILLA", PW / 2 - 420, PH / 2 - 70, { width: 840, align: "center" });
     doc.restore();
 
-    // ==================== OUTER BORDERS ====================
-    doc.rect(15, 15, PW - 30, PH - 30).lineWidth(6).strokeColor(themePrimary).stroke();
-    doc.rect(22, 22, PW - 44, PH - 44).lineWidth(2).strokeColor(themeGold).stroke();
-    doc.rect(28, 28, PW - 56, PH - 56).lineWidth(0.8).strokeColor(themeAccent).stroke();
+    // ==================== OUTER BORDERS (inside 15px margin) ====================
+    // Actually outer border sits exactly at margin
+    doc.rect(contentX, contentY, contentW, contentH).lineWidth(5).strokeColor(themePrimary).stroke();
+    doc.rect(contentX + 6, contentY + 6, contentW - 12, contentH - 12).lineWidth(1.8).strokeColor(themeGold).stroke();
+    doc.rect(contentX + 11, contentY + 11, contentW - 22, contentH - 22).lineWidth(0.7).strokeColor(themeSecondary).stroke();
 
-    const cornerSize = 20;
-    [ [22, 22], [PW - 22 - cornerSize, 22], [22, PH - 22 - cornerSize], [PW - 22 - cornerSize, PH - 22 - cornerSize] ]
-      .forEach(([x, y]) => {
-        doc.rect(x, y, cornerSize, cornerSize).fill(themeAccent);
-        doc.rect(x + 4, y + 4, cornerSize - 8, cornerSize - 8).fill(themeGold);
-      });
+    // Corner decorative diamonds
+    const cornerSize = 18;
+    const corners = [
+      [contentX + 6, contentY + 6],
+      [contentX + contentW - 6 - cornerSize, contentY + 6],
+      [contentX + 6, contentY + contentH - 6 - cornerSize],
+      [contentX + contentW - 6 - cornerSize, contentY + contentH - 6 - cornerSize]
+    ];
+    corners.forEach(([cx, cy]) => {
+      doc.rect(cx, cy, cornerSize, cornerSize).fill(themeSecondary);
+      doc.rect(cx + 3, cy + 3, cornerSize - 6, cornerSize - 6).fill(themeAccent);
+      doc.circle(cx + cornerSize / 2, cy + cornerSize / 2, 2).fill(themeGold);
+    });
 
     // ==================== HEADER ====================
-    let y = 55;
+    let y = contentY + 30;
 
     if (logoBuf) {
-      try { doc.image(logoBuf, PW / 2 - 40, y, { width: 80, height: 80 }); } catch (e) {}
+      try { doc.image(logoBuf, PW / 2 - 45, y, { width: 90, height: 90 }); } catch (e) {}
     }
-    y += 90;
+    y += 100;
 
     doc.font("Times-Bold").fontSize(28).fillColor(themeDark)
-      .text("GOVT. SR. SEC. SCHOOL SHILLA", 0, y, { width: PW, align: "center", characterSpacing: 1 });
+      .text("GOVT. SR. SEC. SCHOOL SHILLA", 0, y, { width: PW, align: "center", characterSpacing: 1.5 });
 
     y += 34;
     doc.font("Times-Italic").fontSize(12).fillColor("#5a6a7e")
       .text("Shilla • Nerwa • District Shimla • Himachal Pradesh - 171210", 0, y, { width: PW, align: "center", characterSpacing: 2 });
 
-    y += 20;
+    y += 18;
     doc.font("Helvetica").fontSize(9).fillColor("#94a3b8")
       .text("Affiliated to H.P. Board of School Education, Dharamshala", 0, y, { width: PW, align: "center", characterSpacing: 1 });
 
+    // Divider (triple line)
     y += 22;
-    doc.moveTo(PW / 2 - 300, y).lineTo(PW / 2 + 300, y).lineWidth(2.5).strokeColor(themeGold).stroke();
-    y += 5;
-    doc.moveTo(PW / 2 - 300, y).lineTo(PW / 2 + 300, y).lineWidth(0.5).strokeColor(themeAccent).stroke();
+    doc.moveTo(PW / 2 - 320, y).lineTo(PW / 2 + 320, y).lineWidth(2.5).strokeColor(themePrimary).stroke();
+    y += 3;
+    doc.moveTo(PW / 2 - 320, y).lineTo(PW / 2 + 320, y).lineWidth(0.8).strokeColor(themeGold).stroke();
+    y += 3;
+    doc.moveTo(PW / 2 - 320, y).lineTo(PW / 2 + 320, y).lineWidth(0.8).strokeColor(themeAccent).stroke();
 
     // ==================== TITLE ====================
-    y += 24;
+    y += 26;
     doc.font("Times-Bold").fontSize(34).fillColor(themePrimary)
-      .text(certTitle, 0, y, { width: PW, align: "center", characterSpacing: 4 });
+      .text(certTitle, 0, y, { width: PW, align: "center", characterSpacing: 5 });
 
-    y += 42;
+    y += 44;
     doc.font("Times-Italic").fontSize(15).fillColor("#5a6a7e")
       .text("This is proudly presented to", 0, y, { width: PW, align: "center" });
 
     // ==================== STUDENT NAME ====================
     y += 30;
-    doc.font("Times-BoldItalic").fontSize(42).fillColor(themeDark)
+    doc.font("Times-BoldItalic").fontSize(44).fillColor(themeDark)
       .text((attempt.student_name || "").toUpperCase(), 0, y, { width: PW, align: "center", characterSpacing: 1 });
 
-    y += 58;
-    doc.moveTo(PW / 2 - 220, y).lineTo(PW / 2 + 220, y).lineWidth(1.5).strokeColor(themeGold).stroke();
+    y += 60;
+    doc.moveTo(PW / 2 - 240, y).lineTo(PW / 2 + 240, y).lineWidth(1.5).strokeColor(themeGold).stroke();
 
     // ==================== CLASS INFO ====================
     y += 12;
@@ -751,21 +786,21 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
       .text(`Class ${attempt.student_class}  ·  Student ID: ${attempt.student_id}`, 0, y, { width: PW, align: "center", characterSpacing: 1 });
 
     // ==================== CERTIFICATION TEXT ====================
-    y += 30;
+    y += 28;
     const certText = `for successfully participating in the "${event.title}" quiz event organized by Govt. Sr. Sec. School Shilla. The event was held on ${fmtDate(attempt.submitted_at || attempt.started_at)} and the participant scored ${attempt.marks_obtained} out of ${attempt.total_marks} marks (${attempt.percentage}%).`;
 
     doc.font("Times-Roman").fontSize(14).fillColor(themeDark)
-      .text(certText, PW / 2 - 340, y, { width: 680, align: "center", lineGap: 6 });
+      .text(certText, PW / 2 - 350, y, { width: 700, align: "center", lineGap: 6 });
 
-    // ==================== BOTTOM AREA — SIGNATURE + QR ====================
-    // Signature sits just ABOVE the bottom border line (border inner edge is at PH - 28)
-    // We place signature block so its bottom (label text) is ~10-15px above the border.
+    // ==================== BOTTOM SECTION ====================
+    // Bottom border inner edge is at contentY + contentH - 11 (inner accent border)
+    const bottomInnerEdge = contentY + contentH - 11;
 
-    // QR code (bottom-left) — 10px from left border, 10px from bottom border
-    const qrSize = 90;
-    const qrMargin = 10;
-    const qrX = 28 + qrMargin;                 // inside inner gold border
-    const qrY = PH - 28 - qrMargin - qrSize;   // above bottom border
+    // QR code — bottom-left, 15px from inner border
+    const qrSize = 95;
+    const qrGap = 15;
+    const qrX = contentX + 11 + qrGap;
+    const qrY = bottomInnerEdge - qrGap - qrSize;
 
     if (qrBuf) {
       doc.rect(qrX - 3, qrY - 3, qrSize + 6, qrSize + 6).lineWidth(1.5).strokeColor(themeGold).stroke();
@@ -774,24 +809,24 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
     doc.font("Helvetica-Bold").fontSize(8).fillColor(themeDark)
       .text("SCAN TO VERIFY", qrX - 5, qrY + qrSize + 3, { width: qrSize + 10, align: "center", characterSpacing: 0.5 });
 
-    // Principal signature — positioned so that "Principal" label sits ~10px above bottom border
-    // Layout from bottom up:
-    //   bottom border (inner) : PH - 28
-    //   "Principal" label      : PH - 28 - 10 = PH - 38
-    //   signature line         : just above label, at PH - 46
-    //   signature image        : above the line, at PH - 46 - imageHeight
+    // Principal signature — right side, 70px height
+    const sigImgH = 70;
+    const sigImgW = 200;
+    const sigLineY = bottomInnerEdge - qrGap - 32;   // line 32px above inner border
+    const sigCenterX = PW - contentX - 11 - 150;     // center of signature block
+    const sigBoxW = 300;
 
-    const sigLineY = PH - 46;        // dotted line y
-    const sigImgH = 40;              // signature image height
-    const sigImgW = 120;             // signature image width
+    // Signature line
+    doc.moveTo(sigCenterX - 150, sigLineY).lineTo(sigCenterX + 150, sigLineY).lineWidth(1.5).strokeColor(themeDark).stroke();
 
-    const sigCenterX = PW - 200;     // horizontal center for principal block (right side)
-    const sigBoxW = 200;
+    // "Principal" text below line
+    doc.font("Times-Bold").fontSize(15).fillColor(themeDark)
+      .text("Principal", sigCenterX - 150, sigLineY + 5, { width: 300, align: "center" });
 
-    // Signature image (fit within sigBoxW)
+    // Signature image ABOVE line (70px height, aspect ratio preserved)
     if (principalBuf) {
       try {
-        doc.image(principalBuf, sigCenterX - sigImgW / 2, sigLineY - sigImgH + 3, {
+        doc.image(principalBuf, sigCenterX - sigImgW / 2, sigLineY - sigImgH + 5, {
           fit: [sigImgW, sigImgH],
           align: "center",
           valign: "bottom"
@@ -799,22 +834,15 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
       } catch (e) {}
     }
 
-    // Signature line
-    doc.moveTo(sigCenterX - 100, sigLineY).lineTo(sigCenterX + 100, sigLineY).lineWidth(1.5).strokeColor(themeDark).stroke();
-
-    // "Principal" text — sits just below the line, 10px above bottom border
-    doc.font("Times-Bold").fontSize(14).fillColor(themeDark)
-      .text("Principal", sigCenterX - 100, sigLineY + 4, { width: 200, align: "center" });
-
     // ==================== CERTIFICATE CODE (bottom-center) ====================
-    doc.font("Courier-Bold").fontSize(11).fillColor(themePrimary)
-      .text(certCode, 0, PH - 70, { width: PW, align: "center", characterSpacing: 2 });
+    doc.font("Courier-Bold").fontSize(12).fillColor(themePrimary)
+      .text(certCode, 0, sigLineY + 30, { width: PW, align: "center", characterSpacing: 3 });
     doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
-      .text("Certificate ID", 0, PH - 54, { width: PW, align: "center", characterSpacing: 1 });
+      .text("Certificate ID", 0, sigLineY + 48, { width: PW, align: "center", characterSpacing: 1 });
 
     // ==================== FOOTER ====================
     doc.font("Helvetica-Oblique").fontSize(7.5).fillColor("#94a3b8")
-      .text(`Issued on ${fmtDate(new Date())} • This is a computer-generated certificate issued by GSSS Shilla.`, 0, PH - 40, { width: PW, align: "center" });
+      .text(`Issued on ${fmtDate(new Date())} • This is a computer-generated certificate issued by GSSS Shilla.`, 0, PH - MARGIN - 12, { width: PW, align: "center" });
 
     doc.end();
   } catch (err) {
