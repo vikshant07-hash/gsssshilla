@@ -806,6 +806,122 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
   }
 });
 
+
+// ============================================================
+// PUBLIC — Verify by attempt ID
+// ============================================================
+router.get("/verify/attempt/:attemptId", async (req, res) => {
+  try {
+    const { attemptId } = req.params;
+
+    const attempts = await q("SELECT * FROM quiz_attempts WHERE id = ?", [attemptId]);
+    if (!attempts.length) {
+      return res.status(404).json({ success: false, message: "Certificate not found" });
+    }
+    const attempt = attempts[0];
+
+    if (attempt.status === "InProgress") {
+      return res.status(400).json({ success: false, message: "Certificate not yet issued" });
+    }
+
+    const events = await q("SELECT * FROM quiz_events WHERE id = ?", [attempt.event_id]);
+    const event = events.length ? events[0] : {};
+
+    const students = await q("SELECT student_id, name, class, father_name, mother_name, student_photo_url FROM Nstudent WHERE student_id = ?", [attempt.student_id]);
+    const student = students.length ? students[0] : null;
+
+    res.json({
+      success: true,
+      attempt: {
+        id: attempt.id,
+        student_id: attempt.student_id,
+        student_name: attempt.student_name,
+        student_class: attempt.student_class,
+        marks_obtained: attempt.marks_obtained,
+        total_marks: attempt.total_marks,
+        percentage: attempt.percentage,
+        correct_answers: attempt.correct_answers,
+        wrong_answers: attempt.wrong_answers,
+        submitted_at: attempt.submitted_at,
+        started_at: attempt.started_at
+      },
+      event: {
+        id: event.id,
+        title: event.title,
+        pass_percentage: event.pass_percentage
+      },
+      student
+    });
+  } catch (err) {
+    console.error("❌ verify attempt error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// PUBLIC — Verify by certificate code
+// (e.g. GSSS-QZ-XXXXX)
+// ============================================================
+router.get("/verify/code/:code", async (req, res) => {
+  try {
+    const { code } = req.params;
+
+    // Since we generate code deterministically, we search by matching format
+    // For now, try to match by parsing attempt id from code suffix, or by direct lookup
+    // Simpler: search any attempt whose generated code matches.
+
+    // Generate a code from any recent attempt and compare — quick way is to
+    // scan recent attempts (limit 500) and match the code.
+    const attempts = await q(
+      `SELECT * FROM quiz_attempts 
+       WHERE status IN ('Submitted','AutoSubmitted')
+       ORDER BY id DESC LIMIT 500`
+    );
+
+    let matched = null;
+    for (const a of attempts) {
+      const expected = generateCertCode(a.id, a.student_id);
+      if (expected === code) { matched = a; break; }
+    }
+
+    if (!matched) {
+      return res.status(404).json({ success: false, message: "Certificate code not found" });
+    }
+
+    const events = await q("SELECT * FROM quiz_events WHERE id = ?", [matched.event_id]);
+    const event = events.length ? events[0] : {};
+
+    const students = await q("SELECT student_id, name, class, father_name, mother_name, student_photo_url FROM Nstudent WHERE student_id = ?", [matched.student_id]);
+    const student = students.length ? students[0] : null;
+
+    res.json({
+      success: true,
+      attempt: {
+        id: matched.id,
+        student_id: matched.student_id,
+        student_name: matched.student_name,
+        student_class: matched.student_class,
+        marks_obtained: matched.marks_obtained,
+        total_marks: matched.total_marks,
+        percentage: matched.percentage,
+        correct_answers: matched.correct_answers,
+        wrong_answers: matched.wrong_answers,
+        submitted_at: matched.submitted_at,
+        started_at: matched.started_at
+      },
+      event: {
+        id: event.id,
+        title: event.title,
+        pass_percentage: event.pass_percentage
+      },
+      student
+    });
+  } catch (err) {
+    console.error("❌ verify code error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ============================================================
 // STUDENT — History
 // ============================================================
