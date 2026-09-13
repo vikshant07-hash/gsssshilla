@@ -639,7 +639,7 @@ router.get("/certificate/:attemptId/pdf", async (req, res) => {
 
     // Fetch assets
     const logoBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/logo(1).png");
-    const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal.png");
+    const principalBuf = await fetchImageBuffer("https://gsssshilla07.pages.dev/principal7.png");
 
     // QR code
     const verifyUrl = `https://gsssshilla07.pages.dev/verify-certificate.html?code=${encodeURIComponent(certCode)}&attempt=${attemptId}`;
