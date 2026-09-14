@@ -114,7 +114,7 @@ const nextClass = (currentClass) => {
 const q = (sql, params = []) => db.query(sql, params);
 
 // ============================================================
-// ✅ AADHAAR VALIDATION (STRONG)
+// ✅ AADHAAR VALIDATION
 // ============================================================
 function normalizeAadhaar(v) {
   return String(v || "").replace(/[\s-]/g, "");
@@ -134,7 +134,7 @@ function validateVerhoeff(num) {
 }
 
 // ============================================================
-// ✅ AUTO-REVERT PROMOTED → ACTIVE
+// ✅ AUTO-REVERT PROMOTED
 // ============================================================
 async function autoRevertExpiredPromotions() {
   try {
@@ -168,7 +168,7 @@ function startAutoRevertTimer() {
 startAutoRevertTimer();
 
 // ============================================================
-// ✅ OTP STORAGE (DB-based)
+// ✅ OTP TABLES
 // ============================================================
 (async () => {
   try {
@@ -187,7 +187,6 @@ startAutoRevertTimer();
         INDEX idx_expires (expires_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
-
     await q(`
       CREATE TABLE IF NOT EXISTS settings (
         \`key\` VARCHAR(100) PRIMARY KEY,
@@ -233,13 +232,15 @@ async function verifyOTP(type, target, otp, purpose = "verify") {
 }
 
 // ============================================================
-// ✅ EMAIL OTP SENDER (Brevo)
+// ✅ EMAIL SENDER (Brevo)
 // ============================================================
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || "noreply@gssshilla.in";
 const BREVO_SENDER_NAME = "GSSS SHILLA";
 const SCHOOL_LOGO_URL = "https://gsssshilla07.pages.dev/logo(1).png";
+const SCHOOL_WEBSITE = "https://gsssshilla07.pages.dev";
 
+// OTP email (existing)
 async function sendEmailOTP(toEmail, otp, purpose = "verify") {
   if (!BREVO_API_KEY) throw new Error("BREVO_API_KEY not configured");
   const headingText = purpose === "add" ? "Student Registration Verification"
@@ -276,7 +277,10 @@ If you didn't request this, ignore this email.
 <tr><td style="background:#f8fafc; padding: 16px 24px; text-align:center; border-top:1px solid #e2e8f0;">
 <p style="margin:0; color:#94a3b8; font-size:11px;">© ${new Date().getFullYear()} GSSS SHILLA</p>
 </td></tr>
-</table></td></tr></table></body></html>`;
+</table>
+</td></tr>
+</table>
+</body></html>`;
 
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
@@ -294,6 +298,412 @@ If you didn't request this, ignore this email.
     throw new Error(`Email send failed (${response.status}): ${errBody}`);
   }
   return response.json();
+}
+
+// ============================================================
+// ✅ REGISTRATION SUCCESS EMAIL (Beautiful Welcome)
+// ============================================================
+async function sendRegistrationSuccessEmail(student, pdfBuffer) {
+  if (!BREVO_API_KEY) {
+    console.warn("BREVO_API_KEY not set, skipping welcome email");
+    return null;
+  }
+
+  const s = student;
+  const loginUrl = `${SCHOOL_WEBSITE}/student-login.html`;
+  const pdfBase64 = pdfBuffer.toString("base64");
+
+  const htmlContent = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Welcome to GSSS Shilla</title></head>
+<body style="margin:0; padding:0; background:#f1f5f9; font-family: Arial, sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 8px 40px rgba(0,0,0,0.1);">
+  <tr><td style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #0ea5e9 100%); padding: 40px 32px; text-align:center;">
+    <img src="${SCHOOL_LOGO_URL}" alt="GSSS" width="100" height="100" style="border-radius:50%; background:#fff; padding:8px; margin-bottom:16px; box-shadow:0 4px 20px rgba(0,0,0,0.15);">
+    <h1 style="color:#fff; font-size:26px; margin:0 0 4px; letter-spacing:0.5px;">GSSS SHILLA</h1>
+    <p style="color:#e0e7ff; font-size:13px; margin:0; letter-spacing:1px;">Govt. Sr. Sec. School Shilla</p>
+    <p style="color:#c7d2fe; font-size:11px; margin:6px 0 0; letter-spacing:0.5px;">Affiliated to HPBOSE · Recognized by Govt. of HP</p>
+  </td></tr>
+
+  <tr><td style="padding: 40px 36px;">
+    <h2 style="color:#1e293b; font-size:22px; margin:0 0 12px;">🎉 Welcome, ${s.name}!</h2>
+    <p style="color:#475569; font-size:15px; line-height:1.7; margin:0 0 24px;">
+      Congratulations! Your registration at <b>Govt. Sr. Sec. School Shilla</b> has been completed successfully. We're delighted to welcome you to our school family.
+    </p>
+
+    <!-- Student Details Card -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px solid #c7d2fe; border-radius: 14px; margin-bottom: 24px;">
+      <tr><td style="padding: 20px 24px;">
+        <p style="margin:0 0 14px; color:#4f46e5; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.2px;">📋 Your Student Details</p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
+          <tr><td style="padding: 7px 0; color:#64748b; width:40%;">Student ID:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.student_id}</td></tr>
+          <tr><td style="padding: 7px 0; color:#64748b;">Admission No:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.admission_number || "-"}</td></tr>
+          <tr><td style="padding: 7px 0; color:#64748b;">Class:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.class}${s.stream && ["11","12"].includes(String(s.class)) ? " · " + s.stream : ""}</td></tr>
+          <tr><td style="padding: 7px 0; color:#64748b;">Roll Number:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.roll_number || "-"}</td></tr>
+          <tr><td style="padding: 7px 0; color:#64748b;">Session:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.session || "-"}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+
+    <!-- Login Credentials -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1.5px solid #f59e0b; border-radius: 14px; margin-bottom: 24px;">
+      <tr><td style="padding: 20px 24px;">
+        <p style="margin:0 0 14px; color:#92400e; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.2px;">🔐 Your Login Credentials</p>
+        <p style="margin:0 0 12px; color:#78350f; font-size:13px; line-height:1.6;">
+          Use these credentials to log in to your student portal:
+        </p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
+          <tr><td style="padding: 7px 0; color:#78350f; width:40%;">APAAR ID:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800; font-family: monospace; letter-spacing: 2px;">${s.apaar_id}</td></tr>
+          <tr><td style="padding: 7px 0; color:#78350f;">Date of Birth:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800;">${s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-"}</td></tr>
+          <tr><td style="padding: 7px 0; color:#78350f;">Student ID:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800;">${s.student_id}</td></tr>
+          <tr><td style="padding: 7px 0; color:#78350f;">Class:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800;">${s.class}</td></tr>
+        </table>
+        <p style="margin:14px 0 0; color:#92400e; font-size:12px; line-height:1.5;">
+          <strong>⚠️ Important:</strong> Please keep these credentials safe and do not share them with anyone.
+        </p>
+      </td></tr>
+    </table>
+
+    <!-- Login Button -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+      <tr><td align="center">
+        <a href="${loginUrl}" style="display:inline-block; padding: 16px 48px; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color:#fff; text-decoration:none; border-radius:50px; font-weight:800; font-size:15px; letter-spacing:1px; box-shadow: 0 8px 24px rgba(79,70,229,0.4);">
+          🚀 Login to Student Portal
+        </a>
+      </td></tr>
+    </table>
+
+    <!-- Attachment Note -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4; border:1.5px solid #86efac; border-radius:14px; margin-bottom: 24px;">
+      <tr><td style="padding: 16px 20px;">
+        <p style="margin:0; color:#166534; font-size:13px; line-height:1.6;">
+          📎 <b>Attachment:</b> Your <b>Provisional Registration Form</b> is attached with this email. Please download and save it for your records.
+        </p>
+      </td></tr>
+    </table>
+
+    <!-- Help -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e2e8f0; padding-top:20px;">
+      <tr><td>
+        <p style="margin:0 0 8px; color:#64748b; font-size:12px; line-height:1.6;">
+          <b style="color:#1e293b;">Need help?</b> Contact the school office:
+        </p>
+        <p style="margin:0; color:#64748b; font-size:12px; line-height:1.7;">
+          📞 +91 9805444375<br>
+          📧 info@gssshilla.in<br>
+          🌐 ${SCHOOL_WEBSITE}
+        </p>
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <tr><td style="background:#f8fafc; padding: 24px; text-align:center; border-top:1px solid #e2e8f0;">
+    <p style="margin:0 0 6px; color:#94a3b8; font-size:11px; letter-spacing:0.5px;">
+      This is an automated email from GSSS Shilla Student Management System
+    </p>
+    <p style="margin:0; color:#94a3b8; font-size:11px;">
+      © ${new Date().getFullYear()} Govt. Sr. Sec. School Shilla · All rights reserved
+    </p>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body></html>`;
+
+  const payload = {
+    sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+    to: [{ email: s.email_id }],
+    subject: `🎓 Welcome to GSSS Shilla, ${s.name}! Your Registration is Complete`,
+    htmlContent,
+    textContent: `Welcome ${s.name}! Your registration at GSSS Shilla is complete.\n\nStudent ID: ${s.student_id}\nAPAAR ID: ${s.apaar_id}\nDOB: ${s.dob}\nClass: ${s.class}\n\nLogin: ${loginUrl}`,
+    attachment: [{
+      name: `Registration-${s.student_id}.pdf`,
+      content: pdfBase64
+    }]
+  };
+
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json", "api-key": BREVO_API_KEY },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Welcome email failed (${response.status}): ${errBody}`);
+  }
+  return response.json();
+}
+
+// ============================================================
+// ✅ WELCOME PDF GENERATOR (Provisional Application Form)
+// ============================================================
+function fetchImageBuffer(url) {
+  return new Promise((resolve) => {
+    if (!url) return resolve(null);
+    try { new URL(url); } catch { return resolve(null); }
+    const client = url.startsWith("https") ? https : http;
+    const req = client.get(url, (resp) => {
+      if ([301, 302, 307, 308].includes(resp.statusCode) && resp.headers.location) {
+        resp.resume();
+        return resolve(fetchImageBuffer(resp.headers.location));
+      }
+      if (resp.statusCode !== 200) { resp.resume(); return resolve(null); }
+      const ct = resp.headers["content-type"] || "";
+      if (!ct.startsWith("image/")) { resp.resume(); return resolve(null); }
+      const chunks = [];
+      resp.on("data", c => chunks.push(c));
+      resp.on("end", () => resolve(Buffer.concat(chunks)));
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(10000, () => { req.destroy(); resolve(null); });
+  });
+}
+
+async function generateWelcomePDF(student) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const s = student;
+      const [logoBuf, photoBuf, sigBuf] = await Promise.all([
+        fetchImageBuffer(SCHOOL_LOGO_URL),
+        fetchImageBuffer(s.student_photo_url),
+        fetchImageBuffer(s.signature_url)
+      ]);
+
+      const doc = new PDFDocument({ size: "A4", margins: { top: 40, bottom: 40, left: 45, right: 45 } });
+      const chunks = [];
+      doc.on("data", c => chunks.push(c));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
+      const ML = 45;
+      const MR = 45;
+      const contentW = pageW - ML - MR;
+
+      // ============================================================
+      // WATERMARK
+      // ============================================================
+      doc.save();
+      doc.opacity(0.04);
+      doc.fontSize(80).fillColor("#c9972b").font("Helvetica-Bold");
+      doc.translate(pageW / 2, pageH / 2);
+      doc.rotate(-30, { origin: [0, 0] });
+      doc.text("GSSS SHILLA", -300, -40, { width: 600, align: "center" });
+      doc.restore();
+
+      if (logoBuf) {
+        doc.save();
+        doc.opacity(0.05);
+        doc.image(logoBuf, (pageW - 350) / 2, (pageH - 350) / 2, { width: 350, height: 350 });
+        doc.restore();
+      }
+
+      // ============================================================
+      // HEADER
+      // ============================================================
+      let y = 40;
+      if (logoBuf) {
+        try {
+          doc.save();
+          doc.circle(ML + 30, y + 30, 32).fill("#ffffff");
+          doc.circle(ML + 30, y + 30, 31).lineWidth(1.5).strokeColor("#c9972b").stroke();
+          doc.restore();
+          doc.image(logoBuf, ML + 3, y + 3, { fit: [54, 54], align: "center", valign: "center" });
+        } catch (e) {}
+      }
+
+      doc.font("Helvetica-Bold").fontSize(19).fillColor("#0d1b2a")
+         .text("GOVT. SR. SEC. SCHOOL SHILLA", ML + 70, y + 4, { width: contentW - 70, align: "center" });
+      doc.font("Helvetica").fontSize(9).fillColor("#5a6a7e")
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", ML + 70, y + 28, { width: contentW - 70, align: "center" });
+      doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
+         .text("Affiliated to HPBOSE · Recognized by Govt. of Himachal Pradesh", ML + 70, y + 42, { width: contentW - 70, align: "center" });
+
+      y += 70;
+      doc.moveTo(ML, y).lineTo(pageW - MR, y).lineWidth(3).strokeColor("#c9972b").stroke();
+      doc.moveTo(ML, y + 3).lineTo(pageW - MR, y + 3).lineWidth(0.5).strokeColor("#0d1b2a").stroke();
+
+      // ============================================================
+      // TITLE BADGE
+      // ============================================================
+      y += 20;
+      const titleText = "PROVISIONAL REGISTRATION FORM";
+      doc.font("Helvetica-Bold").fontSize(13);
+      const titleW = doc.widthOfString(titleText) + 60;
+      const titleX = (pageW - titleW) / 2;
+      doc.roundedRect(titleX, y, titleW, 26, 13).fill("#0d1b2a");
+      doc.roundedRect(titleX, y, titleW, 26, 13).lineWidth(1.5).strokeColor("#c9972b").stroke();
+      doc.font("Helvetica-Bold").fontSize(13).fillColor("#ffffff")
+         .text(titleText, titleX, y + 7, { width: titleW, align: "center", characterSpacing: 2 });
+
+      y += 40;
+
+      // ============================================================
+      // PERSONAL INFO TABLE
+      // ============================================================
+      const drawRow = (label, value, isLast) => {
+        const rowH = 22;
+        doc.rect(ML, y, 160, rowH).fillColor("#fef8ed").fill();
+        doc.rect(ML, y, 160, rowH).lineWidth(0.5).strokeColor("#c9972b").stroke();
+        doc.rect(ML + 160, y, contentW - 160, rowH).lineWidth(0.5).strokeColor("#94a3b8").stroke();
+
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
+           .text(label, ML + 8, y + 7, { width: 145 });
+        doc.font("Helvetica").fontSize(10.5).fillColor("#1a2332")
+           .text(String(value || "—"), ML + 168, y + 7, { width: contentW - 176, lineBreak: false });
+        y += rowH;
+      };
+
+      // Photo box (right side)
+      const photoBoxW = 90, photoBoxH = 105;
+      const photoBoxX = pageW - MR - photoBoxW;
+      const photoBoxY = y;
+      if (photoBuf) {
+        try {
+          doc.rect(photoBoxX - 2, photoBoxY - 2, photoBoxW + 4, photoBoxH + 4).fillAndStroke("#ffffff", "#c9972b");
+          doc.image(photoBuf, photoBoxX, photoBoxY, { fit: [photoBoxW, photoBoxH], align: "center", valign: "center" });
+        } catch (e) {}
+      } else {
+        doc.rect(photoBoxX, photoBoxY, photoBoxW, photoBoxH).fillAndStroke("#f8fafc", "#c9972b");
+        doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
+           .text("STUDENT PHOTO", photoBoxX, photoBoxY + photoBoxH / 2 - 4, { width: photoBoxW, align: "center" });
+      }
+
+      const infoW = contentW - photoBoxW - 15;
+      const drawRowNarrow = (label, value) => {
+        const rowH = 22;
+        doc.rect(ML, y, 140, rowH).fillColor("#fef8ed").fill();
+        doc.rect(ML, y, 140, rowH).lineWidth(0.5).strokeColor("#c9972b").stroke();
+        doc.rect(ML + 140, y, infoW - 140, rowH).lineWidth(0.5).strokeColor("#94a3b8").stroke();
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0d1b2a")
+           .text(label, ML + 8, y + 7, { width: 125 });
+        doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
+           .text(String(value || "—"), ML + 148, y + 7, { width: infoW - 156, lineBreak: false });
+        y += rowH;
+      };
+
+      drawRowNarrow("Student ID", s.student_id);
+      drawRowNarrow("Admission No", s.admission_number);
+      drawRowNarrow("Full Name", s.name);
+      drawRowNarrow("Father's Name", s.father_name);
+      drawRowNarrow("Class", s.class + (s.stream && ["11","12"].includes(String(s.class)) ? " · " + s.stream : ""));
+
+      const afterInfoY = y;
+      y = photoBoxY + photoBoxH + 8;
+      if (y < afterInfoY) y = afterInfoY;
+
+      // ============================================================
+      // MORE DETAILS
+      // ============================================================
+      y += 8;
+      const sectionTitle = (text) => {
+        doc.font("Helvetica-Bold").fontSize(12).fillColor("#0d1b2a").text(text, ML, y);
+        doc.moveTo(ML, y + 16).lineTo(ML + 30, y + 16).lineWidth(2).strokeColor("#c9972b").stroke();
+        y += 22;
+      };
+
+      sectionTitle("Personal Details");
+      const drawFullRow = (label, value) => {
+        const rowH = 20;
+        doc.rect(ML, y, 160, rowH).fillColor("#fef8ed").fill();
+        doc.rect(ML, y, 160, rowH).lineWidth(0.4).strokeColor("#c9972b").stroke();
+        doc.rect(ML + 160, y, contentW - 160, rowH).lineWidth(0.4).strokeColor("#94a3b8").stroke();
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0d1b2a").text(label, ML + 6, y + 6, { width: 148 });
+        doc.font("Helvetica").fontSize(10).fillColor("#1a2332").text(String(value || "—"), ML + 168, y + 6, { width: contentW - 176, lineBreak: false });
+        y += rowH;
+      };
+
+      drawFullRow("Mother's Name", s.mother_name);
+      drawFullRow("Date of Birth", s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) : "—");
+      drawFullRow("Gender", s.gender);
+      drawFullRow("Category", s.category);
+      drawFullRow("Aadhaar Number", s.aadhar_number ? s.aadhar_number.replace(/(\d{4})(\d{4})(\d{4})/, "$1 $2 $3") : "—");
+      drawFullRow("APAAR ID", s.apaar_id);
+
+      y += 8;
+      sectionTitle("Academic Details");
+      drawFullRow("Class", s.class);
+      if (s.stream) drawFullRow("Stream", s.stream);
+      drawFullRow("Roll Number", s.roll_number);
+      drawFullRow("Session", s.session);
+      drawFullRow("Admission Date", s.admission_date ? new Date(s.admission_date).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) : "—");
+
+      y += 8;
+      sectionTitle("Contact & Address");
+      drawFullRow("Mobile Number", s.mobile_number);
+      drawFullRow("Email ID", s.email_id);
+      drawFullRow("Village / Town", s.village);
+      drawFullRow("Post Office", s.post_office);
+      drawFullRow("Tehsil", s.tehsil);
+      drawFullRow("District", s.district);
+      drawFullRow("State", s.state);
+      drawFullRow("Pincode", s.pincode);
+
+      // ============================================================
+      // LOGIN CREDENTIALS BOX
+      // ============================================================
+      y += 12;
+      const credBoxH = 95;
+      if (y + credBoxH < pageH - 150) {
+        doc.roundedRect(ML, y, contentW, credBoxH, 8).fillColor("#fef3c7").fill();
+        doc.roundedRect(ML, y, contentW, credBoxH, 8).lineWidth(1.5).strokeColor("#f59e0b").stroke();
+
+        doc.font("Helvetica-Bold").fontSize(11).fillColor("#92400e")
+           .text("🔐 LOGIN CREDENTIALS — KEEP SAFE", ML + 14, y + 12);
+        doc.font("Helvetica").fontSize(9.5).fillColor("#78350f")
+           .text("Use these details to login to your student portal:", ML + 14, y + 30);
+
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f")
+           .text("APAAR ID:", ML + 14, y + 50);
+        doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b")
+           .text(s.apaar_id || "—", ML + 90, y + 50);
+
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f")
+           .text("Date of Birth:", ML + 14, y + 68);
+        doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b")
+           .text(s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—", ML + 90, y + 68);
+
+        doc.font("Helvetica").fontSize(8).fillColor("#92400e")
+           .text(`Portal: ${SCHOOL_WEBSITE}/student-login.html`, ML + 14, y + 82);
+        y += credBoxH + 12;
+      }
+
+      // ============================================================
+      // SIGNATURE
+      // ============================================================
+      if (y < pageH - 130) {
+        const sigW = 180;
+        const sigX = pageW - MR - sigW;
+        if (sigBuf) {
+          try {
+            doc.image(sigBuf, sigX + 40, y - 10, { fit: [100, 45], align: "center" });
+          } catch (e) {}
+        }
+        const lineY = y + 40;
+        doc.moveTo(sigX + 20, lineY).lineTo(sigX + sigW - 20, lineY).lineWidth(0.7).strokeColor("#64748b").stroke();
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
+           .text("Principal", sigX, lineY + 6, { width: sigW, align: "center" });
+        doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
+           .text("Govt. Sr. Sec. School Shilla", sigX, lineY + 20, { width: sigW, align: "center" });
+      }
+
+      // ============================================================
+      // FOOTER
+      // ============================================================
+      doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+         .text(`Generated: ${new Date().toLocaleString("en-IN")} · GSSS Shilla Official Document`, ML, pageH - 40, {
+           width: contentW, align: "center", characterSpacing: 0.5
+         });
+      doc.moveTo(ML, pageH - 46).lineTo(pageW - MR, pageH - 46).lineWidth(0.5).strokeColor("#cbd5e1").stroke();
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 // ============================================================
@@ -387,7 +797,6 @@ const destroyAsset = async (publicId, url) => {
 // ============================================================
 // ✅ OTP ROUTES
 // ============================================================
-
 router.post("/send-email-otp", async (req, res) => {
   try {
     const { email, purpose = "verify", excludeStudentId } = req.body;
@@ -400,11 +809,10 @@ router.post("/send-email-otp", async (req, res) => {
       `SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? ${excludeStudentId ? "AND id != ?" : ""}`,
       excludeStudentId ? [normalizedEmail, excludeStudentId] : [normalizedEmail]
     );
-
     if (existing.length >= EMAIL_MAX_STUDENTS) {
       return res.status(409).json({
         success: false,
-        message: `This email is already registered with student: ${existing[0].name} (${existing[0].student_id}). An email can only be linked to ${EMAIL_MAX_STUDENTS} student.`,
+        message: `This email is already registered with student: ${existing[0].name} (${existing[0].student_id}).`,
         code: "EMAIL_ALREADY_REGISTERED",
         existingStudent: existing[0]
       });
@@ -412,17 +820,15 @@ router.post("/send-email-otp", async (req, res) => {
 
     const otp = generateOTP();
     await saveOTP("email", normalizedEmail, otp, purpose);
-
     console.log(`📧 Email OTP for ${normalizedEmail}: ${otp}`);
+
     try { await sendEmailOTP(normalizedEmail, otp, purpose); }
     catch (err) {
       console.error("Email send error:", err.message);
       return res.status(500).json({ success: false, message: "OTP generated but email failed. Check config." });
     }
-
     res.json({ success: true, message: "OTP sent to your email ✅" });
   } catch (err) {
-    console.error("❌ send-email-otp error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -441,21 +847,16 @@ router.post("/verify-email-otp", async (req, res) => {
         INVALID_OTP: `Invalid OTP. ${attemptsLeft} attempts left.`,
         TOO_MANY_ATTEMPTS: "Too many wrong attempts. Please request a new OTP."
       };
-      return res.status(400).json({
-        success: false,
-        message: messages[result.reason] || "Verification failed",
-        code: result.reason
-      });
+      return res.status(400).json({ success: false, message: messages[result.reason] || "Verification failed", code: result.reason });
     }
     res.json({ success: true, message: "Email verified ✅", verified: true });
   } catch (err) {
-    console.error("❌ verify-email-otp error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // ============================================================
-// ✅ CHECK MOBILE — Kis-kis student ne use kiya hai
+// ✅ CHECK MOBILE
 // ============================================================
 router.post("/check-mobile", async (req, res) => {
   try {
@@ -463,110 +864,72 @@ router.post("/check-mobile", async (req, res) => {
     if (!mobile || !/^[6-9]\d{9}$/.test(mobile)) {
       return res.status(400).json({ success: false, message: "Valid 10-digit mobile required" });
     }
-
     const rows = await q(
       `SELECT id, student_id, admission_number, name, father_name, class, session, status
-       FROM Nstudent WHERE mobile_number = ? ${excludeStudentId ? "AND id != ?" : ""}
-       ORDER BY id ASC`,
+       FROM Nstudent WHERE mobile_number = ? ${excludeStudentId ? "AND id != ?" : ""} ORDER BY id ASC`,
       excludeStudentId ? [mobile, excludeStudentId] : [mobile]
     );
-
     const limit = MOBILE_MAX_STUDENTS;
     const used = rows.length;
     const remaining = Math.max(0, limit - used);
 
     res.json({
-      success: true,
-      mobile,
-      used,
-      limit,
-      remaining,
-      canUse: used < limit,
+      success: true, mobile, used, limit, remaining, canUse: used < limit,
       students: rows.map(r => ({
-        id: r.id,
-        studentId: r.student_id,
-        admissionNumber: r.admission_number,
-        name: r.name,
-        fatherName: r.father_name,
-        class: r.class,
-        session: r.session,
-        status: r.status
+        id: r.id, studentId: r.student_id, admissionNumber: r.admission_number,
+        name: r.name, fatherName: r.father_name, class: r.class, session: r.session, status: r.status
       })),
-      message: used === 0
-        ? "Mobile number available ✅"
-        : used >= limit
-          ? `Mobile already used by ${limit} students. Cannot add more.`
-          : `Mobile used by ${used} student(s). ${remaining} slot(s) remaining.`
+      message: used === 0 ? "Mobile number available ✅"
+        : used >= limit ? `Mobile already used by ${limit} students. Cannot add more.`
+        : `Mobile used by ${used} student(s). ${remaining} slot(s) remaining.`
     });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 // ============================================================
-// ✅ CHECK APAAR — Unique check
+// ✅ CHECK APAAR
 // ============================================================
 router.post("/check-apaar", async (req, res) => {
   try {
     const { apaarId, excludeStudentId } = req.body;
     if (!apaarId) return res.status(400).json({ success: false, message: "APAAR ID required" });
-
     const cleaned = String(apaarId).replace(/\s/g, "");
     if (!/^\d{12}$/.test(cleaned)) {
       return res.status(400).json({ success: false, available: false, message: "APAAR ID must be exactly 12 digits" });
     }
-
     const rows = await q(
       `SELECT id, student_id, admission_number, name, father_name, class
        FROM Nstudent WHERE apaar_id = ? ${excludeStudentId ? "AND id != ?" : ""} LIMIT 5`,
       excludeStudentId ? [cleaned, excludeStudentId] : [cleaned]
     );
-
     if (rows.length > 0) {
       const r = rows[0];
       return res.json({
-        success: true,
-        available: false,
-        taken: true,
+        success: true, available: false, taken: true,
         existingStudent: {
-          id: r.id,
-          studentId: r.student_id,
-          admissionNumber: r.admission_number,
-          name: r.name,
-          fatherName: r.father_name,
-          class: r.class
+          id: r.id, studentId: r.student_id, admissionNumber: r.admission_number,
+          name: r.name, fatherName: r.father_name, class: r.class
         },
         message: `APAAR ID already registered with ${r.name} (${r.student_id})`
       });
     }
     res.json({ success: true, available: true, taken: false, message: "APAAR ID available ✅" });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 // ============================================================
-// ✅ ENHANCED AADHAAR VERIFY
+// ✅ VERIFY AADHAAR
 // ============================================================
 router.post("/verify-aadhaar", async (req, res) => {
   try {
     const { aadharNumber, name, fatherName, dob, excludeStudentId } = req.body;
     if (!aadharNumber) return res.status(400).json({ success: false, verified: false, message: "Aadhaar required" });
-
     const aadhaar12 = normalizeAadhaar(aadharNumber);
 
-    if (!/^\d{12}$/.test(aadhaar12)) {
-      return res.status(400).json({ success: false, verified: false, code: "INVALID_LENGTH", message: "Aadhaar must be exactly 12 digits" });
-    }
-    if (!hasValidAadhaarStart(aadhaar12)) {
-      return res.status(400).json({ success: false, verified: false, code: "INVALID_START", message: "Aadhaar cannot start with 0 or 1" });
-    }
-    if (!validateVerhoeff(aadhaar12)) {
-      return res.status(400).json({ success: false, verified: false, code: "CHECKSUM_FAILED", message: "Invalid Aadhaar number (checksum failed). Please check all digits." });
-    }
-    if (/^(\d)\1{11}$/.test(aadhaar12)) {
-      return res.status(400).json({ success: false, verified: false, code: "ALL_SAME_DIGITS", message: "Aadhaar cannot have all identical digits" });
-    }
+    if (!/^\d{12}$/.test(aadhaar12)) return res.status(400).json({ success: false, verified: false, code: "INVALID_LENGTH", message: "Aadhaar must be exactly 12 digits" });
+    if (!hasValidAadhaarStart(aadhaar12)) return res.status(400).json({ success: false, verified: false, code: "INVALID_START", message: "Aadhaar cannot start with 0 or 1" });
+    if (!validateVerhoeff(aadhaar12)) return res.status(400).json({ success: false, verified: false, code: "CHECKSUM_FAILED", message: "Invalid Aadhaar (checksum failed)" });
+    if (/^(\d)\1{11}$/.test(aadhaar12)) return res.status(400).json({ success: false, verified: false, code: "ALL_SAME_DIGITS", message: "Aadhaar cannot have all identical digits" });
 
     const existingRows = await q(
       `SELECT id, name, father_name, dob, student_id, admission_number, class, mobile_number
@@ -578,8 +941,7 @@ router.post("/verify-aadhaar", async (req, res) => {
     if (name && name.trim() && existingRows.length > 0) {
       const rec = existingRows[0];
       nameMatch = {
-        against: "existing_record",
-        studentId: rec.student_id,
+        against: "existing_record", studentId: rec.student_id,
         nameMatches: (rec.name || "").toLowerCase() === name.trim().toLowerCase(),
         fatherMatches: fatherName ? (rec.father_name || "").toLowerCase() === fatherName.trim().toLowerCase() : null,
         dobMatches: dob ? new Date(rec.dob).toISOString().slice(0, 10) === dob.slice(0, 10) : null
@@ -587,36 +949,19 @@ router.post("/verify-aadhaar", async (req, res) => {
     }
 
     res.json({
-      success: true,
-      verified: true,
-      aadhaar: {
-        formatted: aadhaar12.replace(/(\d{4})(\d{4})(\d{4})/, "$1 $2 $3"),
-        last4: aadhaar12.slice(-4),
-        valid: true
-      },
+      success: true, verified: true,
+      aadhaar: { formatted: aadhaar12.replace(/(\d{4})(\d{4})(\d{4})/, "$1 $2 $3"), last4: aadhaar12.slice(-4), valid: true },
       alreadyExists: existingRows.length > 0,
       existingRecord: existingRows[0] || null,
-      existingStudents: existingRows.map(r => ({
-        id: r.id,
-        studentId: r.student_id,
-        admissionNumber: r.admission_number,
-        name: r.name,
-        class: r.class,
-        mobile: r.mobile_number
-      })),
+      existingStudents: existingRows.map(r => ({ id: r.id, studentId: r.student_id, name: r.name, class: r.class })),
       nameMatch,
-      message: existingRows.length > 0
-        ? `Aadhaar valid but already registered with ${existingRows[0].name} (${existingRows[0].student_id})`
-        : "Aadhaar verified ✅"
+      message: existingRows.length > 0 ? `Aadhaar valid but already registered with ${existingRows[0].name}` : "Aadhaar verified ✅"
     });
-  } catch (err) {
-    console.error("❌ Aadhaar verify error:", err);
-    res.status(500).json({ success: false, verified: false, message: err.message });
-  }
+  } catch (err) { res.status(500).json({ success: false, verified: false, message: err.message }); }
 });
 
 // ============================================================
-// GET ALL STUDENTS
+// GET ALL
 // ============================================================
 router.get("/", async (req, res) => {
   try {
@@ -650,18 +995,12 @@ router.get("/", async (req, res) => {
     const total = countRows[0]?.total || 0;
     const cleaned = rows.map(revertStatusIfExpired);
 
-    res.json({
-      success: true,
-      data: cleaned,
-      pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) }
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+    res.json({ success: true, data: cleaned, pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) } });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 // ============================================================
-// SESSION SETTINGS
+// SESSION
 // ============================================================
 router.get("/current-session", async (req, res) => {
   try {
@@ -724,9 +1063,6 @@ router.post("/promote", async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-// ============================================================
-// PROMOTE WHOLE SESSION
-// ============================================================
 router.post("/promote-session", async (req, res) => {
   try {
     const { fromSession, toSession } = req.body;
@@ -769,7 +1105,7 @@ router.get("/search/:query", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADD STUDENT
+// ✅ ADD STUDENT (with welcome email)
 // ============================================================
 router.post(
   "/add",
@@ -785,11 +1121,7 @@ router.post(
       const emailVerified = String(req.body.emailVerified) === "true";
 
       if (!emailVerified) {
-        return res.status(400).json({
-          success: false,
-          message: "Email must be OTP-verified before adding student.",
-          code: "EMAIL_NOT_VERIFIED"
-        });
+        return res.status(400).json({ success: false, message: "Email must be OTP-verified before adding student.", code: "EMAIL_NOT_VERIFIED" });
       }
 
       const emailVerifiedRec = await q(
@@ -800,12 +1132,11 @@ router.post(
         return res.status(400).json({ success: false, message: "Email verification expired. Please verify again.", code: "OTP_EXPIRED" });
       }
 
-      // Uniqueness checks
+      // Uniqueness
       const emailDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ?`, [email]);
       if (emailDup.length >= EMAIL_MAX_STUDENTS) {
-        return res.status(409).json({ success: false, message: `Email already registered with ${emailDup[0].name} (${emailDup[0].student_id})`, code: "EMAIL_ALREADY_REGISTERED" });
+        return res.status(409).json({ success: false, message: `Email already registered with ${emailDup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
       }
-
       const mobileDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ?`, [mobile]);
       if (mobileDup.length >= MOBILE_MAX_STUDENTS) {
         return res.status(409).json({ success: false, message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED" });
@@ -815,14 +1146,11 @@ router.post(
       if (apaarVal) {
         const apaarDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ?`, [apaarVal]);
         if (apaarDup.length > 0) {
-          return res.status(409).json({
-            success: false,
-            message: `APAAR ID already registered with ${apaarDup[0].name} (${apaarDup[0].student_id})`,
-            code: "APAAR_ALREADY_REGISTERED"
-          });
+          return res.status(409).json({ success: false, message: `APAAR ID already registered with ${apaarDup[0].name}`, code: "APAAR_ALREADY_REGISTERED" });
         }
       }
 
+      // Required docs
       const requiredDocs = getRequiredDocs(category);
       const missing = [];
       for (const docName of requiredDocs) {
@@ -834,6 +1162,7 @@ router.post(
         return res.status(400).json({ success: false, message: `Missing required documents: ${missing.join(", ")}`, category, requiredDocuments: requiredDocs });
       }
 
+      // Drop caste cert for General
       const files = req.files ? { ...req.files } : {};
       if (!CASTE_REQUIRED_CATEGORIES.includes(category) && files.casteCertificate) {
         const df = files.casteCertificate[0];
@@ -867,8 +1196,27 @@ router.post(
         } else throw insertErr;
       }
 
-      const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]);
-      res.status(201).json({ success: true, message: "Student added ✅", data: rows[0], student: rows[0] });
+      const savedStudent = (await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]))[0];
+
+      // ✅ Send welcome email async (don't block response)
+      (async () => {
+        try {
+          console.log(`📧 Generating welcome PDF for ${savedStudent.name}...`);
+          const pdfBuffer = await generateWelcomePDF(savedStudent);
+          console.log(`📧 Sending welcome email to ${savedStudent.email_id}...`);
+          await sendRegistrationSuccessEmail(savedStudent, pdfBuffer);
+          console.log(`✅ Welcome email sent to ${savedStudent.email_id}`);
+        } catch (emailErr) {
+          console.error("❌ Welcome email error:", emailErr.message);
+        }
+      })();
+
+      res.status(201).json({
+        success: true,
+        message: "Student added successfully ✅ Registration email is being sent...",
+        data: savedStudent,
+        student: savedStudent
+      });
     } catch (err) {
       console.error("❌ Add Student Error:", err);
       if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
@@ -887,15 +1235,12 @@ router.get("/:id", async (req, res) => {
     const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
     if (!rows.length) return res.status(404).json({ success: false, message: "Not found" });
     const student = revertStatusIfExpired(rows[0]);
-    if (student.status === "Active" && rows[0].status === "Promoted") {
-      q(`UPDATE Nstudent SET status='Active', promotion_date=NULL WHERE id=? AND status='Promoted'`, [id]).catch(() => {});
-    }
     res.json({ success: true, data: student, student });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 // ============================================================
-// ✅ UPDATE
+// UPDATE
 // ============================================================
 router.put(
   "/:id",
@@ -920,19 +1265,17 @@ router.put(
 
       if (emailChanged) {
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? AND id != ?`, [newEmail, id]);
-        if (dup.length >= EMAIL_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Email already registered with ${dup[0].name} (${dup[0].student_id})`, code: "EMAIL_ALREADY_REGISTERED" });
+        if (dup.length >= EMAIL_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Email already registered with ${dup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
         const v = await q(`SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`, [newEmail]);
-        if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified before updating.", code: "EMAIL_NOT_VERIFIED" });
+        if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified", code: "EMAIL_NOT_VERIFIED" });
       }
-
       if (mobileChanged) {
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? AND id != ?`, [newMobile, id]);
-        if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile number already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED" });
+        if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile limit reached`, code: "MOBILE_LIMIT_REACHED" });
       }
-
       if (apaarChanged && newApaar) {
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ? AND id != ?`, [newApaar, id]);
-        if (dup.length > 0) return res.status(409).json({ success: false, message: `APAAR ID already registered with ${dup[0].name} (${dup[0].student_id})`, code: "APAAR_ALREADY_REGISTERED" });
+        if (dup.length > 0) return res.status(409).json({ success: false, message: `APAAR ID already registered`, code: "APAAR_ALREADY_REGISTERED" });
       }
 
       const finalCategory = req.body.category || existing.category;
@@ -940,7 +1283,7 @@ router.put(
       const hasNewCaste = req.files?.casteCertificate?.[0];
       const hasOldCaste = existing.caste_certificate_url;
       if (needsCaste && !hasNewCaste && !hasOldCaste) {
-        return res.status(400).json({ success: false, message: `Caste Certificate required for ${finalCategory}`, category: finalCategory });
+        return res.status(400).json({ success: false, message: `Caste Certificate required for ${finalCategory}` });
       }
 
       if (req.body.aadharNumber !== undefined) {
@@ -957,14 +1300,12 @@ router.put(
       }
 
       const newFiles = extractFiles(req.files);
-
       if (!needsCaste && newFiles.caste_certificate_url) {
         const dp = newFiles.caste_certificate_pid;
         if (dp) try { await cloudinary.uploader.destroy(dp); } catch (e) {}
         delete newFiles.caste_certificate_url;
         delete newFiles.caste_certificate_pid;
       }
-
       for (const f of DOC_FIELDS) {
         const snake = toSnake(f);
         const newPid = newFiles[`${snake}_pid`];
@@ -1012,19 +1353,34 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ============================================================
-// PDF (as before)
+// PDF PROXY (Cloudinary PDF access fix)
 // ============================================================
-const fetchImageBuffer = (url) => new Promise((resolve) => {
-  if (!url) return resolve(null);
-  const client = url.startsWith("https") ? https : http;
-  client.get(url, (resp) => {
-    if (resp.statusCode !== 200) return resolve(null);
-    const chunks = [];
-    resp.on("data", c => chunks.push(c));
-    resp.on("end", () => resolve(Buffer.concat(chunks)));
-  }).on("error", () => resolve(null));
+router.get("/proxy-pdf", async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ success: false, message: "URL required" });
+    if (!url.includes("res.cloudinary.com")) return res.status(400).json({ success: false, message: "Only Cloudinary URLs allowed" });
+
+    const client = url.startsWith("https") ? https : http;
+    client.get(url, (remoteRes) => {
+      if (remoteRes.statusCode !== 200) {
+        return res.status(remoteRes.statusCode).json({ success: false, message: `Cloudinary error: ${remoteRes.statusCode}` });
+      }
+      res.setHeader("Content-Type", remoteRes.headers["content-type"] || "application/pdf");
+      res.setHeader("Content-Disposition", "inline");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      remoteRes.pipe(res);
+    }).on("error", (err) => {
+      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+    });
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
 });
 
+// ============================================================
+// PDF
+// ============================================================
 router.get("/:id/pdf", async (req, res) => {
   try {
     const id = req.params.id;
@@ -1084,24 +1440,6 @@ router.get("/:id/pdf", async (req, res) => {
     doc.moveDown(0.6);
     doc.font("Helvetica").fontSize(10).fillColor("#000").text(s.address || "-");
 
-    doc.addPage();
-    doc.fontSize(16).font("Helvetica-Bold").fillColor("#1e3a8a").text("Uploaded Documents", { align: "center" });
-    doc.moveDown(1);
-    const docs = [
-      ["Aadhar Card", s.aadhar_card_url], ["Himachali Bonafide", s.himachali_bonafide_url],
-      ["Caste Certificate", s.caste_certificate_url], ["APAAR Card", s.apaar_card_url],
-      ["Previous Marksheet", s.previous_marksheet_url], ["Income Certificate", s.income_certificate_url],
-      ["BPL Certificate", s.bpl_certificate_url], ["Signature", s.signature_url],
-      ["Other Document", s.other_document_url]
-    ];
-    let y = doc.y;
-    for (const [label, url] of docs) {
-      if (!url) continue;
-      if (y > 720) { doc.addPage(); y = 50; }
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#1e3a8a").text(`${label}:`, 40, y);
-      doc.font("Helvetica").fontSize(9).fillColor("#2563eb").text(url, 40, y + 14, { link: url, underline: true, width: 500 });
-      y += 42;
-    }
     doc.fontSize(8).fillColor("#666").text(`Generated on ${new Date().toLocaleString("en-IN")}`, 40, doc.page.height - 40, { align: "center" });
     doc.end();
   } catch (err) {
