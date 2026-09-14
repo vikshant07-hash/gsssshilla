@@ -20,13 +20,9 @@ const q = (sql, params = []) => {
 
 // ============================================================
 // TABLE AUTO-CREATE + AUTO-MIGRATION
-// Server restart hone pe:
-// 1. Table nahi hai to bana dega
-// 2. Table hai to missing columns add kar dega
 // ============================================================
 (async () => {
     try {
-        // Step 1: Create table (agar nahi hai)
         await q(`
             CREATE TABLE IF NOT EXISTS school_documents (
                 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -55,7 +51,7 @@ const q = (sql, params = []) => {
         `);
         console.log("✅ school_documents table ready");
 
-        // Step 2: Auto-migration — existing table mein missing columns add karo
+        // Auto-migration
         const existingCols = await q("SHOW COLUMNS FROM school_documents");
         const colNames = existingCols.map(c => c.Field);
 
@@ -73,22 +69,19 @@ const q = (sql, params = []) => {
                     await q(`ALTER TABLE school_documents ADD COLUMN ${col.name} ${col.def} AFTER ${col.after}`);
                     console.log(`✅ Column added: ${col.name}`);
                 } catch (alterErr) {
-                    // Agar "after" column exist nahi karta, to without AFTER try karo
-                    console.log(`⚠️ Retry without AFTER for ${col.name}`);
                     await q(`ALTER TABLE school_documents ADD COLUMN ${col.name} ${col.def}`);
                     console.log(`✅ Column added (fallback): ${col.name}`);
                 }
             }
         }
-
         console.log("✅ school_documents schema is up to date");
     } catch (err) {
-        console.error("❌ school_documents table setup error:", err.message);
+        console.error("❌ school_documents setup error:", err.message);
     }
 })();
 
 // ============================================================
-// MULTER — In-Memory (Cloudinary stream ke liye)
+// MULTER — In-Memory for Cloudinary stream
 // ============================================================
 const uploadDocumentImage = multer({
     storage: multer.memoryStorage(),
@@ -96,7 +89,7 @@ const uploadDocumentImage = multer({
 });
 
 // ============================================================
-// IMAGE UPLOAD (Editor ke liye)
+// IMAGE UPLOAD (Inline editor images)
 // ============================================================
 router.post("/upload-image", uploadDocumentImage.single("image"), async (req, res) => {
     try {
@@ -201,13 +194,14 @@ function fetchImageBuffer(url, redirects = 0) {
 }
 
 // ============================================================
-// HTML → RICH BLOCKS (PDF render ke liye)
+// HTML → RICH BLOCKS (para, heading, list, table, image, bold, etc.)
 // ============================================================
 function parseHtmlToBlocks(html) {
     if (!html) return [];
     const blocks = [];
     let s = String(html).replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "");
 
+    // Insert markers for images and horizontal rules inline
     const blockRegex = /<(h[1-6]|p|div|ul|ol|table|blockquote|pre)[^>]*>([\s\S]*?)<\/\1>/gi;
     let match;
     const matchedRanges = [];
@@ -217,60 +211,73 @@ function parseHtmlToBlocks(html) {
             start: match.index,
             end: match.index + match[0].length,
             tag: match[1].toLowerCase(),
-            content: match[2]
+            content: match[2],
+            full: match[0]
         });
     }
 
     if (matchedRanges.length === 0) {
         const text = stripHtml(s);
         if (text.trim()) blocks.push({ type: "p", text });
-    } else {
-        for (const m of matchedRanges) {
-            if (m.tag.startsWith("h") && m.tag.length === 2) {
-                const level = parseInt(m.tag[1]);
-                const text = stripHtml(m.content).trim();
-                if (text) blocks.push({ type: "heading", level, text });
-            } else if (m.tag === "p" || m.tag === "div") {
-                const text = stripHtml(m.content).trim();
-                if (text) blocks.push({ type: "p", text });
-            } else if (m.tag === "ul" || m.tag === "ol") {
-                const items = [];
-                const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-                let li;
-                while ((li = liRegex.exec(m.content)) !== null) {
-                    const text = stripHtml(li[1]).trim();
-                    if (text) items.push(text);
-                }
-                if (items.length) blocks.push({ type: "list", ordered: m.tag === "ol", items });
-            } else if (m.tag === "blockquote") {
-                const text = stripHtml(m.content).trim();
-                if (text) blocks.push({ type: "quote", text });
-            } else if (m.tag === "table") {
-                const rows = [];
-                const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-                let tr;
-                while ((tr = trRegex.exec(m.content)) !== null) {
-                    const cells = [];
-                    const cellRegex = /<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi;
-                    let cell;
-                    while ((cell = cellRegex.exec(tr[1])) !== null) {
-                        cells.push({ text: stripHtml(cell[2]).trim(), isHeader: cell[1].toLowerCase() === "th" });
-                    }
-                    if (cells.length) rows.push(cells);
-                }
-                if (rows.length) blocks.push({ type: "table", rows });
-            } else if (m.tag === "pre") {
-                const text = stripHtml(m.content);
-                if (text.trim()) blocks.push({ type: "code", text });
+        return blocks;
+    }
+
+    for (const m of matchedRanges) {
+        if (m.tag.startsWith("h") && m.tag.length === 2) {
+            const level = parseInt(m.tag[1]);
+            const text = stripHtml(m.content).trim();
+            if (text) blocks.push({ type: "heading", level, text });
+        } else if (m.tag === "p" || m.tag === "div") {
+            // Check if this block contains an image
+            const imgInBlock = m.content.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
+            if (imgInBlock) {
+                blocks.push({ type: "image", src: imgInBlock[1] });
             }
+            // Also extract text
+            const text = stripHtml(m.content).trim();
+            if (text) blocks.push({ type: "p", text });
+        } else if (m.tag === "ul" || m.tag === "ol") {
+            const items = [];
+            const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+            let li;
+            while ((li = liRegex.exec(m.content)) !== null) {
+                const text = stripHtml(li[1]).trim();
+                if (text) items.push(text);
+            }
+            if (items.length) blocks.push({ type: "list", ordered: m.tag === "ol", items });
+        } else if (m.tag === "blockquote") {
+            const text = stripHtml(m.content).trim();
+            if (text) blocks.push({ type: "quote", text });
+        } else if (m.tag === "table") {
+            const rows = [];
+            const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+            let tr;
+            while ((tr = trRegex.exec(m.content)) !== null) {
+                const cells = [];
+                const cellRegex = /<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi;
+                let cell;
+                while ((cell = cellRegex.exec(tr[1])) !== null) {
+                    cells.push({ text: stripHtml(cell[2]).trim(), isHeader: cell[1].toLowerCase() === "th" });
+                }
+                if (cells.length) rows.push(cells);
+            }
+            if (rows.length) blocks.push({ type: "table", rows });
+        } else if (m.tag === "pre") {
+            const text = stripHtml(m.content);
+            if (text.trim()) blocks.push({ type: "code", text });
         }
     }
 
-    // Standalone images
+    // Standalone images (outside blocks)
     const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
     let imgMatch;
+    const foundImgs = new Set();
     while ((imgMatch = imgRegex.exec(s)) !== null) {
-        blocks.push({ type: "image", src: imgMatch[1] });
+        const src = imgMatch[1];
+        if (!blocks.some(b => b.type === "image" && b.src === src) && !foundImgs.has(src)) {
+            blocks.push({ type: "image", src });
+            foundImgs.add(src);
+        }
     }
 
     return blocks;
@@ -536,6 +543,8 @@ router.post("/:id/duplicate", async (req, res) => {
 
 // ============================================================
 // PDF GENERATION — Professional A4 Document
+// Multi-color watermark · Logo watermark · Proper pagination
+// Images · Tables · Rich text
 // ============================================================
 router.get("/:id/pdf", async (req, res) => {
     try {
@@ -553,7 +562,8 @@ router.get("/:id/pdf", async (req, res) => {
 
         const doc = new PDFDocument({
             size: "A4",
-            margins: { top: 38, bottom: 38, left: 42, right: 42 },
+            margins: { top: 32, bottom: 32, left: 40, right: 40 },
+            bufferPages: true,
             info: {
                 Title: d.title,
                 Author: SCHOOL.name,
@@ -568,33 +578,56 @@ router.get("/:id/pdf", async (req, res) => {
 
         const pageW = doc.page.width;
         const pageH = doc.page.height;
-        const ML = 42;
-        const MR = 42;
-        const MT = 38;
-        const MB = 38;
+        const ML = 40;
+        const MR = 40;
+        const MT = 32;
+        const MB = 32;
         const contentW = pageW - ML - MR;
 
+        const SIG_RESERVE = 105;
+        const FOOTER_RESERVE = 38;
+
         // ============================================================
-        // SECURITY WATERMARK
+        // ✅ COLORFUL WATERMARK (multi-color patterns + logo)
         // ============================================================
         function drawWatermark(pageNum) {
             doc.save();
 
-            // Diagonal gold stripes
-            doc.opacity(0.035);
-            doc.lineWidth(0.5).strokeColor("#c9972b");
-            for (let i = -pageH; i < pageW + pageH; i += 22) {
+            // 1) Colorful diagonal cross pattern (multi-color soft)
+            const colors = ["#c9972b", "#4a8af4", "#10b981", "#ec4899", "#8b5cf6"];
+            doc.opacity(0.018);
+            doc.lineWidth(0.9);
+            let colorIdx = 0;
+            for (let i = -pageH; i < pageW + pageH; i += 42) {
+                doc.strokeColor(colors[colorIdx % colors.length]);
                 doc.moveTo(i, 0).lineTo(i + pageH, pageH).stroke();
+                colorIdx++;
             }
-            doc.opacity(1);
+
+            // 2) Horizontal soft stripes
+            doc.opacity(0.012);
+            doc.strokeColor("#c9972b");
+            doc.lineWidth(0.6);
+            for (let y = 0; y < pageH; y += 28) {
+                doc.moveTo(0, y).lineTo(pageW, y).stroke();
+            }
+
+            // 3) Rotated faint text watermark (school name)
+            doc.opacity(0.028);
+            doc.save();
+            doc.translate(pageW / 2, pageH / 2);
+            doc.rotate(-30, { origin: [0, 0] });
+            doc.font("Helvetica-Bold").fontSize(66).fillColor("#0d1b2a");
+            doc.text("GSSS SHILLA", -280, -30, { width: 560, align: "center" });
+            doc.text("OFFICIAL", -280, 40, { width: 560, align: "center", characterSpacing: 8 });
             doc.restore();
 
-            // Center logo watermark
+            // 4) Center logo watermark (soft)
             if (logoBuf) {
                 try {
                     doc.save();
-                    doc.opacity(0.06);
-                    const wmSize = 280;
+                    doc.opacity(0.055);
+                    const wmSize = 260;
                     doc.image(logoBuf, (pageW - wmSize) / 2, (pageH - wmSize) / 2, {
                         width: wmSize,
                         height: wmSize
@@ -603,34 +636,51 @@ router.get("/:id/pdf", async (req, res) => {
                 } catch (e) {}
             }
 
-            // Corner security code
-            doc.save();
-            doc.opacity(0.14);
+            // 5) Corner decorative gold corners
+            doc.opacity(0.20);
+            doc.strokeColor("#c9972b").lineWidth(1.2);
+            const cLen = 22;
+            const cPd = 12;
+            // top-left
+            doc.moveTo(cPd, cPd).lineTo(cPd + cLen, cPd).stroke();
+            doc.moveTo(cPd, cPd).lineTo(cPd, cPd + cLen).stroke();
+            // top-right
+            doc.moveTo(pageW - cPd, cPd).lineTo(pageW - cPd - cLen, cPd).stroke();
+            doc.moveTo(pageW - cPd, cPd).lineTo(pageW - cPd, cPd + cLen).stroke();
+            // bottom-left
+            doc.moveTo(cPd, pageH - cPd).lineTo(cPd + cLen, pageH - cPd).stroke();
+            doc.moveTo(cPd, pageH - cPd).lineTo(cPd, pageH - cPd - cLen).stroke();
+            // bottom-right
+            doc.moveTo(pageW - cPd, pageH - cPd).lineTo(pageW - cPd - cLen, pageH - cPd).stroke();
+            doc.moveTo(pageW - cPd, pageH - cPd).lineTo(pageW - cPd, pageH - cPd - cLen).stroke();
+
+            // 6) Security code strip (bottom)
+            doc.opacity(0.11);
             doc.font("Helvetica").fontSize(6).fillColor("#0d1b2a");
             const code = `GSSS-${(d.id || "").toString().padStart(4, "0")}-${new Date().getFullYear()}`;
-            doc.text(code, ML, pageH - 20, { width: contentW, align: "left" });
-            doc.text(`PAGE ${pageNum}`, ML, pageH - 20, { width: contentW, align: "right" });
+            doc.text(code, ML, pageH - 16, { width: contentW, align: "left" });
+            doc.text(`SECURED · PAGE ${pageNum}`, ML, pageH - 16, { width: contentW, align: "right" });
+
+            doc.opacity(1);
             doc.restore();
         }
 
         // ============================================================
-        // HEADER
+        // HEADER — Official Letterhead
         // ============================================================
         function drawHeader() {
             const headerY = MT;
-            const headerH = 92;
+            const headerH = 84;
+            const logoSize = 64;
 
-            const logoSize = 68;
-            const logoX = ML;
-            const logoY = headerY;
-
+            // Logo circle
             if (logoBuf) {
                 try {
                     doc.save();
-                    doc.circle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2 + 2).fill("#ffffff");
-                    doc.circle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2 + 1).lineWidth(1.5).strokeColor("#c9972b").stroke();
+                    doc.circle(ML + logoSize / 2, headerY + logoSize / 2, logoSize / 2 + 1.5).fill("#ffffff");
+                    doc.circle(ML + logoSize / 2, headerY + logoSize / 2, logoSize / 2 + 1).lineWidth(1.2).strokeColor("#c9972b").stroke();
                     doc.restore();
-                    doc.image(logoBuf, logoX + 3, logoY + 3, {
+                    doc.image(logoBuf, ML + 3, headerY + 3, {
                         fit: [logoSize - 6, logoSize - 6],
                         align: "center",
                         valign: "center"
@@ -638,63 +688,63 @@ router.get("/:id/pdf", async (req, res) => {
                 } catch (e) {}
             }
 
-            doc.font("Helvetica-Bold").fontSize(19).fillColor("#0d1b2a")
-               .text(SCHOOL.name, ML + logoSize + 14, headerY + 4, {
-                   width: contentW - logoSize - 14,
+            doc.font("Helvetica-Bold").fontSize(17).fillColor("#0d1b2a")
+               .text(SCHOOL.name, ML + logoSize + 12, headerY + 2, {
+                   width: contentW - logoSize - 12,
                    align: "center",
-                   characterSpacing: 0.8
+                   characterSpacing: 0.6
                });
 
-            doc.font("Helvetica").fontSize(8.5).fillColor("#5a6a7e")
-               .text(SCHOOL.address, ML + logoSize + 14, headerY + 30, {
-                   width: contentW - logoSize - 14,
+            doc.font("Helvetica").fontSize(8).fillColor("#5a6a7e")
+               .text(SCHOOL.address, ML + logoSize + 12, headerY + 26, {
+                   width: contentW - logoSize - 12,
                    align: "center",
-                   characterSpacing: 0.5
+                   characterSpacing: 0.4
                });
 
-            doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8")
+            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
                .text("Affiliated to HPBOSE · Recognized by Govt. of Himachal Pradesh",
-                   ML + logoSize + 14, headerY + 46, {
-                       width: contentW - logoSize - 14,
+                   ML + logoSize + 12, headerY + 40, {
+                       width: contentW - logoSize - 12,
                        align: "center",
-                       characterSpacing: 0.3
+                       characterSpacing: 0.2
                    });
 
             const divY = headerY + headerH;
-            doc.moveTo(ML, divY).lineTo(pageW - MR, divY).lineWidth(3).strokeColor("#c9972b").stroke();
-            doc.moveTo(ML, divY + 4).lineTo(pageW - MR, divY + 4).lineWidth(0.5).strokeColor("#0d1b2a").stroke();
+            doc.moveTo(ML, divY).lineTo(pageW - MR, divY).lineWidth(2.5).strokeColor("#c9972b").stroke();
+            doc.moveTo(ML, divY + 3).lineTo(pageW - MR, divY + 3).lineWidth(0.4).strokeColor("#0d1b2a").stroke();
 
             return divY + 8;
         }
 
         // ============================================================
-        // META
+        // META — Ref. No / Date / Type badge
         // ============================================================
         function drawMeta(y) {
-            doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a");
+            doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0d1b2a");
             doc.text(`Ref. No: ${d.doc_number || "-"}`, ML, y);
             doc.text(`Date: ${fmtDateIN(d.doc_date)}`, ML, y, { width: contentW, align: "right" });
 
-            y += 22;
+            y += 18;
 
             const typeText = String(d.doc_type || "DOCUMENT").toUpperCase();
-            doc.font("Helvetica-Bold").fontSize(11.5);
+            doc.font("Helvetica-Bold").fontSize(10.5);
             const typeTextW = doc.widthOfString(typeText);
-            const badgeW = typeTextW + 50;
-            const badgeH = 24;
+            const badgeW = typeTextW + 44;
+            const badgeH = 20;
             const badgeX = (pageW - badgeW) / 2;
 
-            doc.roundedRect(badgeX, y, badgeW, badgeH, 12).fillColor("#0d1b2a").fill();
-            doc.roundedRect(badgeX, y, badgeW, badgeH, 12).lineWidth(1.5).strokeColor("#c9972b").stroke();
+            doc.roundedRect(badgeX, y, badgeW, badgeH, 10).fillColor("#0d1b2a").fill();
+            doc.roundedRect(badgeX, y, badgeW, badgeH, 10).lineWidth(1.2).strokeColor("#c9972b").stroke();
 
-            doc.font("Helvetica-Bold").fontSize(11.5).fillColor("#ffffff")
-               .text(typeText, badgeX, y + 6, {
+            doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#ffffff")
+               .text(typeText, badgeX, y + 5, {
                    width: badgeW,
                    align: "center",
-                   characterSpacing: 3
+                   characterSpacing: 2.5
                });
 
-            return y + badgeH + 12;
+            return y + badgeH + 10;
         }
 
         // ============================================================
@@ -702,13 +752,13 @@ router.get("/:id/pdf", async (req, res) => {
         // ============================================================
         function drawTitle(y) {
             if (!d.title) return y;
-            doc.font("Helvetica-Bold").fontSize(14).fillColor("#0d1b2a")
+            doc.font("Helvetica-Bold").fontSize(13).fillColor("#0d1b2a")
                .text(d.title.toUpperCase(), ML, y, {
                    width: contentW,
                    align: "center",
-                   characterSpacing: 1
+                   characterSpacing: 0.8
                });
-            return doc.y + 12;
+            return doc.y + 8;
         }
 
         // ============================================================
@@ -716,78 +766,76 @@ router.get("/:id/pdf", async (req, res) => {
         // ============================================================
         function drawSubject(y) {
             if (!d.subject) return y;
-            doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#0d1b2a")
+            doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
                .text("Subject: ", ML, y, { continued: true });
-            doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#1a2332")
+            doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
                .text(d.subject, { width: contentW });
 
-            const lineY = doc.y + 5;
-            doc.moveTo(ML, lineY).lineTo(pageW - MR, lineY).lineWidth(0.6).strokeColor("#c9972b").stroke();
-            return lineY + 10;
+            const lineY = doc.y + 4;
+            doc.moveTo(ML, lineY).lineTo(pageW - MR, lineY).lineWidth(0.5).strokeColor("#c9972b").stroke();
+            return lineY + 8;
         }
 
         // ============================================================
-        // SIGNATURE
+        // SIGNATURE BLOCK
         // ============================================================
         function drawSignature(forceY) {
-            const sigW = 200;
+            const sigW = 190;
             const sigX = pageW - MR - sigW;
-            const neededH = 90;
-            if (forceY + neededH > pageH - 60) return null;
 
-            let y = forceY + 30;
+            let y = forceY + 20;
 
             if (signatureBuf) {
                 try {
-                    doc.image(signatureBuf, sigX + 45, y - 10, {
-                        fit: [110, 60],
+                    doc.image(signatureBuf, sigX + 40, y - 5, {
+                        fit: [110, 55],
                         align: "center"
                     });
-                    y += 55;
-                } catch (e) { y += 20; }
+                    y += 50;
+                } catch (e) { y += 15; }
             } else {
-                y += 45;
+                y += 40;
             }
 
             doc.moveTo(sigX + 20, y).lineTo(sigX + sigW - 20, y)
-               .lineWidth(0.8).strokeColor("#64748b").stroke();
+               .lineWidth(0.7).strokeColor("#64748b").stroke();
 
-            doc.font("Helvetica-Bold").fontSize(11).fillColor("#0d1b2a")
-               .text(d.issued_by_name || "Principal", sigX, y + 8, { width: sigW, align: "center" });
+            doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#0d1b2a")
+               .text(d.issued_by_name || "Principal", sigX, y + 6, { width: sigW, align: "center" });
 
-            doc.font("Helvetica").fontSize(9).fillColor("#475569")
-               .text(d.issued_by_designation || "Govt. Sr. Sec. School Shilla", sigX, y + 24, { width: sigW, align: "center" });
+            doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
+               .text(d.issued_by_designation || "Govt. Sr. Sec. School Shilla", sigX, y + 20, { width: sigW, align: "center" });
 
-            return y + 40;
+            return y + 32;
         }
 
         // ============================================================
         // FOOTER
         // ============================================================
         function drawFooter(pageNum, totalPages) {
-            const footerY = pageH - 32;
+            const footerY = pageH - 24;
 
             doc.save();
             doc.opacity(0.08);
             for (let i = 0; i < pageW; i += 10) {
-                doc.rect(i, footerY - 2, 6, 0.5).fill("#c9972b");
+                doc.rect(i, footerY - 2, 6, 0.4).fill("#c9972b");
             }
             doc.restore();
 
-            doc.moveTo(ML, footerY).lineTo(pageW - MR, footerY).lineWidth(0.6).strokeColor("#c9972b").stroke();
+            doc.moveTo(ML, footerY).lineTo(pageW - MR, footerY).lineWidth(0.5).strokeColor("#c9972b").stroke();
 
-            doc.font("Helvetica").fontSize(7).fillColor("#64748b");
-            doc.text(`Official Document · ${SCHOOL.name}`, ML, footerY + 5, { width: contentW / 2, align: "left" });
+            doc.font("Helvetica").fontSize(6.5).fillColor("#64748b");
+            doc.text(`Official Document · ${SCHOOL.name}`, ML, footerY + 4, { width: contentW / 2, align: "left" });
 
-            doc.font("Helvetica").fontSize(7).fillColor("#64748b");
-            doc.text(`Generated: ${new Date().toLocaleString("en-IN")}`, ML, footerY + 5, { width: contentW, align: "center" });
+            doc.font("Helvetica").fontSize(6.5).fillColor("#64748b");
+            doc.text(`Generated: ${new Date().toLocaleString("en-IN")}`, ML, footerY + 4, { width: contentW, align: "center" });
 
-            doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a");
-            doc.text(`Page ${pageNum} of ${totalPages}`, ML, footerY + 5, { width: contentW, align: "right" });
+            doc.font("Helvetica-Bold").fontSize(7).fillColor("#0d1b2a");
+            doc.text(`Page ${pageNum} of ${totalPages}`, ML, footerY + 4, { width: contentW, align: "right" });
         }
 
         // ============================================================
-        // RENDER PAGE 1
+        // PAGE 1 SETUP
         // ============================================================
         drawWatermark(1);
         let y = drawHeader();
@@ -796,123 +844,146 @@ router.get("/:id/pdf", async (req, res) => {
         y = drawSubject(y);
 
         const blocks = parseHtmlToBlocks(d.body_html);
-        const bottomLimit = pageH - MB - 110;
+        const BODY_BOTTOM = pageH - MB - FOOTER_RESERVE;
         let pageNum = 1;
 
-        doc.font("Helvetica").fontSize(11).fillColor("#1a2332");
-        const lineGap = 3.5;
+        function newPage() {
+            doc.addPage();
+            pageNum++;
+            drawWatermark(pageNum);
+            y = MT + 15;
+        }
 
+        // ============================================================
+        // RENDER BODY
+        // ============================================================
         for (const block of blocks) {
-            let blockHeight = 0;
-            let newY = y;
-
             if (block.type === "heading") {
-                const sizes = { 1: 16, 2: 14, 3: 13, 4: 12, 5: 11.5, 6: 11 };
-                doc.font("Helvetica-Bold").fontSize(sizes[block.level] || 13).fillColor("#0d1b2a");
-                blockHeight = doc.heightOfString(block.text, { width: contentW, lineGap }) + 6;
-            } else if (block.type === "p") {
-                doc.font("Helvetica").fontSize(11).fillColor("#1a2332");
-                blockHeight = doc.heightOfString(block.text, { width: contentW, lineGap, align: "justify" }) + 8;
-            } else if (block.type === "list") {
-                doc.font("Helvetica").fontSize(11).fillColor("#1a2332");
-                blockHeight = block.items.reduce((h, item) =>
-                    h + doc.heightOfString("• " + item, { width: contentW - 15, lineGap }) + 4, 0) + 6;
-            } else if (block.type === "table") {
-                doc.font("Helvetica").fontSize(10);
-                blockHeight = block.rows.length * 22 + 10;
-            } else if (block.type === "quote") {
-                doc.font("Helvetica-Oblique").fontSize(10.5).fillColor("#475569");
-                blockHeight = doc.heightOfString(block.text, { width: contentW - 20, lineGap }) + 14;
-            } else if (block.type === "image") {
-                blockHeight = 180;
-            } else if (block.type === "code") {
-                doc.font("Courier").fontSize(9);
-                blockHeight = doc.heightOfString(block.text, { width: contentW - 20, lineGap }) + 16;
-            }
+                const sizes = { 1: 15, 2: 13, 3: 12, 4: 11.5, 5: 11, 6: 10.5 };
+                const fontSize = sizes[block.level] || 12;
 
-            if (newY + blockHeight > bottomLimit) {
-                drawFooter(pageNum, 99);
-                doc.addPage();
-                pageNum++;
-                drawWatermark(pageNum);
-                y = MT + 15;
-                newY = y;
-            }
+                doc.font("Helvetica-Bold").fontSize(fontSize);
+                const h = doc.heightOfString(block.text, { width: contentW, lineGap: 2 });
 
-            if (block.type === "heading") {
-                const sizes = { 1: 16, 2: 14, 3: 13, 4: 12, 5: 11.5, 6: 11 };
-                doc.font("Helvetica-Bold").fontSize(sizes[block.level] || 13).fillColor("#0d1b2a")
-                   .text(block.text, ML, newY, { width: contentW, lineGap });
+                if (y + h + 10 > BODY_BOTTOM) newPage();
+
+                doc.font("Helvetica-Bold").fontSize(fontSize).fillColor("#0d1b2a")
+                   .text(block.text, ML, y, { width: contentW, lineGap: 2 });
                 y = doc.y + 6;
 
             } else if (block.type === "p") {
-                doc.font("Helvetica").fontSize(11).fillColor("#1a2332")
-                   .text(block.text, ML, newY, { width: contentW, lineGap, align: "justify" });
-                y = doc.y + 8;
+                doc.font("Helvetica").fontSize(10.5);
+                const h = doc.heightOfString(block.text, { width: contentW, lineGap: 3 });
+
+                if (y + h > BODY_BOTTOM) newPage();
+
+                doc.font("Helvetica").fontSize(10.5).fillColor("#1a2332")
+                   .text(block.text, ML, y, { width: contentW, lineGap: 3, align: "justify" });
+                y = doc.y + 6;
 
             } else if (block.type === "list") {
-                let listY = newY;
-                block.items.forEach((item, idx) => {
+                for (let idx = 0; idx < block.items.length; idx++) {
+                    const item = block.items[idx];
                     const bullet = block.ordered ? `${idx + 1}.` : "•";
-                    doc.font("Helvetica").fontSize(11).fillColor("#1a2332")
-                       .text(`${bullet}  ${item}`, ML + 10, listY, { width: contentW - 15, lineGap });
-                    listY = doc.y + 4;
-                });
-                y = listY + 4;
+
+                    doc.font("Helvetica").fontSize(10.5);
+                    const h = doc.heightOfString(`${bullet}  ${item}`, { width: contentW - 15, lineGap: 2 });
+
+                    if (y + h > BODY_BOTTOM) newPage();
+
+                    doc.font("Helvetica").fontSize(10.5).fillColor("#1a2332")
+                       .text(`${bullet}  ${item}`, ML + 10, y, { width: contentW - 15, lineGap: 2 });
+                    y = doc.y + 3;
+                }
+                y += 4;
 
             } else if (block.type === "table") {
-                const tableY = newY;
                 const colCount = Math.max(...block.rows.map(r => r.length));
                 const colW = contentW / colCount;
-                const rowH = 22;
-                let tblY = tableY;
+                const rowH = 20;
 
+                let tblY = y;
                 block.rows.forEach((row) => {
                     const isHeader = row.some(c => c.isHeader);
-                    let cellX = ML;
 
-                    row.forEach((cell) => {
-                        if (isHeader) {
-                            doc.rect(cellX, tblY, colW, rowH).fillColor("#fef8ed").fill();
+                    if (tblY + rowH > BODY_BOTTOM) {
+                        doc.addPage();
+                        pageNum++;
+                        drawWatermark(pageNum);
+                        tblY = MT + 15;
+                    }
+
+                    let cellX = ML;
+                    row.forEach((cell, ci) => {
+                        if (ci < colCount) {
+                            if (isHeader) doc.rect(cellX, tblY, colW, rowH).fillColor("#fef8ed").fill();
+                            doc.rect(cellX, tblY, colW, rowH).lineWidth(0.4).strokeColor("#94a3b8").stroke();
+                            doc.font(isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(9).fillColor("#1a2332")
+                               .text(cell.text, cellX + 5, tblY + 5, { width: colW - 10, height: rowH - 8, ellipsis: true });
+                            cellX += colW;
                         }
-                        doc.rect(cellX, tblY, colW, rowH).lineWidth(0.5).strokeColor("#94a3b8").stroke();
-                        doc.font(isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(9.5).fillColor("#1a2332")
-                           .text(cell.text, cellX + 6, tblY + 6, { width: colW - 12, height: rowH - 8, ellipsis: true });
-                        cellX += colW;
                     });
                     tblY += rowH;
                 });
-                y = tblY + 10;
+                y = tblY + 8;
 
             } else if (block.type === "quote") {
-                doc.rect(ML, newY, 3, blockHeight - 6).fillColor("#c9972b").fill();
-                doc.font("Helvetica-Oblique").fontSize(10.5).fillColor("#475569")
-                   .text(block.text, ML + 15, newY + 6, { width: contentW - 20, lineGap });
-                y = doc.y + 10;
+                doc.font("Helvetica-Oblique").fontSize(10);
+                const h = doc.heightOfString(block.text, { width: contentW - 20, lineGap: 2 }) + 12;
+
+                if (y + h > BODY_BOTTOM) newPage();
+
+                doc.rect(ML, y, 3, h - 6).fillColor("#c9972b").fill();
+                doc.font("Helvetica-Oblique").fontSize(10).fillColor("#475569")
+                   .text(block.text, ML + 12, y + 4, { width: contentW - 20, lineGap: 2 });
+                y = doc.y + 8;
 
             } else if (block.type === "code") {
-                doc.rect(ML, newY, contentW, blockHeight - 4).fillColor("#f8fafc").fill();
-                doc.rect(ML, newY, contentW, blockHeight - 4).lineWidth(0.5).strokeColor("#e2e8f0").stroke();
-                doc.font("Courier").fontSize(9).fillColor("#1a2332")
-                   .text(block.text, ML + 10, newY + 8, { width: contentW - 20, lineGap });
-                y = doc.y + 10;
+                doc.font("Courier").fontSize(8.5);
+                const h = doc.heightOfString(block.text, { width: contentW - 16, lineGap: 2 }) + 14;
+
+                if (y + h > BODY_BOTTOM) newPage();
+
+                doc.rect(ML, y, contentW, h).fillColor("#f8fafc").fill();
+                doc.rect(ML, y, contentW, h).lineWidth(0.4).strokeColor("#e2e8f0").stroke();
+                doc.font("Courier").fontSize(8.5).fillColor("#1a2332")
+                   .text(block.text, ML + 8, y + 6, { width: contentW - 16, lineGap: 2 });
+                y = doc.y + 8;
 
             } else if (block.type === "image") {
                 const imgBuf = await fetchImageBuffer(block.src);
                 if (imgBuf) {
                     try {
-                        const maxW = Math.min(contentW, 380);
-                        const maxH = 220;
-                        doc.image(imgBuf, ML + (contentW - maxW) / 2, newY, {
-                            fit: [maxW, maxH],
-                            align: "center"
+                        const imgMaxW = contentW;
+                        const imgMaxH = 240;
+                        const boxY = y + 6;
+
+                        // Calculate image size preserving aspect ratio
+                        // PDFKit's fit does this automatically
+                        const reservedH = imgMaxH + 12;
+
+                        if (boxY + reservedH > BODY_BOTTOM) {
+                            doc.addPage();
+                            pageNum++;
+                            drawWatermark(pageNum);
+                            y = MT + 15;
+                        }
+
+                        // Soft frame
+                        doc.save();
+                        doc.roundedRect(ML, y + 2, contentW, imgMaxH + 8, 4)
+                           .lineWidth(0.4).strokeColor("#cbd5e1").stroke();
+                        doc.restore();
+
+                        doc.image(imgBuf, ML + 4, y + 6, {
+                            fit: [contentW - 8, imgMaxH],
+                            align: "center",
+                            valign: "center"
                         });
-                        y = newY + maxH + 10;
+                        y += imgMaxH + 20;
                     } catch (e) {
-                        y = newY + 10;
+                        console.log("⚠️ Image render failed:", e.message);
                     }
-                } else {
-                    y = newY + 10;
                 }
             }
         }
@@ -920,9 +991,8 @@ router.get("/:id/pdf", async (req, res) => {
         // ============================================================
         // SIGNATURE
         // ============================================================
-        const sigNeeded = 100;
-        if (y + sigNeeded > pageH - 60) {
-            drawFooter(pageNum, 99);
+        const sigSpace = pageH - MB - FOOTER_RESERVE;
+        if (y + SIG_RESERVE > sigSpace) {
             doc.addPage();
             pageNum++;
             drawWatermark(pageNum);
@@ -932,7 +1002,7 @@ router.get("/:id/pdf", async (req, res) => {
         drawSignature(y);
 
         // ============================================================
-        // FOOTERS
+        // FOOTERS ON ALL PAGES
         // ============================================================
         const range = doc.bufferedPageRange();
         const totalPages = pageNum;
