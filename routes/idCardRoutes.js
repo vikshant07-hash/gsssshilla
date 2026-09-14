@@ -24,7 +24,8 @@ const SCHOOL = {
   issuedBy: "Govt. Sr. Sec. School Shilla"
 };
 
-const SCHOOL_LOGO_PATH = 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1789364048/school/slider/slider-26611-1789364019455-328560092.png';
+// ✅ Watermark logo URL
+const SCHOOL_WATERMARK_URL = 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1789364048/school/slider/slider-26611-1789364019455-328560092.png';
 
 // ============================================================
 // CARD SIZE - CR80 STANDARD (86mm x 54mm)
@@ -145,7 +146,7 @@ function drawCutMarks(doc, x, y, w, h, len = 7, offset = 3) {
   doc.moveTo(x - offset, y).lineTo(x - offset - len, y).stroke();
   doc.moveTo(x, y - offset).lineTo(x, y - offset - len).stroke();
   doc.moveTo(x + w + offset, y).lineTo(x + w + offset + len, y).stroke();
-  doc.moveTo(x + w, y - offset).lineTo(x, y - offset - len).stroke();
+  doc.moveTo(x + w, y - offset).lineTo(x + w, y - offset - len).stroke();
   doc.moveTo(x - offset, y + h).lineTo(x - offset - len, y + h).stroke();
   doc.moveTo(x, y + h + offset).lineTo(x, y + h + offset + len).stroke();
   doc.moveTo(x + w + offset, y + h).lineTo(x + w + offset + len, y + h).stroke();
@@ -156,7 +157,7 @@ function drawCutMarks(doc, x, y, w, h, len = 7, offset = 3) {
 // ============================================================
 // CARD FRAME
 // ============================================================
-function drawCardFrame(doc, x, y) {
+function drawCardFrame(doc, x, y, buffers) {
   const W = CARD_W, H = CARD_H;
 
   const bg = doc.linearGradient(x, y, x + W, y + H);
@@ -166,22 +167,27 @@ function drawCardFrame(doc, x, y) {
 
   doc.roundedRect(x + 2.5, y + 2.5, W - 5, H - 5, 7).lineWidth(0.8).strokeColor(THEME.goldStart).stroke();
 
-  doc.save();
-doc.opacity(0.08); // Logo ke liye thoda zyada opacity (0.05-0.12 range try karo)
+  // ---------- WATERMARK: School Logo ----------
+  if (buffers && buffers.watermarkBuf) {
+    doc.save();
+    doc.opacity(0.08);
 
-// Watermark logo — center of card
-const watermarkSize = 220; // Logo ka size (adjust karo card size ke hisaab se)
-const watermarkX = x + (W - watermarkSize) / 2;
-const watermarkY = y + (H - watermarkSize) / 2;
+    const watermarkSize = Math.min(W, H) * 0.85;
+    const watermarkX = x + (W - watermarkSize) / 2;
+    const watermarkY = y + (H - watermarkSize) / 2;
 
-doc.image(SCHOOL_LOGO_PATH, watermarkX, watermarkY, {
-    width: watermarkSize,
-    height: watermarkSize,
-    align: 'center',
-    valign: 'center'
-});
+    try {
+      doc.image(buffers.watermarkBuf, watermarkX, watermarkY, {
+        fit: [watermarkSize, watermarkSize],
+        align: 'center',
+        valign: 'center'
+      });
+    } catch (err) {
+      console.warn('⚠️ Watermark logo failed:', err.message);
+    }
 
-doc.restore();
+    doc.restore();
+  }
 
   const bar = doc.linearGradient(x, y, x, y + H);
   bar.stop(0, THEME.goldEnd).stop(1, THEME.goldStart);
@@ -282,7 +288,7 @@ function drawPhotoPlaceholder(doc, x, y, w, h) {
 }
 
 // ============================================================
-// STUDENT SIGNATURE (right column, below photo)
+// STUDENT SIGNATURE
 // ============================================================
 function drawStudentSignature(doc, signatureBuf, x, y, width) {
   const imgH = 18;
@@ -301,26 +307,17 @@ function drawStudentSignature(doc, signatureBuf, x, y, width) {
 
 // ============================================================
 // PRINCIPAL STAMP
-// ------------------------------------------------------------
-// - Stamp image is drawn LAST (in front of all text)
-// - It's clipped to stay STRICTLY INSIDE the card boundary
-// - Position is anchored to the card's bottom-left corner
-// - "Principal" text + signature line are drawn FIRST, then the
-//   image is stamped ON TOP so it looks like a real rubber stamp.
 // ============================================================
-const STAMP_SIZE = 50;   // 70px stamp as you requested
+const STAMP_SIZE = 50;
 
 function drawPrincipalStamp(doc, principalBuf, cardX, cardY) {
-  // Anchor stamp inside card with a small margin from the left/bottom edges
   const margin = 6;
   const stampX = cardX + margin;
   const stampY = cardY + CARD_H - STAMP_SIZE - margin;
 
-  // 1. Draw the signature line + "Principal" label FIRST (text ke upar
-  //    stamp aayegi). Line is anchored just above the card's bottom edge.
   const lineWidth = 60;
   const lineX = cardX + 10;
-  const lineY = cardY + CARD_H - margin - 4;   // 4px above bottom margin
+  const lineY = cardY + CARD_H - margin - 4;
 
   doc.moveTo(lineX, lineY).lineTo(lineX + lineWidth, lineY)
     .lineWidth(0.6).strokeColor(THEME.muted).stroke();
@@ -328,13 +325,9 @@ function drawPrincipalStamp(doc, principalBuf, cardX, cardY) {
   doc.font("Helvetica-Bold").fontSize(5.4).fillColor(THEME.dark)
     .text("Principal", lineX, lineY - 7, { width: lineWidth, align: "center", lineBreak: false });
 
-  // 2. Draw the stamp image LAST, clipped to the CARD boundaries so it
-  //    can NEVER spill outside the card. It will overlap the "Principal"
-  //    text (stamp-on-text effect).
   if (principalBuf) {
     try {
       doc.save();
-      // Clip to the card's inner rounded rectangle area
       doc.roundedRect(cardX + 3, cardY + 3, CARD_W - 6, CARD_H - 6, 8).clip();
       doc.image(principalBuf, stampX, stampY, {
         fit: [STAMP_SIZE, STAMP_SIZE],
@@ -403,13 +396,12 @@ function drawInstructionsBox(doc, x, y, width, height) {
 // ============================================================
 function drawFrontCard(doc, x, y, student, buffers) {
   const W = CARD_W, H = CARD_H;
-  drawCardFrame(doc, x, y);
+  drawCardFrame(doc, x, y, buffers);
   const headerH = drawHeader(doc, x, y, buffers.logoBuf);
   const badgeY = y + headerH + 7;
   drawBadge(doc, x, badgeY, "Student ID Card");
   const contentY = badgeY + 16;
 
-  // ---- Right column: photo + student signature + valid upto ----
   const photoX = x + W - 66, photoY = contentY;
   const photo = drawStudentPhoto(doc, buffers.photoBuf, photoX, photoY);
 
@@ -421,7 +413,6 @@ function drawFrontCard(doc, x, y, student, buffers) {
       photoX - 3, sigBottom + 0.5,
       { width: photo.photoW + 6, align: "center", lineBreak: false });
 
-  // ---- Left column: detail rows ----
   const infoX = x + 10;
   const infoW = photoX - infoX - 8;
   const rowH = 11.5;
@@ -446,8 +437,6 @@ function drawFrontCard(doc, x, y, student, buffers) {
 
   drawInfoRow(doc, infoX, ry, infoW, "Session", student.session, { labelW: 42 });
 
-  // ---- PRINCIPAL STAMP: drawn LAST so it appears OVER text ----
-  // Anchored to bottom-left, clipped inside card boundaries.
   drawPrincipalStamp(doc, buffers.principalBuf, x, y);
 }
 
@@ -456,7 +445,7 @@ function drawFrontCard(doc, x, y, student, buffers) {
 // ============================================================
 function drawBackCard(doc, x, y, student, buffers) {
   const W = CARD_W, H = CARD_H;
-  drawCardFrame(doc, x, y);
+  drawCardFrame(doc, x, y, buffers);
   const headerH = drawHeader(doc, x, y, buffers.logoBuf);
   const badgeY = y + headerH + 7;
   drawBadge(doc, x, badgeY, "Address & Verification");
@@ -507,7 +496,7 @@ function drawBackCard(doc, x, y, student, buffers) {
 // ============================================================
 // BUILD IMAGE BUFFERS FOR A STUDENT
 // ============================================================
-async function buildBuffersFor(student, sharedLogoBuf, sharedPrincipalBuf) {
+async function buildBuffersFor(student, sharedLogoBuf, sharedPrincipalBuf, sharedWatermarkBuf) {
   const verificationUrl = `${SCHOOL.verificationUrl}/${encodeURIComponent(student.student_id)}`;
   const qrData = verificationUrl;
   const [photoBuf, signatureBuf, qrBuf] = await Promise.all([
@@ -515,7 +504,14 @@ async function buildBuffersFor(student, sharedLogoBuf, sharedPrincipalBuf) {
     fetchImageBuffer(student.signature_url),
     QRCode.toBuffer(qrData, { width: 250, margin: 1, errorCorrectionLevel: "M" })
   ]);
-  return { logoBuf: sharedLogoBuf, principalBuf: sharedPrincipalBuf, photoBuf, signatureBuf, qrBuf };
+  return {
+    logoBuf: sharedLogoBuf,
+    principalBuf: sharedPrincipalBuf,
+    watermarkBuf: sharedWatermarkBuf,
+    photoBuf,
+    signatureBuf,
+    qrBuf
+  };
 }
 
 // ============================================================
@@ -552,7 +548,7 @@ function drawPageGuides(doc) {
 // ============================================================
 // RENDER FULL SET
 // ============================================================
-async function renderStudentsGrid(doc, students, sharedLogoBuf, sharedPrincipalBuf, footerText) {
+async function renderStudentsGrid(doc, students, sharedLogoBuf, sharedPrincipalBuf, sharedWatermarkBuf, footerText) {
   let metrics = pageMetrics(doc);
   drawPageGuides(doc);
 
@@ -569,7 +565,7 @@ async function renderStudentsGrid(doc, students, sharedLogoBuf, sharedPrincipalB
     const frontX = metrics.startX;
     const backX = metrics.startX + CARD_W + GAP_COL;
     const student = students[i];
-    const buffers = await buildBuffersFor(student, sharedLogoBuf, sharedPrincipalBuf);
+    const buffers = await buildBuffersFor(student, sharedLogoBuf, sharedPrincipalBuf, sharedWatermarkBuf);
 
     drawFrontCard(doc, frontX, rowY, student, buffers);
     drawBackCard(doc, backX, rowY, student, buffers);
@@ -584,9 +580,10 @@ async function renderStudentsGrid(doc, students, sharedLogoBuf, sharedPrincipalB
 // SHARED PDF RESPONSE HELPER
 // ============================================================
 async function sendIdCardPdf(res, students, filename, title, footerText) {
-  const [logoBuf, principalBuf] = await Promise.all([
+  const [logoBuf, principalBuf, watermarkBuf] = await Promise.all([
     fetchImageBuffer(SCHOOL.logoUrl),
-    fetchImageBuffer(SCHOOL.principalSignatureUrl)
+    fetchImageBuffer(SCHOOL.principalSignatureUrl),
+    fetchImageBuffer(SCHOOL_WATERMARK_URL)
   ]);
 
   const doc = new PDFDocument({
@@ -598,7 +595,7 @@ async function sendIdCardPdf(res, students, filename, title, footerText) {
   res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
   doc.pipe(res);
 
-  await renderStudentsGrid(doc, students, logoBuf, principalBuf, footerText);
+  await renderStudentsGrid(doc, students, logoBuf, principalBuf, watermarkBuf, footerText);
   doc.end();
 }
 
