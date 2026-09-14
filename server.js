@@ -109,6 +109,8 @@ const studentRoutes = require("./routes/studentRoutes");
 const admitCardRoutes = require("./routes/admitCardRoutes");
 const idCardRoutes = require("./routes/idCardRoutes");
 const quizRoutes = require("./routes/quizRoutes");
+const documentRoutes = require('./routes/documentRoutes');
+
 
 
 
@@ -124,6 +126,7 @@ app.use("/api/bonafide", bonafideRoutes);
 app.use('/api/results', resultRoutes); // Public routes
 app.use("/api/students", studentRoutes);
 app.use("/api/quiz", quizRoutes);
+app.use('/api/documents', documentRoutes);
 
 // 1. Home route
 app.get("/", (req, res) => {
