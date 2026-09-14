@@ -6,7 +6,15 @@ const http = require("http");
 
 const { db } = require("../config/db");
 
-const q = (sql, params = []) => db.query(sql, params);
+// ✅ Callback → Promise wrapper (existing mysql2 ke saath kaam karega)
+const q = (sql, params = []) => {
+    return new Promise((resolve, reject) => {
+        db.query(sql, params, (err, results) => {
+            if (err) return reject(err);
+            resolve(results);
+        });
+    });
+};
 
 // ============================================================
 // TABLE AUTO-CREATE (Server file me kuch nahi karna)
