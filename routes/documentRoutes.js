@@ -4,11 +4,11 @@ const PDFDocument = require("pdfkit");
 const https = require("https");
 const http = require("http");
 const multer = require("multer");
-const { cloudinary, uploadDownload } = require("../config/cloudinary");
+const { cloudinary } = require("../config/cloudinary");
 
 const { db } = require("../config/db");
 
-// ✅ Wrapper for callback-based mysql2 (existing db.js)
+// ✅ Wrapper for callback-based mysql2
 const q = (sql, params = []) => {
     return new Promise((resolve, reject) => {
         db.query(sql, params, (err, results) => {
@@ -19,10 +19,14 @@ const q = (sql, params = []) => {
 };
 
 // ============================================================
-// TABLE AUTO-CREATE
+// TABLE AUTO-CREATE + AUTO-MIGRATION
+// Server restart hone pe:
+// 1. Table nahi hai to bana dega
+// 2. Table hai to missing columns add kar dega
 // ============================================================
 (async () => {
     try {
+        // Step 1: Create table (agar nahi hai)
         await q(`
             CREATE TABLE IF NOT EXISTS school_documents (
                 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -50,19 +54,53 @@ const q = (sql, params = []) => {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         `);
         console.log("✅ school_documents table ready");
+
+        // Step 2: Auto-migration — existing table mein missing columns add karo
+        const existingCols = await q("SHOW COLUMNS FROM school_documents");
+        const colNames = existingCols.map(c => c.Field);
+
+        const requiredCols = [
+            { name: "title_style", def: "TEXT DEFAULT NULL", after: "title" },
+            { name: "subject_style", def: "TEXT DEFAULT NULL", after: "subject" },
+            { name: "signature_url", def: "VARCHAR(500) DEFAULT NULL", after: "issued_by_designation" },
+            { name: "signature_public_id", def: "VARCHAR(255) DEFAULT NULL", after: "signature_url" }
+        ];
+
+        for (const col of requiredCols) {
+            if (!colNames.includes(col.name)) {
+                console.log(`📌 Adding missing column: ${col.name}`);
+                try {
+                    await q(`ALTER TABLE school_documents ADD COLUMN ${col.name} ${col.def} AFTER ${col.after}`);
+                    console.log(`✅ Column added: ${col.name}`);
+                } catch (alterErr) {
+                    // Agar "after" column exist nahi karta, to without AFTER try karo
+                    console.log(`⚠️ Retry without AFTER for ${col.name}`);
+                    await q(`ALTER TABLE school_documents ADD COLUMN ${col.name} ${col.def}`);
+                    console.log(`✅ Column added (fallback): ${col.name}`);
+                }
+            }
+        }
+
+        console.log("✅ school_documents schema is up to date");
     } catch (err) {
-        console.error("❌ school_documents table error:", err.message);
+        console.error("❌ school_documents table setup error:", err.message);
     }
 })();
 
 // ============================================================
-// IMAGE UPLOAD (Editor ke liye) — Cloudinary
+// MULTER — In-Memory (Cloudinary stream ke liye)
 // ============================================================
-const uploadDocumentImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const uploadDocumentImage = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }
+});
 
+// ============================================================
+// IMAGE UPLOAD (Editor ke liye)
+// ============================================================
 router.post("/upload-image", uploadDocumentImage.single("image"), async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ success: false, message: "No file" });
+        if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
 
         const result = await new Promise((resolve, reject) => {
             const stream = cloudinary.uploader.upload_stream(
@@ -84,9 +122,8 @@ router.post("/upload-image", uploadDocumentImage.single("image"), async (req, re
 // ============================================================
 router.post("/upload-signature", uploadDocumentImage.single("signature"), async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ success: false, message: "No file" });
+        if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
 
-        // Only images
         if (!req.file.mimetype.startsWith("image/")) {
             return res.status(400).json({ success: false, message: "Only image files allowed" });
         }
@@ -164,75 +201,72 @@ function fetchImageBuffer(url, redirects = 0) {
 }
 
 // ============================================================
-// HTML → RICH BLOCKS (better PDF conversion)
-// Handles: headings, paragraphs, bold, italic, underline, lists, tables, images, alignment
+// HTML → RICH BLOCKS (PDF render ke liye)
 // ============================================================
 function parseHtmlToBlocks(html) {
     if (!html) return [];
     const blocks = [];
-
-    // Remove scripts/styles
     let s = String(html).replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "");
 
-    // Split by block-level tags preserving them
-    // Simple approach: regex-based block extraction
     const blockRegex = /<(h[1-6]|p|div|ul|ol|table|blockquote|pre)[^>]*>([\s\S]*?)<\/\1>/gi;
     let match;
     const matchedRanges = [];
 
     while ((match = blockRegex.exec(s)) !== null) {
-        matchedRanges.push({ start: match.index, end: match.index + match[0].length, tag: match[1].toLowerCase(), content: match[2] });
+        matchedRanges.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            tag: match[1].toLowerCase(),
+            content: match[2]
+        });
     }
 
-    // If no blocks matched, treat whole thing as one paragraph
     if (matchedRanges.length === 0) {
         const text = stripHtml(s);
         if (text.trim()) blocks.push({ type: "p", text });
-        return blocks;
-    }
-
-    for (const m of matchedRanges) {
-        if (m.tag.startsWith("h") && m.tag.length === 2) {
-            const level = parseInt(m.tag[1]);
-            const text = stripHtml(m.content).trim();
-            if (text) blocks.push({ type: "heading", level, text });
-        } else if (m.tag === "p" || m.tag === "div") {
-            const text = stripHtml(m.content).trim();
-            if (text) blocks.push({ type: "p", text });
-        } else if (m.tag === "ul" || m.tag === "ol") {
-            // Extract li items
-            const items = [];
-            const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-            let li;
-            while ((li = liRegex.exec(m.content)) !== null) {
-                const text = stripHtml(li[1]).trim();
-                if (text) items.push(text);
-            }
-            if (items.length) blocks.push({ type: "list", ordered: m.tag === "ol", items });
-        } else if (m.tag === "blockquote") {
-            const text = stripHtml(m.content).trim();
-            if (text) blocks.push({ type: "quote", text });
-        } else if (m.tag === "table") {
-            const rows = [];
-            const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-            let tr;
-            while ((tr = trRegex.exec(m.content)) !== null) {
-                const cells = [];
-                const cellRegex = /<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi;
-                let cell;
-                while ((cell = cellRegex.exec(tr[1])) !== null) {
-                    cells.push({ text: stripHtml(cell[2]).trim(), isHeader: cell[1].toLowerCase() === "th" });
+    } else {
+        for (const m of matchedRanges) {
+            if (m.tag.startsWith("h") && m.tag.length === 2) {
+                const level = parseInt(m.tag[1]);
+                const text = stripHtml(m.content).trim();
+                if (text) blocks.push({ type: "heading", level, text });
+            } else if (m.tag === "p" || m.tag === "div") {
+                const text = stripHtml(m.content).trim();
+                if (text) blocks.push({ type: "p", text });
+            } else if (m.tag === "ul" || m.tag === "ol") {
+                const items = [];
+                const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+                let li;
+                while ((li = liRegex.exec(m.content)) !== null) {
+                    const text = stripHtml(li[1]).trim();
+                    if (text) items.push(text);
                 }
-                if (cells.length) rows.push(cells);
+                if (items.length) blocks.push({ type: "list", ordered: m.tag === "ol", items });
+            } else if (m.tag === "blockquote") {
+                const text = stripHtml(m.content).trim();
+                if (text) blocks.push({ type: "quote", text });
+            } else if (m.tag === "table") {
+                const rows = [];
+                const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+                let tr;
+                while ((tr = trRegex.exec(m.content)) !== null) {
+                    const cells = [];
+                    const cellRegex = /<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi;
+                    let cell;
+                    while ((cell = cellRegex.exec(tr[1])) !== null) {
+                        cells.push({ text: stripHtml(cell[2]).trim(), isHeader: cell[1].toLowerCase() === "th" });
+                    }
+                    if (cells.length) rows.push(cells);
+                }
+                if (rows.length) blocks.push({ type: "table", rows });
+            } else if (m.tag === "pre") {
+                const text = stripHtml(m.content);
+                if (text.trim()) blocks.push({ type: "code", text });
             }
-            if (rows.length) blocks.push({ type: "table", rows });
-        } else if (m.tag === "pre") {
-            const text = stripHtml(m.content);
-            if (text.trim()) blocks.push({ type: "code", text });
         }
     }
 
-    // Handle standalone images (<img> not inside blocks)
+    // Standalone images
     const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
     let imgMatch;
     while ((imgMatch = imgRegex.exec(s)) !== null) {
@@ -273,7 +307,12 @@ const SCHOOL = {
 // ============================================================
 router.get("/", async (req, res) => {
     try {
-        const { search = "", type = "", status = "", sortBy = "created_at", order = "desc", page = 1, limit = 20 } = req.query;
+        const {
+            search = "", type = "", status = "",
+            sortBy = "created_at", order = "desc",
+            page = 1, limit = 20
+        } = req.query;
+
         const allowedSort = ["created_at", "updated_at", "doc_date", "doc_number", "title", "doc_type"];
         const sortCol = allowedSort.includes(sortBy) ? sortBy : "created_at";
         const sortDir = order.toLowerCase() === "asc" ? "ASC" : "DESC";
@@ -294,7 +333,9 @@ router.get("/", async (req, res) => {
 
         const rows = await q(
             `SELECT id, doc_number, doc_date, doc_type, title, subject, issued_by_name, issued_by_designation, status, signature_url, created_by, created_at, updated_at
-             FROM school_documents ${whereSql} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`,
+             FROM school_documents ${whereSql}
+             ORDER BY ${sortCol} ${sortDir}
+             LIMIT ? OFFSET ?`,
             [...params, Number(limit), offset]
         );
 
@@ -304,8 +345,15 @@ router.get("/", async (req, res) => {
         const typeCounts = await q(`SELECT doc_type, COUNT(*) AS count FROM school_documents GROUP BY doc_type`);
 
         res.json({
-            success: true, data: rows, typeCounts,
-            pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) }
+            success: true,
+            data: rows,
+            typeCounts,
+            pagination: {
+                total,
+                page: Number(page),
+                limit: Number(limit),
+                pages: Math.ceil(total / limit)
+            }
         });
     } catch (err) {
         console.error("❌ List error:", err);
@@ -318,10 +366,11 @@ router.get("/", async (req, res) => {
 // ============================================================
 router.get("/stats", async (req, res) => {
     try {
-        const [total] = await q("SELECT COUNT(*) AS c FROM school_documents");
-        const [published] = await q("SELECT COUNT(*) AS c FROM school_documents WHERE status='Published'");
-        const [drafts] = await q("SELECT COUNT(*) AS c FROM school_documents WHERE status='Draft'");
-        const [thisMonth] = await q("SELECT COUNT(*) AS c FROM school_documents WHERE MONTH(doc_date)=MONTH(NOW()) AND YEAR(doc_date)=YEAR(NOW())");
+        const total = await q("SELECT COUNT(*) AS c FROM school_documents");
+        const published = await q("SELECT COUNT(*) AS c FROM school_documents WHERE status='Published'");
+        const drafts = await q("SELECT COUNT(*) AS c FROM school_documents WHERE status='Draft'");
+        const thisMonth = await q("SELECT COUNT(*) AS c FROM school_documents WHERE MONTH(doc_date)=MONTH(NOW()) AND YEAR(doc_date)=YEAR(NOW())");
+
         res.json({
             success: true,
             data: {
@@ -345,7 +394,10 @@ router.get("/next-number/:type", async (req, res) => {
         const year = new Date().getFullYear();
         const prefix = `GSSS/${year}/${type}/`;
 
-        const rows = await q(`SELECT doc_number FROM school_documents WHERE doc_number LIKE ? ORDER BY id DESC LIMIT 1`, [`${prefix}%`]);
+        const rows = await q(
+            `SELECT doc_number FROM school_documents WHERE doc_number LIKE ? ORDER BY id DESC LIMIT 1`,
+            [`${prefix}%`]
+        );
 
         let next = 1;
         if (rows.length) {
@@ -438,7 +490,6 @@ router.delete("/:id", async (req, res) => {
         const rows = await q("SELECT * FROM school_documents WHERE id = ?", [id]);
         if (!rows.length) return res.status(404).json({ success: false, message: "Not found" });
 
-        // Delete signature from cloudinary
         if (rows[0].signature_public_id) {
             try { await cloudinary.uploader.destroy(rows[0].signature_public_id); } catch (e) {}
         }
@@ -463,9 +514,17 @@ router.post("/:id/duplicate", async (req, res) => {
         const newNumber = (src.doc_number || "DOC") + "-C" + Date.now().toString().slice(-4);
 
         const result = await q(
-            `INSERT INTO school_documents (doc_number, doc_date, doc_type, title, title_style, subject, subject_style, body_html, issued_by_name, issued_by_designation, signature_url, signature_public_id, status, created_by)
+            `INSERT INTO school_documents 
+             (doc_number, doc_date, doc_type, title, title_style, subject, subject_style, body_html, 
+              issued_by_name, issued_by_designation, signature_url, signature_public_id, status, created_by)
              VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?)`,
-            [newNumber, src.doc_type, "Copy of " + src.title, src.title_style, src.subject, src.subject_style, src.body_html, src.issued_by_name, src.issued_by_designation, src.signature_url, src.signature_public_id, req.admin?.username || "admin"]
+            [
+                newNumber, src.doc_type, "Copy of " + src.title, src.title_style,
+                src.subject, src.subject_style, src.body_html,
+                src.issued_by_name, src.issued_by_designation,
+                src.signature_url, src.signature_public_id,
+                req.admin?.username || "admin"
+            ]
         );
 
         const newRows = await q("SELECT * FROM school_documents WHERE id = ?", [result.insertId]);
@@ -516,12 +575,12 @@ router.get("/:id/pdf", async (req, res) => {
         const contentW = pageW - ML - MR;
 
         // ============================================================
-        // SECURITY WATERMARK — Logo + Repeating Pattern
+        // SECURITY WATERMARK
         // ============================================================
         function drawWatermark(pageNum) {
             doc.save();
 
-            // Repeating pattern (diagonal stripes)
+            // Diagonal gold stripes
             doc.opacity(0.035);
             doc.lineWidth(0.5).strokeColor("#c9972b");
             for (let i = -pageH; i < pageW + pageH; i += 22) {
@@ -544,7 +603,7 @@ router.get("/:id/pdf", async (req, res) => {
                 } catch (e) {}
             }
 
-            // Corner security codes
+            // Corner security code
             doc.save();
             doc.opacity(0.14);
             doc.font("Helvetica").fontSize(6).fillColor("#0d1b2a");
@@ -555,13 +614,12 @@ router.get("/:id/pdf", async (req, res) => {
         }
 
         // ============================================================
-        // HEADER — Official Letterhead
+        // HEADER
         // ============================================================
         function drawHeader() {
             const headerY = MT;
             const headerH = 92;
 
-            // Logo (circle with gold border)
             const logoSize = 68;
             const logoX = ML;
             const logoY = headerY;
@@ -580,7 +638,6 @@ router.get("/:id/pdf", async (req, res) => {
                 } catch (e) {}
             }
 
-            // School name
             doc.font("Helvetica-Bold").fontSize(19).fillColor("#0d1b2a")
                .text(SCHOOL.name, ML + logoSize + 14, headerY + 4, {
                    width: contentW - logoSize - 14,
@@ -588,7 +645,6 @@ router.get("/:id/pdf", async (req, res) => {
                    characterSpacing: 0.8
                });
 
-            // Address line
             doc.font("Helvetica").fontSize(8.5).fillColor("#5a6a7e")
                .text(SCHOOL.address, ML + logoSize + 14, headerY + 30, {
                    width: contentW - logoSize - 14,
@@ -596,15 +652,14 @@ router.get("/:id/pdf", async (req, res) => {
                    characterSpacing: 0.5
                });
 
-            // Contact line
             doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8")
-               .text("Affiliated to HPBOSE · Recognized by Govt. of Himachal Pradesh", ML + logoSize + 14, headerY + 46, {
-                   width: contentW - logoSize - 14,
-                   align: "center",
-                   characterSpacing: 0.3
-               });
+               .text("Affiliated to HPBOSE · Recognized by Govt. of Himachal Pradesh",
+                   ML + logoSize + 14, headerY + 46, {
+                       width: contentW - logoSize - 14,
+                       align: "center",
+                       characterSpacing: 0.3
+                   });
 
-            // Gold divider
             const divY = headerY + headerH;
             doc.moveTo(ML, divY).lineTo(pageW - MR, divY).lineWidth(3).strokeColor("#c9972b").stroke();
             doc.moveTo(ML, divY + 4).lineTo(pageW - MR, divY + 4).lineWidth(0.5).strokeColor("#0d1b2a").stroke();
@@ -613,20 +668,15 @@ router.get("/:id/pdf", async (req, res) => {
         }
 
         // ============================================================
-        // META ROW — Doc No. / Date / Type Badge
+        // META
         // ============================================================
         function drawMeta(y) {
-            // Left: doc number
             doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a");
             doc.text(`Ref. No: ${d.doc_number || "-"}`, ML, y);
-
-            // Right: date
-            doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a");
             doc.text(`Date: ${fmtDateIN(d.doc_date)}`, ML, y, { width: contentW, align: "right" });
 
             y += 22;
 
-            // Type badge (centered, pill shaped)
             const typeText = String(d.doc_type || "DOCUMENT").toUpperCase();
             doc.font("Helvetica-Bold").fontSize(11.5);
             const typeTextW = doc.widthOfString(typeText);
@@ -634,7 +684,6 @@ router.get("/:id/pdf", async (req, res) => {
             const badgeH = 24;
             const badgeX = (pageW - badgeW) / 2;
 
-            // Gold badge
             doc.roundedRect(badgeX, y, badgeW, badgeH, 12).fillColor("#0d1b2a").fill();
             doc.roundedRect(badgeX, y, badgeW, badgeH, 12).lineWidth(1.5).strokeColor("#c9972b").stroke();
 
@@ -667,7 +716,6 @@ router.get("/:id/pdf", async (req, res) => {
         // ============================================================
         function drawSubject(y) {
             if (!d.subject) return y;
-
             doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#0d1b2a")
                .text("Subject: ", ML, y, { continued: true });
             doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#1a2332")
@@ -675,24 +723,20 @@ router.get("/:id/pdf", async (req, res) => {
 
             const lineY = doc.y + 5;
             doc.moveTo(ML, lineY).lineTo(pageW - MR, lineY).lineWidth(0.6).strokeColor("#c9972b").stroke();
-
             return lineY + 10;
         }
 
         // ============================================================
-        // SIGNATURE BLOCK
+        // SIGNATURE
         // ============================================================
         function drawSignature(forceY) {
             const sigW = 200;
             const sigX = pageW - MR - sigW;
-
-            // If not enough space, don't draw here (will be on next page)
             const neededH = 90;
             if (forceY + neededH > pageH - 60) return null;
 
             let y = forceY + 30;
 
-            // Signature image (bigger, cleaner)
             if (signatureBuf) {
                 try {
                     doc.image(signatureBuf, sigX + 45, y - 10, {
@@ -700,22 +744,17 @@ router.get("/:id/pdf", async (req, res) => {
                         align: "center"
                     });
                     y += 55;
-                } catch (e) {
-                    y += 20;
-                }
+                } catch (e) { y += 20; }
             } else {
                 y += 45;
             }
 
-            // Signature line
             doc.moveTo(sigX + 20, y).lineTo(sigX + sigW - 20, y)
                .lineWidth(0.8).strokeColor("#64748b").stroke();
 
-            // Name
             doc.font("Helvetica-Bold").fontSize(11).fillColor("#0d1b2a")
                .text(d.issued_by_name || "Principal", sigX, y + 8, { width: sigW, align: "center" });
 
-            // Designation
             doc.font("Helvetica").fontSize(9).fillColor("#475569")
                .text(d.issued_by_designation || "Govt. Sr. Sec. School Shilla", sigX, y + 24, { width: sigW, align: "center" });
 
@@ -728,7 +767,6 @@ router.get("/:id/pdf", async (req, res) => {
         function drawFooter(pageNum, totalPages) {
             const footerY = pageH - 32;
 
-            // Security strip (subtle pattern)
             doc.save();
             doc.opacity(0.08);
             for (let i = 0; i < pageW; i += 10) {
@@ -739,25 +777,13 @@ router.get("/:id/pdf", async (req, res) => {
             doc.moveTo(ML, footerY).lineTo(pageW - MR, footerY).lineWidth(0.6).strokeColor("#c9972b").stroke();
 
             doc.font("Helvetica").fontSize(7).fillColor("#64748b");
-            doc.text(
-                `Official Document · ${SCHOOL.name}`,
-                ML, footerY + 5,
-                { width: contentW / 2, align: "left" }
-            );
+            doc.text(`Official Document · ${SCHOOL.name}`, ML, footerY + 5, { width: contentW / 2, align: "left" });
 
             doc.font("Helvetica").fontSize(7).fillColor("#64748b");
-            doc.text(
-                `Generated: ${new Date().toLocaleString("en-IN")}`,
-                ML, footerY + 5,
-                { width: contentW, align: "center" }
-            );
+            doc.text(`Generated: ${new Date().toLocaleString("en-IN")}`, ML, footerY + 5, { width: contentW, align: "center" });
 
             doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a");
-            doc.text(
-                `Page ${pageNum} of ${totalPages}`,
-                ML, footerY + 5,
-                { width: contentW, align: "right" }
-            );
+            doc.text(`Page ${pageNum} of ${totalPages}`, ML, footerY + 5, { width: contentW, align: "right" });
         }
 
         // ============================================================
@@ -769,11 +795,8 @@ router.get("/:id/pdf", async (req, res) => {
         y = drawTitle(y);
         y = drawSubject(y);
 
-        // ============================================================
-        // BODY CONTENT
-        // ============================================================
         const blocks = parseHtmlToBlocks(d.body_html);
-        const bottomLimit = pageH - MB - 110; // Reserve space for signature on last page
+        const bottomLimit = pageH - MB - 110;
         let pageNum = 1;
 
         doc.font("Helvetica").fontSize(11).fillColor("#1a2332");
@@ -807,7 +830,6 @@ router.get("/:id/pdf", async (req, res) => {
                 blockHeight = doc.heightOfString(block.text, { width: contentW - 20, lineGap }) + 16;
             }
 
-            // Page break check
             if (newY + blockHeight > bottomLimit) {
                 drawFooter(pageNum, 99);
                 doc.addPage();
@@ -817,7 +839,6 @@ router.get("/:id/pdf", async (req, res) => {
                 newY = y;
             }
 
-            // Render block
             if (block.type === "heading") {
                 const sizes = { 1: 16, 2: 14, 3: 13, 4: 12, 5: 11.5, 6: 11 };
                 doc.font("Helvetica-Bold").fontSize(sizes[block.level] || 13).fillColor("#0d1b2a")
@@ -846,7 +867,7 @@ router.get("/:id/pdf", async (req, res) => {
                 const rowH = 22;
                 let tblY = tableY;
 
-                block.rows.forEach((row, rIdx) => {
+                block.rows.forEach((row) => {
                     const isHeader = row.some(c => c.isHeader);
                     let cellX = ML;
 
@@ -897,7 +918,7 @@ router.get("/:id/pdf", async (req, res) => {
         }
 
         // ============================================================
-        // SIGNATURE (last page, or new page if no space)
+        // SIGNATURE
         // ============================================================
         const sigNeeded = 100;
         if (y + sigNeeded > pageH - 60) {
@@ -911,7 +932,7 @@ router.get("/:id/pdf", async (req, res) => {
         drawSignature(y);
 
         // ============================================================
-        // FOOTERS (all pages — need to redraw with correct total)
+        // FOOTERS
         // ============================================================
         const range = doc.bufferedPageRange();
         const totalPages = pageNum;
