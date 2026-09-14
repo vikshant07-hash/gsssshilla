@@ -3,9 +3,106 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 console.log('🔧 adminRoutes.js loaded!');
+
+// ============================================================
+// ✅ PERSISTENT OTP STORE (File-based) — Restart-safe
+// ============================================================
+const OTP_STORE_FILE = path.join(__dirname, '..', '.otp-store.json');
+
+let otpStore = {};
+let otpStoreLoaded = false;
+
+// Load existing OTPs on startup
+function loadOtpStore() {
+    try {
+        if (fs.existsSync(OTP_STORE_FILE)) {
+            const data = fs.readFileSync(OTP_STORE_FILE, 'utf8');
+            const parsed = JSON.parse(data);
+            const now = Date.now();
+            // Purge expired OTPs on load
+            otpStore = {};
+            for (const [key, value] of Object.entries(parsed)) {
+                if (value && value.expiry && value.expiry > now) {
+                    otpStore[key] = value;
+                }
+            }
+            otpStoreLoaded = true;
+            console.log(`✅ OTP store loaded (${Object.keys(otpStore).length} active OTPs)`);
+        } else {
+            otpStoreLoaded = true;
+            console.log('✅ OTP store initialized (fresh)');
+        }
+    } catch (err) {
+        console.error('⚠️ OTP store load error:', err.message);
+        otpStore = {};
+        otpStoreLoaded = true;
+    }
+}
+
+// Save OTP store to disk (debounced to reduce I/O)
+let saveTimer = null;
+function persistOtpStore() {
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+        try {
+            fs.writeFileSync(OTP_STORE_FILE, JSON.stringify(otpStore), 'utf8');
+        } catch (err) {
+            console.error('⚠️ OTP store save error:', err.message);
+        }
+        saveTimer = null;
+    }, 100); // debounce 100ms
+}
+
+// Normalize username — case-insensitive
+function normalizeKey(str) {
+    return (str || '').toString().toLowerCase().trim();
+}
+
+// Set OTP with normalization
+function setOTP(username, otp, expiryMs = 5 * 60 * 1000, purpose = 'login') {
+    const key = `${purpose}:${normalizeKey(username)}`;
+    otpStore[key] = {
+        otp: otp.toUpperCase(),
+        expiry: Date.now() + expiryMs,
+        attempts: 0,
+        created: Date.now()
+    };
+    persistOtpStore();
+}
+
+// Get OTP with normalization
+function getOTP(username, purpose = 'login') {
+    const key = `${purpose}:${normalizeKey(username)}`;
+    return otpStore[key] || null;
+}
+
+// Delete OTP
+function deleteOTP(username, purpose = 'login') {
+    const key = `${purpose}:${normalizeKey(username)}`;
+    delete otpStore[key];
+    persistOtpStore();
+}
+
+// Cleanup expired OTPs every 5 minutes
+setInterval(() => {
+    const now = Date.now();
+    let changed = false;
+    for (const key of Object.keys(otpStore)) {
+        if (otpStore[key]?.expiry && otpStore[key].expiry < now) {
+            delete otpStore[key];
+            changed = true;
+        }
+    }
+    if (changed) persistOtpStore();
+}, 5 * 60 * 1000);
+
+// Load at startup
+loadOtpStore();
 
 // ============================================================
 // SECURITY MIDDLEWARE
@@ -13,38 +110,38 @@ console.log('🔧 adminRoutes.js loaded!');
 const JWT_SECRET = process.env.JWT_SECRET || 'my_super_secret_key_12345';
 
 const verifyToken = (req, res, next) => {
-  console.log('🛡️ verifyToken middleware called for:', req.method, req.path);
+    console.log('🛡️ verifyToken middleware called for:', req.method, req.path);
 
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.log('❌ No token provided for:', req.path);
-      return res.status(401).json({
-        success: false,
-        message: 'No token provided',
-        code: 'NO_TOKEN'
-      });
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            console.log('❌ No token provided for:', req.path);
+            return res.status(401).json({
+                success: false,
+                message: 'No token provided',
+                code: 'NO_TOKEN'
+            });
+        }
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.admin = decoded;
+        console.log('✅ Token verified for:', decoded.username);
+        next();
+    } catch (error) {
+        console.log('❌ Token verification failed:', error.message);
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Token expired',
+                code: 'TOKEN_EXPIRED'
+            });
+        }
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid token',
+            code: 'INVALID_TOKEN'
+        });
     }
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.admin = decoded;
-    console.log('✅ Token verified for:', decoded.username);
-    next();
-  } catch (error) {
-    console.log('❌ Token verification failed:', error.message);
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired',
-        code: 'TOKEN_EXPIRED'
-      });
-    }
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid token',
-      code: 'INVALID_TOKEN'
-    });
-  }
 };
 
 // ============================================================
@@ -56,7 +153,7 @@ const checkLoginAttempts = (req, res, next) => {
     const { username } = req.body;
     if (!username) return next();
 
-    const key = `user_${username}`;
+    const key = `user_${normalizeKey(username)}`;
     const now = Date.now();
     let attempt = loginAttempts.get(key);
 
@@ -109,7 +206,7 @@ const recordLoginAttempt = (req, success, username) => {
     const user = username || req.body?.username;
     if (!user) return;
 
-    const key = `user_${user}`;
+    const key = `user_${normalizeKey(user)}`;
     const attempt = loginAttempts.get(key) || { count: 0, firstAttempt: Date.now(), blockUntil: null };
 
     if (success) {
@@ -134,45 +231,93 @@ const recordLoginAttempt = (req, success, username) => {
 // ADMIN CREDENTIALS
 // ============================================================
 const ADMINS = [
-  {
-    id: 1,
-    username: process.env.ADMIN_USERNAME || 'admin@shilla171210',
-    email: process.env.ADMIN_EMAIL || 'vikshant07@gmail.com',
-    name: process.env.ADMIN_NAME || 'VIKSHANT KRALTA',
-    role: 'Super Admin',
-    passwordHash: process.env.ADMIN_PASSWORD_HASH
-  },
-  {
-    id: 2,
-    username: process.env.ADMIN2_USERNAME,
-    email: process.env.ADMIN2_EMAIL,
-    name: process.env.ADMIN2_NAME || 'SUJAL KRALTA',
-    role: 'Admin',
-    passwordHash: process.env.ADMIN2_PASSWORD_HASH
-  }
+    {
+        id: 1,
+        username: process.env.ADMIN_USERNAME || 'admin@shilla171210',
+        email: process.env.ADMIN_EMAIL || 'vikshant07@gmail.com',
+        name: process.env.ADMIN_NAME || 'VIKSHANT KRALTA',
+        role: 'Super Admin',
+        passwordHash: process.env.ADMIN_PASSWORD_HASH
+    },
+    {
+        id: 2,
+        username: process.env.ADMIN2_USERNAME,
+        email: process.env.ADMIN2_EMAIL,
+        name: process.env.ADMIN2_NAME || 'SUJAL KRALTA',
+        role: 'Admin',
+        passwordHash: process.env.ADMIN2_PASSWORD_HASH
+    }
 ].filter(admin => admin.username && admin.passwordHash);
 
+// ✅ Startup diagnostics
+if (ADMINS.length === 0) {
+    console.error('❌❌❌ No admins configured! Check ADMIN_USERNAME and ADMIN_PASSWORD_HASH env vars.');
+} else {
+    console.log(`✅ ${ADMINS.length} admin(s) configured:`, ADMINS.map(a => a.username));
+}
+if (!process.env.BREVO_API_KEY) {
+    console.error('❌❌❌ BREVO_API_KEY is MISSING! OTP emails will NOT be sent.');
+} else {
+    console.log('✅ Brevo API key configured');
+}
+
 // ============================================================
-// EMAIL SENDING
+// EMAIL SENDING (with timeout + retry)
 // ============================================================
 const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'magicalmathsquiz@gmail.com';
 const BREVO_SENDER_NAME = 'GSSS SHILLA';
 const SCHOOL_LOGO_URL = process.env.SCHOOL_LOGO_URL || 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png';
 
+// ✅ Single-attempt email send with 8s timeout
+async function sendEmailOnce(payload, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'api-key': process.env.BREVO_API_KEY
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            const err = new Error(`Brevo API error (${response.status}): ${errorBody}`);
+            err.status = response.status;
+            throw err;
+        }
+
+        return await response.json();
+    } catch (err) {
+        clearTimeout(timeoutId);
+        if (err.name === 'AbortError') {
+            throw new Error(`Email API timeout (${timeoutMs}ms)`);
+        }
+        throw err;
+    }
+}
+
 async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Admin') {
-  const subjectText = purpose === 'reset'
-    ? 'Password Reset OTP — GSSS SHILLA'
-    : 'Admin Login OTP — GSSS SHILLA';
+    const subjectText = purpose === 'reset'
+        ? 'Password Reset OTP — GSSS SHILLA'
+        : 'Admin Login OTP — GSSS SHILLA';
 
-  const headingText = purpose === 'reset'
-    ? 'Password Reset Request'
-    : 'Admin Login Verification';
+    const headingText = purpose === 'reset'
+        ? 'Password Reset Request'
+        : 'Admin Login Verification';
 
-  const introText = purpose === 'reset'
-    ? 'We received a request to reset your admin password. Use the OTP below to proceed.'
-    : 'Use the One-Time Password below to securely log in to your admin account.';
+    const introText = purpose === 'reset'
+        ? 'We received a request to reset your admin password. Use the OTP below to proceed.'
+        : 'Use the One-Time Password below to securely log in to your admin account.';
 
-  const htmlContent = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+    const htmlContent = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
@@ -224,572 +369,610 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
 </body>
 </html>`;
 
-  const textContent = `${headingText}\n\nHi, ${recipientName}!\n${introText}\n\nYour OTP Code: ${otp}\n\nThis OTP is valid for 5 minutes.\nIf you did not request this, please ignore this email or contact the school administration.\n\n© ${new Date().getFullYear()} GSSS SHILLA`;
+    const textContent = `${headingText}\n\nHi, ${recipientName}!\n${introText}\n\nYour OTP Code: ${otp}\n\nThis OTP is valid for 5 minutes.\nIf you did not request this, please ignore this email or contact the school administration.\n\n© ${new Date().getFullYear()} GSSS SHILLA`;
 
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'api-key': process.env.BREVO_API_KEY
-    },
-    body: JSON.stringify({
-      sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
-      to: [{ email: toEmail }],
-      subject: subjectText,
-      htmlContent: htmlContent,
-      textContent: textContent
-    })
-  });
+    const payload = {
+        sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+        to: [{ email: toEmail }],
+        subject: subjectText,
+        htmlContent: htmlContent,
+        textContent: textContent
+    };
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Brevo API error (${response.status}): ${errorBody}`);
-  }
+    // ✅ Retry logic: 2 attempts with 1s gap
+    let lastErr;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+            const result = await sendEmailOnce(payload, 8000);
+            console.log(`📬 Email sent (attempt ${attempt}). messageId: ${result.messageId || 'n/a'}`);
+            return result;
+        } catch (err) {
+            lastErr = err;
+            console.error(`⚠️ Email attempt ${attempt} failed: ${err.message}`);
+            if (attempt < 2) {
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
+    }
+    throw lastErr;
+}
 
-  return response.json();
+// ✅ Fire-and-forget email wrapper (response ko block nahi karta)
+function sendOTPEmailAsync(toEmail, otp, purpose, recipientName) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('📧 SENDING OTP EMAIL (async)');
+    console.log('   To:', toEmail);
+    console.log('   OTP:', otp);
+    console.log('   Purpose:', purpose);
+    console.log('   Brevo Key:', process.env.BREVO_API_KEY ? '✅ Set' : '❌ MISSING');
+    console.log('   Sender:', BREVO_SENDER_EMAIL);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    sendOTPEmail(toEmail, otp, purpose, recipientName)
+        .then(() => console.log(`✅ OTP email delivered → ${toEmail}`))
+        .catch(err => console.error(`❌ OTP email FAILED → ${toEmail}:`, err.message));
 }
 
 // ============================================================
-// STORE OTP
+// OTP HELPERS
 // ============================================================
-let otpStore = {};
-
 function generateOTP() {
-  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-  const numbers = "0123456789";
-  let otp = "";
-  for (let i = 0; i < 2; i++) {
-    otp += letters[Math.floor(Math.random() * letters.length)];
-  }
-  for (let i = 0; i < 4; i++) {
-    otp += numbers[Math.floor(Math.random() * numbers.length)];
-  }
-  return otp;
+    const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const numbers = "0123456789";
+    let otp = "";
+    for (let i = 0; i < 2; i++) {
+        otp += letters[Math.floor(Math.random() * letters.length)];
+    }
+    for (let i = 0; i < 4; i++) {
+        otp += numbers[Math.floor(Math.random() * numbers.length)];
+    }
+    return otp;
 }
 
+// ✅ Case-insensitive admin lookup
 function findAdminByUsername(username) {
-  return ADMINS.find(a => a.username === username);
+    if (!username) return null;
+    const target = normalizeKey(username);
+    return ADMINS.find(a => normalizeKey(a.username) === target);
 }
 
 function findAdminByEmail(email) {
-  return ADMINS.find(a => a.email === email);
+    if (!email) return null;
+    const target = normalizeKey(email);
+    return ADMINS.find(a => normalizeKey(a.email) === target);
 }
 
 // ============================================================
-// 🔓 PUBLIC ROUTES - NO TOKEN REQUIRED (DEFINED FIRST)
+// 🔓 PUBLIC ROUTES - NO TOKEN REQUIRED
 // ============================================================
 console.log('🔓 Registering PUBLIC routes...');
 
 // 1. Test Route
 router.get('/test', (req, res) => {
-  res.json({ success: true, message: 'Admin routes working!' });
+    res.json({ success: true, message: 'Admin routes working!' });
 });
 
 // 2. CSRF Token
 router.get('/csrf-token', (req, res) => {
-  const csrfToken = uuidv4();
-  req.session.csrfToken = csrfToken;
-  res.json({ success: true, token: csrfToken });
+    const csrfToken = uuidv4();
+    req.session.csrfToken = csrfToken;
+    res.json({ success: true, token: csrfToken });
 });
 
 // 3. LOGIN - Public
 router.post('/login', checkLoginAttempts, async (req, res) => {
-  console.log('🔥 LOGIN ROUTE HIT - PUBLIC');
-  const { username, password } = req.body;
+    console.log('🔥 LOGIN ROUTE HIT');
+    const { username, password } = req.body;
 
-  if (!username || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'Username and password are required',
-      code: 'MISSING_FIELDS'
-    });
-  }
-
-  try {
-    const admin = findAdminByUsername(username);
-    if (!admin) {
-      recordLoginAttempt(req, false, username);
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid username or password',
-        code: 'INVALID_CREDENTIALS'
-      });
+    if (!username || !password) {
+        return res.status(400).json({
+            success: false,
+            message: 'Username and password are required',
+            code: 'MISSING_FIELDS'
+        });
     }
-
-    const isMatch = await bcrypt.compare(password, admin.passwordHash);
-    if (!isMatch) {
-      recordLoginAttempt(req, false, username);
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid username or password',
-        code: 'INVALID_CREDENTIALS'
-      });
-    }
-
-    const otp = generateOTP();
-    const expiry = Date.now() + 5 * 60 * 1000;
-    otpStore[username] = { otp, expiry };
-
-    console.log(`📧 OTP for ${username}: ${otp}`);
 
     try {
-      await sendOTPEmail(admin.email, otp, 'login', admin.name);
-      console.log('✅ OTP email sent to', admin.email);
-    } catch (emailErr) {
-      console.error('❌ Failed to send OTP email:', emailErr.message);
-      return res.status(500).json({
-        success: false,
-        message: 'OTP generated but failed to send email. Check email configuration.',
-        code: 'EMAIL_FAILED'
-      });
+        const admin = findAdminByUsername(username);
+        if (!admin) {
+            recordLoginAttempt(req, false, username);
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid username or password',
+                code: 'INVALID_CREDENTIALS'
+            });
+        }
+
+        const isMatch = await bcrypt.compare(password, admin.passwordHash);
+        if (!isMatch) {
+            recordLoginAttempt(req, false, username);
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid username or password',
+                code: 'INVALID_CREDENTIALS'
+            });
+        }
+
+        const otp = generateOTP();
+        // ✅ Save with normalized username key
+        setOTP(admin.username, otp, 5 * 60 * 1000, 'login');
+
+        console.log(`📧 OTP generated for ${admin.username}: ${otp}`);
+
+        // ✅ Fire-and-forget — response instant milega
+        sendOTPEmailAsync(admin.email, otp, 'login', admin.name);
+
+        recordLoginAttempt(req, true, username);
+
+        res.json({
+            success: true,
+            message: 'OTP sent successfully! Check inbox + spam folder.',
+            data: {
+                username: admin.username,
+                email: admin.email,
+                otpSent: true
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Login Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error: ' + error.message,
+            code: 'SERVER_ERROR'
+        });
     }
-
-    recordLoginAttempt(req, true, username);
-
-    res.json({
-      success: true,
-      message: 'OTP sent successfully to your email!',
-      data: {
-        username: admin.username,
-        email: admin.email,
-        otpSent: true
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Login Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message,
-      code: 'SERVER_ERROR'
-    });
-  }
 });
 
 // ============================================================
-// 4. VERIFY OTP - PUBLIC (NO TOKEN REQUIRED) ✅✅✅
-// ✅ SESSION SET KARO - Dashboard ke liye important!
+// 4. VERIFY OTP - PUBLIC
 // ============================================================
 router.post('/verify-otp', async (req, res) => {
-  console.log('🔥 VERIFY OTP ROUTE HIT - PUBLIC ✅');
+    console.log('🔥 VERIFY OTP ROUTE HIT');
 
-  const { username, password, otp } = req.body;
+    const { username, password, otp } = req.body;
 
-  if (!username || !password || !otp) {
-    return res.status(400).json({
-      success: false,
-      message: 'Username, password and OTP are required',
-      code: 'MISSING_FIELDS'
-    });
-  }
-
-  try {
-    const admin = findAdminByUsername(username);
-    if (!admin) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials',
-        code: 'INVALID_CREDENTIALS'
-      });
+    if (!username || !password || !otp) {
+        return res.status(400).json({
+            success: false,
+            message: 'Username, password and OTP are required',
+            code: 'MISSING_FIELDS'
+        });
     }
 
-    const isMatch = await bcrypt.compare(password, admin.passwordHash);
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials',
-        code: 'INVALID_CREDENTIALS'
-      });
+    try {
+        const admin = findAdminByUsername(username);
+        if (!admin) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid credentials',
+                code: 'INVALID_CREDENTIALS'
+            });
+        }
+
+        const isMatch = await bcrypt.compare(password, admin.passwordHash);
+        if (!isMatch) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid credentials',
+                code: 'INVALID_CREDENTIALS'
+            });
+        }
+
+        // ✅ Use normalized username (admin.username) for lookup — matches setOTP
+        const stored = getOTP(admin.username, 'login');
+
+        if (!stored) {
+            return res.status(401).json({
+                success: false,
+                message: 'No OTP found or it expired. Please login again.',
+                code: 'NO_OTP'
+            });
+        }
+
+        if (stored.expiry < Date.now()) {
+            deleteOTP(admin.username, 'login');
+            return res.status(401).json({
+                success: false,
+                message: 'OTP expired. Please login again.',
+                code: 'OTP_EXPIRED'
+            });
+        }
+
+        // ✅ Case-insensitive compare + trim spaces
+        const providedOtp = String(otp).trim().toUpperCase();
+        const storedOtp = String(stored.otp).trim().toUpperCase();
+
+        if (storedOtp !== providedOtp) {
+            stored.attempts = (stored.attempts || 0) + 1;
+            persistOtpStore();
+
+            if (stored.attempts >= 5) {
+                deleteOTP(admin.username, 'login');
+                return res.status(401).json({
+                    success: false,
+                    message: 'Too many wrong attempts. Please login again.',
+                    code: 'TOO_MANY_ATTEMPTS'
+                });
+            }
+
+            const left = 5 - stored.attempts;
+            return res.status(401).json({
+                success: false,
+                message: `Invalid OTP. ${left} attempt${left > 1 ? 's' : ''} left.`,
+                code: 'INVALID_OTP'
+            });
+        }
+
+        // ✅ Valid — delete OTP
+        deleteOTP(admin.username, 'login');
+
+        // ✅ Set session
+        req.session.admin_id = admin.id;
+        req.session.admin_name = admin.name;
+        req.session.admin_email = admin.email;
+        req.session.admin_role = admin.role;
+        req.session.admin_username = admin.username;
+
+        req.session.save((err) => {
+            if (err) {
+                console.error('❌ Session save error:', err);
+            } else {
+                console.log('✅ Session saved for admin:', admin.username);
+            }
+        });
+
+        // ✅ Generate JWT Token
+        const token = jwt.sign(
+            {
+                id: admin.id,
+                username: admin.username,
+                email: admin.email,
+                name: admin.name,
+                role: admin.role
+            },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        const refreshToken = jwt.sign(
+            { id: admin.id },
+            process.env.JWT_REFRESH_SECRET || JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        console.log('✅ Login successful:', admin.username);
+
+        res.json({
+            success: true,
+            message: 'Login successful!',
+            token: token,
+            refreshToken: refreshToken,
+            data: {
+                id: admin.id,
+                username: admin.username,
+                email: admin.email,
+                name: admin.name,
+                role: admin.role
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Verify OTP Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error: ' + error.message,
+            code: 'SERVER_ERROR'
+        });
     }
-
-    const stored = otpStore[username];
-    if (!stored) {
-      return res.status(401).json({
-        success: false,
-        message: 'No OTP found. Please request a new one.',
-        code: 'NO_OTP'
-      });
-    }
-
-    if (stored.otp !== otp.toUpperCase()) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid OTP',
-        code: 'INVALID_OTP'
-      });
-    }
-
-    if (Date.now() > stored.expiry) {
-      delete otpStore[username];
-      return res.status(401).json({
-        success: false,
-        message: 'OTP expired. Please request a new one.',
-        code: 'OTP_EXPIRED'
-      });
-    }
-
-    delete otpStore[username];
-
-    // ✅✅✅ SESSION SET KARO - Dashboard ke liye (MOST IMPORTANT) ✅✅✅
-    req.session.admin_id = admin.id;
-    req.session.admin_name = admin.name;
-    req.session.admin_email = admin.email;
-    req.session.admin_role = admin.role;
-    req.session.admin_username = admin.username;
-
-    // Force session save
-    req.session.save((err) => {
-      if (err) {
-        console.error('❌ Session save error:', err);
-      } else {
-        console.log('✅ Session saved for admin:', admin.username);
-      }
-    });
-
-    // ✅ Generate JWT Token (Mobile/API ke liye)
-    const token = jwt.sign(
-      {
-        id: admin.id,
-        username: admin.username,
-        email: admin.email,
-        name: admin.name,
-        role: admin.role
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    const refreshToken = jwt.sign(
-      { id: admin.id },
-      process.env.JWT_REFRESH_SECRET || JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    console.log('✅ Login successful:', admin.username);
-
-    res.json({
-      success: true,
-      message: 'Login successful!',
-      token: token,
-      refreshToken: refreshToken,
-      data: {
-        id: admin.id,
-        username: admin.username,
-        email: admin.email,
-        name: admin.name,
-        role: admin.role
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Verify OTP Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message,
-      code: 'SERVER_ERROR'
-    });
-  }
 });
 
 // 5. Refresh Token - Public
 router.post('/refresh-token', async (req, res) => {
-  const { refreshToken } = req.body;
+    const { refreshToken } = req.body;
 
-  if (!refreshToken) {
-    return res.status(401).json({
-      success: false,
-      message: 'Refresh token required',
-      code: 'NO_REFRESH_TOKEN'
-    });
-  }
-
-  try {
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || JWT_SECRET);
-    const admin = ADMINS.find(a => a.id === decoded.id);
-    if (!admin) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid refresh token',
-        code: 'INVALID_REFRESH_TOKEN'
-      });
+    if (!refreshToken) {
+        return res.status(401).json({
+            success: false,
+            message: 'Refresh token required',
+            code: 'NO_REFRESH_TOKEN'
+        });
     }
 
-    const newToken = jwt.sign(
-      {
-        id: admin.id,
-        username: admin.username,
-        email: admin.email,
-        name: admin.name,
-        role: admin.role
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
+    try {
+        const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || JWT_SECRET);
+        const admin = ADMINS.find(a => a.id === decoded.id);
+        if (!admin) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid refresh token',
+                code: 'INVALID_REFRESH_TOKEN'
+            });
+        }
 
-    const newRefreshToken = jwt.sign(
-      { id: admin.id },
-      process.env.JWT_REFRESH_SECRET || JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+        const newToken = jwt.sign(
+            {
+                id: admin.id,
+                username: admin.username,
+                email: admin.email,
+                name: admin.name,
+                role: admin.role
+            },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
 
-    res.json({
-      success: true,
-      token: newToken,
-      refreshToken: newRefreshToken
-    });
+        const newRefreshToken = jwt.sign(
+            { id: admin.id },
+            process.env.JWT_REFRESH_SECRET || JWT_SECRET,
+            { expiresIn: '7d' }
+        );
 
-  } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Refresh token expired',
-        code: 'REFRESH_TOKEN_EXPIRED'
-      });
+        res.json({
+            success: true,
+            token: newToken,
+            refreshToken: newRefreshToken
+        });
+
+    } catch (error) {
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Refresh token expired',
+                code: 'REFRESH_TOKEN_EXPIRED'
+            });
+        }
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid refresh token',
+            code: 'INVALID_REFRESH_TOKEN'
+        });
     }
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid refresh token',
-      code: 'INVALID_REFRESH_TOKEN'
-    });
-  }
 });
 
 // 6. Send Reset OTP - Public
 router.post('/send-reset-otp', async (req, res) => {
-  console.log('🔥 SEND RESET OTP ROUTE HIT - PUBLIC');
+    console.log('🔥 SEND RESET OTP ROUTE HIT');
 
-  const { email } = req.body;
+    const { email } = req.body;
 
-  if (!email) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email is required',
-      code: 'MISSING_EMAIL'
-    });
-  }
-
-  try {
-    const admin = findAdminByEmail(email);
-    if (!admin) {
-      return res.status(404).json({
-        success: false,
-        message: 'Email not found in our system',
-        code: 'EMAIL_NOT_FOUND'
-      });
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: 'Email is required',
+            code: 'MISSING_EMAIL'
+        });
     }
-
-    const otp = generateOTP();
-    const expiry = Date.now() + 5 * 60 * 1000;
-    otpStore[`reset_${email}`] = { otp, expiry };
-
-    console.log(`📧 Reset OTP for ${email}: ${otp}`);
 
     try {
-      await sendOTPEmail(email, otp, 'reset', admin.name);
-      console.log('✅ Reset OTP email sent to', email);
-    } catch (emailErr) {
-      console.error('❌ Failed to send reset OTP email:', emailErr.message);
-      return res.status(500).json({
-        success: false,
-        message: 'OTP generated but failed to send email. Check email configuration.',
-        code: 'EMAIL_FAILED'
-      });
+        const admin = findAdminByEmail(email);
+        if (!admin) {
+            return res.status(404).json({
+                success: false,
+                message: 'Email not found in our system',
+                code: 'EMAIL_NOT_FOUND'
+            });
+        }
+
+        const otp = generateOTP();
+        // ✅ Use email as key with 'reset' purpose
+        setOTP(admin.email, otp, 5 * 60 * 1000, 'reset');
+
+        console.log(`📧 Reset OTP for ${admin.email}: ${otp}`);
+
+        // ✅ Fire-and-forget
+        sendOTPEmailAsync(admin.email, otp, 'reset', admin.name);
+
+        res.json({
+            success: true,
+            message: 'Reset OTP sent successfully! Check inbox + spam folder.'
+        });
+
+    } catch (error) {
+        console.error('❌ Send Reset OTP Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error: ' + error.message,
+            code: 'SERVER_ERROR'
+        });
     }
-
-    res.json({
-      success: true,
-      message: 'Reset OTP sent successfully to your email!'
-    });
-
-  } catch (error) {
-    console.error('❌ Send Reset OTP Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message,
-      code: 'SERVER_ERROR'
-    });
-  }
 });
 
 // 7. Reset Password - Public
 router.post('/reset-password', async (req, res) => {
-  console.log('🔥 RESET PASSWORD ROUTE HIT - PUBLIC');
+    console.log('🔥 RESET PASSWORD ROUTE HIT');
 
-  const { email, otp, newPassword, confirmPassword } = req.body;
+    const { email, otp, newPassword, confirmPassword } = req.body;
 
-  if (!email || !otp || !newPassword) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email, OTP and new password are required',
-      code: 'MISSING_FIELDS'
-    });
-  }
-
-  if (newPassword !== confirmPassword) {
-    return res.status(400).json({
-      success: false,
-      message: 'Passwords do not match',
-      code: 'PASSWORD_MISMATCH'
-    });
-  }
-
-  if (newPassword.length < 6) {
-    return res.status(400).json({
-      success: false,
-      message: 'Password must be at least 6 characters',
-      code: 'PASSWORD_TOO_SHORT'
-    });
-  }
-
-  try {
-    const admin = findAdminByEmail(email);
-    if (!admin) {
-      return res.status(404).json({
-        success: false,
-        message: 'Email not found',
-        code: 'EMAIL_NOT_FOUND'
-      });
+    if (!email || !otp || !newPassword) {
+        return res.status(400).json({
+            success: false,
+            message: 'Email, OTP and new password are required',
+            code: 'MISSING_FIELDS'
+        });
     }
 
-    const stored = otpStore[`reset_${email}`];
-    if (!stored) {
-      return res.status(401).json({
-        success: false,
-        message: 'No OTP found. Please request a new one.',
-        code: 'NO_OTP'
-      });
+    if (newPassword !== confirmPassword) {
+        return res.status(400).json({
+            success: false,
+            message: 'Passwords do not match',
+            code: 'PASSWORD_MISMATCH'
+        });
     }
 
-    if (stored.otp !== otp.toUpperCase()) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid OTP',
-        code: 'INVALID_OTP'
-      });
+    if (newPassword.length < 6) {
+        return res.status(400).json({
+            success: false,
+            message: 'Password must be at least 6 characters',
+            code: 'PASSWORD_TOO_SHORT'
+        });
     }
 
-    if (Date.now() > stored.expiry) {
-      delete otpStore[`reset_${email}`];
-      return res.status(401).json({
-        success: false,
-        message: 'OTP expired. Please request a new one.',
-        code: 'OTP_EXPIRED'
-      });
+    try {
+        const admin = findAdminByEmail(email);
+        if (!admin) {
+            return res.status(404).json({
+                success: false,
+                message: 'Email not found',
+                code: 'EMAIL_NOT_FOUND'
+            });
+        }
+
+        // ✅ Use email as key with 'reset' purpose
+        const stored = getOTP(admin.email, 'reset');
+
+        if (!stored) {
+            return res.status(401).json({
+                success: false,
+                message: 'No OTP found. Please request a new one.',
+                code: 'NO_OTP'
+            });
+        }
+
+        if (stored.expiry < Date.now()) {
+            deleteOTP(admin.email, 'reset');
+            return res.status(401).json({
+                success: false,
+                message: 'OTP expired. Please request a new one.',
+                code: 'OTP_EXPIRED'
+            });
+        }
+
+        const providedOtp = String(otp).trim().toUpperCase();
+        const storedOtp = String(stored.otp).trim().toUpperCase();
+
+        if (storedOtp !== providedOtp) {
+            stored.attempts = (stored.attempts || 0) + 1;
+            persistOtpStore();
+
+            if (stored.attempts >= 5) {
+                deleteOTP(admin.email, 'reset');
+                return res.status(401).json({
+                    success: false,
+                    message: 'Too many wrong attempts. Please request a new OTP.',
+                    code: 'TOO_MANY_ATTEMPTS'
+                });
+            }
+
+            const left = 5 - stored.attempts;
+            return res.status(401).json({
+                success: false,
+                message: `Invalid OTP. ${left} attempt${left > 1 ? 's' : ''} left.`,
+                code: 'INVALID_OTP'
+            });
+        }
+
+        deleteOTP(admin.email, 'reset');
+
+        const newHash = await bcrypt.hash(newPassword, 10);
+        admin.passwordHash = newHash;
+        console.log(`✅ Password reset applied for: ${email} (in-memory — update env var for permanence)`);
+
+        res.json({
+            success: true,
+            message: 'Password reset successfully! You can now log in with your new password.',
+            data: {
+                email: email,
+                newHash: newHash,
+                note: 'Password updated for this running server. To make it permanent across restarts, also update ADMIN_PASSWORD_HASH in your environment variables with this hash.'
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Reset Password Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error: ' + error.message,
+            code: 'SERVER_ERROR'
+        });
     }
-
-    delete otpStore[`reset_${email}`];
-
-    const newHash = await bcrypt.hash(newPassword, 10);
-
-    admin.passwordHash = newHash;
-    console.log(`✅ Password reset applied for: ${email} (in-memory — update env var for permanence)`);
-
-    res.json({
-      success: true,
-      message: 'Password reset successfully! You can now log in with your new password.',
-      data: {
-        email: email,
-        newHash: newHash,
-        note: 'Password updated for this running server. To make it permanent across restarts, also update ADMIN_PASSWORD_HASH in your environment variables with this hash.'
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Reset Password Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message,
-      code: 'SERVER_ERROR'
-    });
-  }
 });
 
-// 8. Verify Token - Public (Checks token but doesn't require it)
+// 8. Verify Token - Public
 router.get('/verify', (req, res) => {
-  console.log('🔓 VERIFY ROUTE HIT - PUBLIC');
-  try {
-    const authHeader = req.headers.authorization;
+    console.log('🔓 VERIFY ROUTE HIT');
+    try {
+        const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: 'No token provided',
-        code: 'NO_TOKEN'
-      });
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({
+                success: false,
+                message: 'No token provided',
+                code: 'NO_TOKEN'
+            });
+        }
+
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const admin = ADMINS.find(a => a.id === decoded.id);
+
+        if (!admin) {
+            return res.status(401).json({
+                success: false,
+                message: 'User not found',
+                code: 'USER_NOT_FOUND'
+            });
+        }
+
+        res.json({
+            success: true,
+            admin: {
+                id: admin.id,
+                username: admin.username,
+                email: admin.email,
+                name: admin.name,
+                role: admin.role
+            },
+            message: 'Token is valid',
+            code: 'TOKEN_VALID'
+        });
+
+    } catch (error) {
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Token expired',
+                code: 'TOKEN_EXPIRED'
+            });
+        }
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid token',
+                code: 'INVALID_TOKEN'
+            });
+        }
+        return res.status(500).json({
+            success: false,
+            message: 'Server error: ' + error.message,
+            code: 'SERVER_ERROR'
+        });
     }
-
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const admin = ADMINS.find(a => a.id === decoded.id);
-
-    if (!admin) {
-      return res.status(401).json({
-        success: false,
-        message: 'User not found',
-        code: 'USER_NOT_FOUND'
-      });
-    }
-
-    res.json({
-      success: true,
-      admin: {
-        id: admin.id,
-        username: admin.username,
-        email: admin.email,
-        name: admin.name,
-        role: admin.role
-      },
-      message: 'Token is valid',
-      code: 'TOKEN_VALID'
-    });
-
-  } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired',
-        code: 'TOKEN_EXPIRED'
-      });
-    }
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token',
-        code: 'INVALID_TOKEN'
-      });
-    }
-    return res.status(500).json({
-      success: false,
-      message: 'Server error: ' + error.message,
-      code: 'SERVER_ERROR'
-    });
-  }
 });
 
-// 9. Generate Hash - Public (If enabled)
+// 9. Generate Hash - Public
 router.get('/generate-hash/:password', async (req, res) => {
-  if (process.env.ENABLE_HASH_ROUTE !== 'true') {
-    return res.status(403).json({
-      success: false,
-      message: 'This route is disabled',
-      code: 'ACCESS_DENIED'
-    });
-  }
+    if (process.env.ENABLE_HASH_ROUTE !== 'true') {
+        return res.status(403).json({
+            success: false,
+            message: 'This route is disabled',
+            code: 'ACCESS_DENIED'
+        });
+    }
 
-  try {
-    const hash = await bcrypt.hash(req.params.password, 10);
-    res.json({
-      success: true,
-      password: req.params.password,
-      hash: hash
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Error generating hash: ' + error.message
-    });
-  }
+    try {
+        const hash = await bcrypt.hash(req.params.password, 10);
+        res.json({
+            success: true,
+            password: req.params.password,
+            hash: hash
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Error generating hash: ' + error.message
+        });
+    }
 });
 
 // ============================================================
@@ -798,181 +981,175 @@ router.get('/generate-hash/:password', async (req, res) => {
 console.log('🛡️ Registering PROTECTED routes...');
 router.use(verifyToken);
 
-// 10. Profile - Protected
+// 10. Profile
 router.get('/profile', (req, res) => {
-  console.log('🔒 PROFILE ROUTE HIT - PROTECTED');
-  res.json({
-    success: true,
-    data: {
-      id: req.admin.id,
-      username: req.admin.username,
-      email: req.admin.email,
-      name: req.admin.name,
-      role: req.admin.role,
-      last_login: new Date().toISOString()
-    }
-  });
+    res.json({
+        success: true,
+        data: {
+            id: req.admin.id,
+            username: req.admin.username,
+            email: req.admin.email,
+            name: req.admin.name,
+            role: req.admin.role,
+            last_login: new Date().toISOString()
+        }
+    });
 });
 
-// 11. Logout - Protected
+// 11. Logout
 router.post('/logout', (req, res) => {
-  console.log('🔒 LOGOUT ROUTE HIT - PROTECTED');
-  if (req.session) {
-    req.session.destroy();
-  }
-  res.json({
-    success: true,
-    message: 'Logged out successfully'
-  });
+    if (req.session) {
+        req.session.destroy();
+    }
+    res.json({
+        success: true,
+        message: 'Logged out successfully'
+    });
 });
 
-// 12. Extend Session - Protected
+// 12. Extend Session
 router.post('/extend-session', (req, res) => {
-  console.log('🔒 EXTEND SESSION ROUTE HIT - PROTECTED');
-  res.json({
-    success: true,
-    message: 'Session extended',
-    expiresIn: 30 * 60
-  });
+    res.json({
+        success: true,
+        message: 'Session extended',
+        expiresIn: 30 * 60
+    });
 });
 
-// 13. Session Status - Protected
+// 13. Session Status
 router.get('/session-status', (req, res) => {
-  console.log('🔒 SESSION STATUS ROUTE HIT - PROTECTED');
-  res.json({
-    success: true,
-    active: true,
-    expiresIn: 30 * 60,
-    remainingMinutes: 30
-  });
+    res.json({
+        success: true,
+        active: true,
+        expiresIn: 30 * 60,
+        remainingMinutes: 30
+    });
 });
 
-// 14. Login Status - Protected
+// 14. Login Status
 router.get('/login-status', (req, res) => {
-  console.log('🔒 LOGIN STATUS ROUTE HIT - PROTECTED');
-  const { username } = req.query;
+    const { username } = req.query;
 
-  if (username) {
-    const key = `user_${username}`;
-    const attempt = loginAttempts.get(key);
+    if (username) {
+        const key = `user_${normalizeKey(username)}`;
+        const attempt = loginAttempts.get(key);
 
-    if (!attempt) {
-      return res.json({
-        success: true,
-        username: username,
-        attempts: 0,
-        blocked: false
-      });
+        if (!attempt) {
+            return res.json({
+                success: true,
+                username: username,
+                attempts: 0,
+                blocked: false
+            });
+        }
+
+        const now = Date.now();
+        const isBlocked = attempt.blockUntil && now < attempt.blockUntil;
+
+        if (isBlocked) {
+            const remainingMs = attempt.blockUntil - now;
+            const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+            const remainingHours = Math.floor(remainingMs / (60 * 60 * 1000));
+
+            let timeMessage = '';
+            if (remainingHours >= 1) {
+                const mins = Math.ceil((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+                timeMessage = `${remainingHours}h ${mins}m`;
+            } else {
+                timeMessage = `${remainingMinutes}m`;
+            }
+
+            return res.json({
+                success: true,
+                username: username,
+                attempts: attempt.count,
+                blocked: true,
+                timeMessage: timeMessage,
+                message: `Account locked. Try again after ${timeMessage}.`
+            });
+        }
+
+        return res.json({
+            success: true,
+            username: username,
+            attempts: attempt.count,
+            blocked: false
+        });
     }
 
-    const now = Date.now();
-    const isBlocked = attempt.blockUntil && now < attempt.blockUntil;
+    const allUsers = [];
+    for (const [key, value] of loginAttempts) {
+        const user = key.replace('user_', '');
+        const now = Date.now();
+        const isBlocked = value.blockUntil && now < value.blockUntil;
 
-    if (isBlocked) {
-      const remainingMs = attempt.blockUntil - now;
-      const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
-      const remainingHours = Math.floor(remainingMs / (60 * 60 * 1000));
-
-      let timeMessage = '';
-      if (remainingHours >= 1) {
-        const mins = Math.ceil((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
-        timeMessage = `${remainingHours}h ${mins}m`;
-      } else {
-        timeMessage = `${remainingMinutes}m`;
-      }
-
-      return res.json({
-        success: true,
-        username: username,
-        attempts: attempt.count,
-        blocked: true,
-        timeMessage: timeMessage,
-        message: `Account locked. Try again after ${timeMessage}.`
-      });
+        allUsers.push({
+            username: user,
+            attempts: value.count,
+            blocked: isBlocked,
+            blockUntil: value.blockUntil
+        });
     }
 
-    return res.json({
-      success: true,
-      username: username,
-      attempts: attempt.count,
-      blocked: false
+    res.json({
+        success: true,
+        totalUsers: allUsers.length,
+        users: allUsers
     });
-  }
-
-  const allUsers = [];
-  for (const [key, value] of loginAttempts) {
-    const user = key.replace('user_', '');
-    const now = Date.now();
-    const isBlocked = value.blockUntil && now < value.blockUntil;
-
-    allUsers.push({
-      username: user,
-      attempts: value.count,
-      blocked: isBlocked,
-      blockUntil: value.blockUntil
-    });
-  }
-
-  res.json({
-    success: true,
-    totalUsers: allUsers.length,
-    users: allUsers
-  });
 });
 
-// 15. Clear Attempts - Protected (Super Admin only)
+// 15. Clear Attempts - Super Admin only
 router.delete('/clear-attempts/:username', (req, res) => {
-  console.log('🔒 CLEAR ATTEMPTS ROUTE HIT - PROTECTED');
-  const { username } = req.params;
+    const { username } = req.params;
 
-  if (req.admin.role !== 'Super Admin') {
-    return res.status(403).json({
-      success: false,
-      message: 'Only Super Admin can clear login attempts',
-      code: 'ACCESS_DENIED'
-    });
-  }
+    if (req.admin.role !== 'Super Admin') {
+        return res.status(403).json({
+            success: false,
+            message: 'Only Super Admin can clear login attempts',
+            code: 'ACCESS_DENIED'
+        });
+    }
 
-  const key = `user_${username}`;
-  if (loginAttempts.has(key)) {
-    loginAttempts.delete(key);
-    res.json({
-      success: true,
-      message: `Login attempts cleared for user: ${username}`
-    });
-  } else {
-    res.json({
-      success: true,
-      message: `No attempts found for user: ${username}`
-    });
-  }
+    const key = `user_${normalizeKey(username)}`;
+    if (loginAttempts.has(key)) {
+        loginAttempts.delete(key);
+        res.json({
+            success: true,
+            message: `Login attempts cleared for user: ${username}`
+        });
+    } else {
+        res.json({
+            success: true,
+            message: `No attempts found for user: ${username}`
+        });
+    }
 });
 
-// 16. Debug - Protected
+// 16. Debug
 router.get('/debug', (req, res) => {
-  console.log('🔒 DEBUG ROUTE HIT - PROTECTED');
-  res.json({
-    success: true,
-    message: 'Admin router is working!',
-    admins_configured: ADMINS.length,
-    admins: ADMINS.map(a => ({ username: a.username, email: a.email, role: a.role })),
-    routes: {
-      public: ['/test', '/csrf-token', '/login', '/verify-otp', '/refresh-token', '/verify', '/send-reset-otp', '/reset-password', '/generate-hash/:password'],
-      protected: ['/profile', '/logout', '/extend-session', '/session-status', '/login-status', '/clear-attempts/:username', '/debug']
-    },
-    security: {
-      jwt: 'Active',
-      session: 'Active',
-      loginAttempts: '5 attempts per user, 12 hours block'
-    },
-    loginAttemptsCount: loginAttempts.size,
-    timestamp: new Date().toISOString()
-  });
+    res.json({
+        success: true,
+        message: 'Admin router is working!',
+        admins_configured: ADMINS.length,
+        admins: ADMINS.map(a => ({ username: a.username, email: a.email, role: a.role })),
+        activeOTPs: Object.keys(otpStore).map(k => ({ key: k, expiresIn: Math.max(0, otpStore[k].expiry - Date.now()) + 'ms' })),
+        routes: {
+            public: ['/test', '/csrf-token', '/login', '/verify-otp', '/refresh-token', '/verify', '/send-reset-otp', '/reset-password', '/generate-hash/:password'],
+            protected: ['/profile', '/logout', '/extend-session', '/session-status', '/login-status', '/clear-attempts/:username', '/debug']
+        },
+        security: {
+            jwt: 'Active',
+            session: 'Active',
+            loginAttempts: '5 attempts per user, 12 hours block',
+            otpStore: 'File-persisted (.otp-store.json)'
+        },
+        loginAttemptsCount: loginAttempts.size,
+        timestamp: new Date().toISOString()
+    });
 });
 
-// 17. Force Clear - Protected
+// 17. Force Clear
 router.get('/force-clear/:username', (req, res) => {
-  console.log('🔒 FORCE CLEAR ROUTE HIT - PROTECTED');
     const { username } = req.params;
 
     if (username === 'all') {
@@ -984,7 +1161,7 @@ router.get('/force-clear/:username', (req, res) => {
         });
     }
 
-    const key = `user_${username}`;
+    const key = `user_${normalizeKey(username)}`;
     if (loginAttempts.has(key)) {
         loginAttempts.delete(key);
         return res.json({
@@ -999,9 +1176,8 @@ router.get('/force-clear/:username', (req, res) => {
     });
 });
 
-// 18. Blocked Users - Protected
+// 18. Blocked Users
 router.get('/blocked-users', (req, res) => {
-  console.log('🔒 BLOCKED USERS ROUTE HIT - PROTECTED');
     const blocked = [];
     const now = Date.now();
 
@@ -1037,7 +1213,7 @@ router.get('/blocked-users', (req, res) => {
 });
 
 console.log('✅ All routes registered successfully!');
-console.log('🔓 Public routes: /login, /verify-otp, /refresh-token, /send-reset-otp, /reset-password, /verify');
-console.log('🛡️ Protected routes: /profile, /logout, /extend-session, /session-status, /login-status, /clear-attempts/:username, /debug');
+console.log('🔓 Public: /login, /verify-otp, /refresh-token, /send-reset-otp, /reset-password, /verify');
+console.log('🛡️ Protected: /profile, /logout, /extend-session, /session-status, /login-status, /clear-attempts/:username, /debug');
 
 module.exports = router;
