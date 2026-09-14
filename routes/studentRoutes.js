@@ -37,6 +37,10 @@ const REQUIRED_DOCS = [
 
 const CLASS_ORDER = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
 
+// ✅ Promoted status sirf 1 hour tak visible rahega
+const PROMOTED_VISIBLE_MS = 60 * 60 * 1000;         // 1 hour
+const AUTO_REVERT_INTERVAL_MS = 5 * 60 * 1000;      // Har 5 min check
+
 // ==================== HELPERS ====================
 const toSnake = (s) => s.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase());
 
@@ -85,6 +89,67 @@ const nextClass = (currentClass) => {
 
 const q = (sql, params = []) => db.query(sql, params);
 
+// ============================================================
+// ✅ AUTO-REVERT PROMOTED → ACTIVE (after 1 hour)
+// ============================================================
+async function autoRevertExpiredPromotions() {
+  try {
+    const result = await q(
+      `UPDATE Nstudent
+       SET status = 'Active', promotion_date = NULL
+       WHERE status = 'Promoted'
+         AND promotion_date IS NOT NULL
+         AND promotion_date <= (NOW() - INTERVAL 1 HOUR)`
+    );
+    if (result.affectedRows > 0) {
+      console.log(`🔄 Auto-reverted ${result.affectedRows} promoted student(s) back to Active`);
+    }
+    return result.affectedRows || 0;
+  } catch (err) {
+    console.error("⚠️ autoRevertExpiredPromotions error:", err.message);
+    return 0;
+  }
+}
+
+// ✅ Single row pe same logic (response ke liye)
+function revertStatusIfExpired(student) {
+  if (!student) return student;
+  if (
+    student.status === "Promoted" &&
+    student.promotion_date &&
+    new Date(student.promotion_date).getTime() + PROMOTED_VISIBLE_MS <= Date.now()
+  ) {
+    student.status = "Active";
+    student.promotion_date = null;
+  }
+  return student;
+}
+
+// ============================================================
+// ✅ BACKGROUND TIMER — Har 5 minute mein auto-revert
+// Isse guaranteed revert hoga chahe koi request aaye ya na aaye
+// ============================================================
+let _autoRevertTimer = null;
+
+function startAutoRevertTimer() {
+  if (_autoRevertTimer) return; // already running
+
+  // Startup pe ek baar turant chalao
+  autoRevertExpiredPromotions();
+
+  _autoRevertTimer = setInterval(() => {
+    autoRevertExpiredPromotions();
+  }, AUTO_REVERT_INTERVAL_MS);
+
+  // Node process ko cleanly shutdown karne ke liye
+  if (_autoRevertTimer.unref) _autoRevertTimer.unref();
+
+  console.log(`⏰ Auto-revert timer started (checks every ${AUTO_REVERT_INTERVAL_MS / 60000} min)`);
+}
+
+// Start the timer
+startAutoRevertTimer();
+
 // ==================== VALIDATION ====================
 const rules = () => [
   body("studentId").trim().notEmpty().withMessage("Student ID required"),
@@ -104,11 +169,11 @@ const rules = () => [
   body("category").isIn(["General", "SC", "ST", "OBC", "EWS", "Other"]).withMessage("Category required"),
   body("address").trim().notEmpty().withMessage("Address required"),
   body("pincode").matches(/^\d{6}$/).withMessage("Pincode must be 6 digits"),
-body("village").trim().notEmpty().withMessage("Village/Town required"),
-body("postOffice").trim().notEmpty().withMessage("Post Office required"),
-body("tehsil").trim().notEmpty().withMessage("Tehsil required"),
-body("district").trim().notEmpty().withMessage("District required"),
-body("state").trim().notEmpty().withMessage("State required")
+  body("village").trim().notEmpty().withMessage("Village/Town required"),
+  body("postOffice").trim().notEmpty().withMessage("Post Office required"),
+  body("tehsil").trim().notEmpty().withMessage("Tehsil required"),
+  body("district").trim().notEmpty().withMessage("District required"),
+  body("state").trim().notEmpty().withMessage("State required")
 ];
 
 const validate = (req, res, next) => {
@@ -151,12 +216,13 @@ const destroyAsset = async (publicId, url) => {
   }
 })();
 
-
 // ============================================================
 // GET ALL STUDENTS
 // ============================================================
 router.get("/", async (req, res) => {
   try {
+    await autoRevertExpiredPromotions();
+
     const {
       class: cls, session, gender, category, status,
       search, sortBy = "created_at", order = "desc",
@@ -193,9 +259,11 @@ router.get("/", async (req, res) => {
     const countRows = await q(`SELECT COUNT(*) AS total FROM Nstudent ${whereSql}`, params);
     const total = countRows[0]?.total || 0;
 
+    const cleaned = rows.map(revertStatusIfExpired);
+
     res.json({
       success: true,
-      data: rows,
+      data: cleaned,
       pagination: {
         total,
         page: Number(page),
@@ -250,6 +318,8 @@ router.post("/current-session", async (req, res) => {
 // ============================================================
 router.get("/by-class", async (req, res) => {
   try {
+    await autoRevertExpiredPromotions();
+
     const { session } = req.query;
     const where = session ? "WHERE session = ?" : "";
     const params = session ? [session] : [];
@@ -300,7 +370,7 @@ router.post("/promote", async (req, res) => {
 
     res.json({
       success: true,
-      message: `${updatedCount} students promoted successfully ✅`
+      message: `${updatedCount} students promoted successfully ✅ (status will auto-revert to Active in 1 hour)`
     });
   } catch (err) {
     console.error("❌ Promote Error:", err);
@@ -352,7 +422,7 @@ router.post("/promote-session", async (req, res) => {
 
     res.json({
       success: true,
-      message: `${result.promoted} students promoted from ${fromSession} → ${toSession}. ${result.skipped ? `${result.skipped} skipped (already final class).` : ""} ✅`,
+      message: `${result.promoted} students promoted from ${fromSession} → ${toSession}. ${result.skipped ? `${result.skipped} skipped (already final class).` : ""} ✅ (status auto-reverts to Active in 1 hour)`,
       count: result.promoted,
       skipped: result.skipped,
       newSession: toSession
@@ -368,6 +438,8 @@ router.post("/promote-session", async (req, res) => {
 // ============================================================
 router.get("/search/:query", async (req, res) => {
   try {
+    await autoRevertExpiredPromotions();
+
     const searchQuery = req.params.query;
     const { limit = 20 } = req.query;
 
@@ -378,7 +450,8 @@ router.get("/search/:query", async (req, res) => {
       [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, parseInt(limit)]
     );
 
-    res.json({ success: true, data: rows });
+    const cleaned = rows.map(revertStatusIfExpired);
+    res.json({ success: true, data: cleaned });
   } catch (err) {
     console.error("❌ Search Error:", err);
     res.status(500).json({ success: false, message: err.message });
@@ -390,7 +463,6 @@ router.get("/search/:query", async (req, res) => {
 // ============================================================
 router.post("/add", studentUploadFields, rules(), validate, async (req, res) => {
   try {
-    // Backend enforcement: required docs
     const missing = [];
     for (const docName of REQUIRED_DOCS) {
       if (!req.files || !req.files[docName] || !req.files[docName][0]) {
@@ -451,7 +523,17 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ success: false, message: "Student not found" });
     }
 
-    res.json({ success: true, data: rows[0], student: rows[0] });
+    const student = revertStatusIfExpired(rows[0]);
+
+    if (student.status === "Active" && rows[0].status === "Promoted") {
+      q(
+        `UPDATE Nstudent SET status = 'Active', promotion_date = NULL
+         WHERE id = ? AND status = 'Promoted'`,
+        [id]
+      ).catch((e) => console.error("Background revert error:", e.message));
+    }
+
+    res.json({ success: true, data: student, student });
   } catch (err) {
     console.error("❌ Fetch Student Error:", err);
     res.status(500).json({ success: false, message: err.message });
@@ -496,11 +578,13 @@ router.put("/:id", studentUploadFields, async (req, res) => {
     await q(`UPDATE Nstudent SET ${setSql} WHERE id = ?`, [...Object.values(data), id]);
 
     const updatedRows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
+    const updated = revertStatusIfExpired(updatedRows[0]);
+
     res.json({
       success: true,
       message: "Student updated successfully ✅",
-      data: updatedRows[0],
-      student: updatedRows[0]
+      data: updated,
+      student: updated
     });
   } catch (err) {
     console.error("❌ Update Student Error:", err);
@@ -570,7 +654,7 @@ router.get("/:id/pdf", async (req, res) => {
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Student not found" });
     }
-    const s = rows[0];
+    const s = revertStatusIfExpired(rows[0]);
 
     const doc = new PDFDocument({ size: "A4", margin: 40 });
 
@@ -582,7 +666,6 @@ router.get("/:id/pdf", async (req, res) => {
 
     doc.pipe(res);
 
-    // HEADER
     doc.rect(0, 0, doc.page.width, 80).fill("#1e3a8a");
     doc.fillColor("#ffffff").fontSize(22).font("Helvetica-Bold")
       .text("STUDENT ADMISSION RECORD", 40, 25, { align: "center" });
@@ -590,14 +673,13 @@ router.get("/:id/pdf", async (req, res) => {
       .text("Official Document", 40, 55, { align: "center" });
     doc.fillColor("#000000");
 
-    // PHOTO
     const photoBuf = await fetchImageBuffer(s.student_photo_url);
     const px = doc.page.width - 150;
     const py = 110;
 
     if (photoBuf) {
       try { doc.image(photoBuf, px, py, { width: 100, height: 120 }); }
-      catch (e) { /* skip */ }
+      catch (e) { }
     } else {
       doc.rect(px, py, 100, 120).stroke();
       doc.fontSize(9).fillColor("#666").text("No Photo", px + 25, py + 55);
@@ -644,7 +726,6 @@ router.get("/:id/pdf", async (req, res) => {
     doc.moveDown(0.6);
     doc.font("Helvetica").fontSize(10).fillColor("#000").text(s.address || "-");
 
-    // DOCUMENTS PAGE
     doc.addPage();
     doc.fontSize(16).font("Helvetica-Bold").fillColor("#1e3a8a")
       .text("Uploaded Documents", { align: "center" });
@@ -710,7 +791,6 @@ router.post("/verify-login", async (req, res) => {
       });
     }
 
-    // Lookup student
     const rows = await q(
       `SELECT * FROM Nstudent
        WHERE class = ?
@@ -728,15 +808,10 @@ router.post("/verify-login", async (req, res) => {
       });
     }
 
-    const s = rows[0];
-
-    // Simple token (timestamp-based, not JWT — enough for portal)
+    const s = revertStatusIfExpired(rows[0]);
     const token = Buffer.from(`${s.id}-${Date.now()}`).toString("base64");
 
-    // Return student data (hide pids for safety)
     const safeStudent = { ...s };
-    delete safeStudent.__v;
-    // We keep _pid fields for nothing — remove them for security
     for (const k of Object.keys(safeStudent)) {
       if (k.endsWith("_pid")) delete safeStudent[k];
     }
@@ -752,6 +827,5 @@ router.post("/verify-login", async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
 
 module.exports = router;
