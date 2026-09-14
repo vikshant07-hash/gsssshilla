@@ -10,6 +10,7 @@ const db = require("../config/db");
 
 const q = (sql, params = []) => db.query(sql, params);
 
+
 // ============================================================
 // SCHOOL CONFIG
 // ============================================================
@@ -22,6 +23,8 @@ const SCHOOL = {
   helpline: "+91 9805444375",
   issuedBy: "Govt. Sr. Sec. School Shilla"
 };
+
+const SCHOOL_LOGO_PATH = 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1789364048/school/slider/slider-26611-1789364019455-328560092.png';
 
 // ============================================================
 // CARD SIZE - CR80 STANDARD (86mm x 54mm)
@@ -164,10 +167,21 @@ function drawCardFrame(doc, x, y) {
   doc.roundedRect(x + 2.5, y + 2.5, W - 5, H - 5, 7).lineWidth(0.8).strokeColor(THEME.goldStart).stroke();
 
   doc.save();
-  doc.opacity(0.05);
-  doc.font("Helvetica-Bold").fontSize(58).fillColor(THEME.blueStart)
-    .text("GSSS", x, y + H / 2 - 30, { width: W, align: "center" });
-  doc.restore();
+doc.opacity(0.08); // Logo ke liye thoda zyada opacity (0.05-0.12 range try karo)
+
+// Watermark logo — center of card
+const watermarkSize = 220; // Logo ka size (adjust karo card size ke hisaab se)
+const watermarkX = x + (W - watermarkSize) / 2;
+const watermarkY = y + (H - watermarkSize) / 2;
+
+doc.image(SCHOOL_LOGO_PATH, watermarkX, watermarkY, {
+    width: watermarkSize,
+    height: watermarkSize,
+    align: 'center',
+    valign: 'center'
+});
+
+doc.restore();
 
   const bar = doc.linearGradient(x, y, x, y + H);
   bar.stop(0, THEME.goldEnd).stop(1, THEME.goldStart);
