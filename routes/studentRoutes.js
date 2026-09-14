@@ -318,11 +318,11 @@ If you didn't request this, ignore this email.
 }
 
 // ============================================================
-// ✅ WALOOPS WhatsApp OTP SENDER (Free 100 OTPs/month)
-// Setup: signup at app.waloops.com → get API key → add to .env
+// ✅ WALOOPS WhatsApp OTP SENDER
+// WALoops का सही OTP API endpoint: /api/otp/send.php
 // ============================================================
 const WALOOPS_API_KEY = process.env.WALOOPS_API_KEY;
-const WALOOPS_SEND_URL = "https://app.waloops.com/api/otp/send.php";
+const WALOOPS_OTP_SEND_URL = "https://app.waloops.com/api/otp/send.php";
 
 async function sendWhatsAppOTP(mobile, otp, purpose = "verify") {
   if (!WALOOPS_API_KEY) {
@@ -334,10 +334,11 @@ async function sendWhatsAppOTP(mobile, otp, purpose = "verify") {
   const formattedNumber = mobile.startsWith("+") ? mobile : `+91${mobile}`;
 
   try {
-    const res = await fetch(WALOOPS_SEND_URL, {
+    const res = await fetch(WALOOPS_OTP_SEND_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Accept": "application/json",
         "Authorization": `Bearer ${WALOOPS_API_KEY}`
       },
       body: JSON.stringify({
@@ -348,14 +349,17 @@ async function sendWhatsAppOTP(mobile, otp, purpose = "verify") {
       })
     });
 
-    const data = await res.json();
+    const rawText = await res.text();
+    let data;
+    try { data = rawText ? JSON.parse(rawText) : {}; }
+    catch { data = { raw: rawText }; }
 
-    if (!data.success && !data.status) {
-      throw new Error(data.message || "WALoops send failed");
+    if (!res.ok) {
+      throw new Error(`WALoops HTTP ${res.status}: ${rawText}`);
     }
 
-    console.log(`✅ WhatsApp OTP sent via WALoops to ${formattedNumber}`);
-    return { success: true, provider: "waloops", sessionId: data.session_id || data.id };
+    console.log(`✅ WhatsApp OTP sent via WALoops to ${formattedNumber}`, data);
+    return { success: true, provider: "waloops", response: data };
 
   } catch (err) {
     console.error("❌ WALoops error:", err.message);
@@ -476,7 +480,6 @@ router.post("/send-email-otp", async (req, res) => {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    // ✅ Uniqueness: email max 1 student
     const existing = await q(
       `SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? ${excludeStudentId ? "AND id != ?" : ""}`,
       excludeStudentId ? [normalizedEmail, excludeStudentId] : [normalizedEmail]
@@ -512,13 +515,26 @@ router.post("/send-email-otp", async (req, res) => {
 // Verify email OTP
 router.post("/verify-email-otp", async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const { email, otp, purpose } = req.body;
     if (!email || !otp) return res.status(400).json({ success: false, message: "Email and OTP required" });
 
     const normalizedEmail = email.toLowerCase().trim();
-    const result = await verifyOTP("email", normalizedEmail, otp);
 
-    if (!result.valid) {
+    let result = null;
+    if (purpose) {
+      result = await verifyOTP("email", normalizedEmail, otp, purpose);
+    }
+
+    if (!result || !result.valid) {
+      for (const p of ["add", "update", "verify"]) {
+        if (purpose === p) continue;
+        const r = await verifyOTP("email", normalizedEmail, otp, p);
+        if (r.valid) { result = r; break; }
+      }
+    }
+
+    if (!result || !result.valid) {
+      const reason = (result && result.reason) || "NO_OTP_OR_EXPIRED";
       const messages = {
         NO_OTP_OR_EXPIRED: "OTP expired or not found. Please request a new one.",
         INVALID_OTP: `Invalid OTP. ${OTP_MAX_ATTEMPTS - (result.attempts || 0)} attempts left.`,
@@ -526,18 +542,26 @@ router.post("/verify-email-otp", async (req, res) => {
       };
       return res.status(400).json({
         success: false,
-        message: messages[result.reason] || "Verification failed",
-        code: result.reason
+        message: messages[reason] || "Verification failed",
+        code: reason
       });
     }
 
+    await q(
+      `UPDATE student_otps SET verified = 1 
+       WHERE type = 'email' AND target = ? AND otp = ? 
+       ORDER BY id DESC LIMIT 1`,
+      [normalizedEmail, otp]
+    );
+
     res.json({ success: true, message: "Email verified ✅", verified: true });
   } catch (err) {
+    console.error("❌ verify-email-otp error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Send WhatsApp OTP (via WALoops)
+// Send WhatsApp OTP
 router.post("/send-mobile-otp", async (req, res) => {
   try {
     const { mobile, purpose = "verify", excludeStudentId } = req.body;
@@ -545,7 +569,6 @@ router.post("/send-mobile-otp", async (req, res) => {
       return res.status(400).json({ success: false, message: "Valid 10-digit mobile required" });
     }
 
-    // ✅ Uniqueness: mobile max 3 students
     const existing = await q(
       `SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? ${excludeStudentId ? "AND id != ?" : ""}`,
       excludeStudentId ? [mobile, excludeStudentId] : [mobile]
@@ -585,12 +608,24 @@ router.post("/send-mobile-otp", async (req, res) => {
 // Verify mobile OTP
 router.post("/verify-mobile-otp", async (req, res) => {
   try {
-    const { mobile, otp } = req.body;
+    const { mobile, otp, purpose } = req.body;
     if (!mobile || !otp) return res.status(400).json({ success: false, message: "Mobile and OTP required" });
 
-    const result = await verifyOTP("mobile", mobile, otp);
+    let result = null;
+    if (purpose) {
+      result = await verifyOTP("mobile", mobile, otp, purpose);
+    }
 
-    if (!result.valid) {
+    if (!result || !result.valid) {
+      for (const p of ["add", "update", "verify"]) {
+        if (purpose === p) continue;
+        const r = await verifyOTP("mobile", mobile, otp, p);
+        if (r.valid) { result = r; break; }
+      }
+    }
+
+    if (!result || !result.valid) {
+      const reason = (result && result.reason) || "NO_OTP_OR_EXPIRED";
       const messages = {
         NO_OTP_OR_EXPIRED: "OTP expired or not found. Please request a new one.",
         INVALID_OTP: `Invalid OTP. ${OTP_MAX_ATTEMPTS - (result.attempts || 0)} attempts left.`,
@@ -598,13 +633,21 @@ router.post("/verify-mobile-otp", async (req, res) => {
       };
       return res.status(400).json({
         success: false,
-        message: messages[result.reason] || "Verification failed",
-        code: result.reason
+        message: messages[reason] || "Verification failed",
+        code: reason
       });
     }
 
+    await q(
+      `UPDATE student_otps SET verified = 1 
+       WHERE type = 'mobile' AND target = ? AND otp = ? 
+       ORDER BY id DESC LIMIT 1`,
+      [mobile, otp]
+    );
+
     res.json({ success: true, message: "Mobile verified ✅", verified: true });
   } catch (err) {
+    console.error("❌ verify-mobile-otp error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -831,7 +874,6 @@ router.post(
       const emailVerified = String(req.body.emailVerified) === "true";
       const mobileVerified = String(req.body.mobileVerified) === "true";
 
-      // ✅ Both must be verified
       if (!emailVerified || !mobileVerified) {
         return res.status(400).json({
           success: false,
@@ -842,7 +884,6 @@ router.post(
         });
       }
 
-      // Double-check: email/mobile verified in DB
       const emailVerifiedRec = await q(
         `SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`,
         [email]
@@ -860,7 +901,6 @@ router.post(
         });
       }
 
-      // ✅ Uniqueness re-check (double safety)
       const emailDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ?`, [email]);
       if (emailDup.length >= EMAIL_MAX_STUDENTS) {
         return res.status(409).json({
@@ -879,7 +919,6 @@ router.post(
         });
       }
 
-      // Required docs check
       const requiredDocs = getRequiredDocs(category);
       const missing = [];
       for (const docName of requiredDocs) {
@@ -896,7 +935,6 @@ router.post(
         });
       }
 
-      // Drop caste cert for General
       const files = req.files ? { ...req.files } : {};
       if (!CASTE_REQUIRED_CATEGORIES.includes(category) && files.casteCertificate) {
         const df = files.casteCertificate[0];
@@ -904,12 +942,10 @@ router.post(
         delete files.casteCertificate;
       }
 
-      // Normalize
       const bodyData = { ...req.body };
       if (bodyData.aadharNumber) bodyData.aadharNumber = normalizeAadhaar(bodyData.aadharNumber);
       if (bodyData.apaarId) bodyData.apaarId = String(bodyData.apaarId).replace(/\s/g, "");
 
-      // Remove verification flags from body (not columns)
       delete bodyData.emailVerified;
       delete bodyData.mobileVerified;
 
@@ -926,7 +962,6 @@ router.post(
       try {
         result = await q(`INSERT INTO Nstudent (${cols.join(",")}) VALUES (${ph})`, vals);
       } catch (insertErr) {
-        // If email_verified / mobile_verified columns don't exist, retry without them
         if (insertErr.message && insertErr.message.includes("Unknown column")) {
           delete data.email_verified;
           delete data.mobile_verified;
@@ -990,7 +1025,6 @@ router.put(
       const emailChanged = newEmail !== (existing.email_id || "").toLowerCase().trim();
       const mobileChanged = newMobile !== (existing.mobile_number || "").trim();
 
-      // ✅ Uniqueness check (excluding current student)
       if (emailChanged) {
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? AND id != ?`, [newEmail, id]);
         if (dup.length >= EMAIL_MAX_STUDENTS) {
@@ -1013,7 +1047,6 @@ router.put(
         }
       }
 
-      // ✅ If email/mobile changed, OTP must be verified
       if (emailChanged) {
         const v = await q(
           `SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`,
@@ -1049,7 +1082,6 @@ router.put(
         return res.status(400).json({ success: false, message: `Caste Certificate required for ${finalCategory}`, category: finalCategory });
       }
 
-      // Aadhaar validation
       if (req.body.aadharNumber !== undefined) {
         const a = normalizeAadhaar(req.body.aadharNumber);
         if (!/^\d{12}$/.test(a) || !hasValidAadhaarStart(a) || !validateVerhoeff(a)) {
@@ -1079,7 +1111,6 @@ router.put(
         if (newPid && oldPid) await destroyAsset(oldPid, existing[`${snake}_url`]);
       }
 
-      // Clean flags
       const cleanBody = { ...req.body };
       delete cleanBody.emailVerified;
       delete cleanBody.mobileVerified;
