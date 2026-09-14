@@ -30,16 +30,44 @@ const DOC_FIELDS = [
   "incomeCertificate", "bplCertificate", "otherDocument"
 ];
 
-const REQUIRED_DOCS = [
+// ✅ Base required docs (sabke liye)
+const BASE_REQUIRED_DOCS = [
   "studentPhoto", "signature", "aadharCard", "himachaliBonafide",
-  "casteCertificate", "apaarCard", "previousMarksheet"
+  "apaarCard", "previousMarksheet"
 ];
+
+// ✅ Caste certificate sirf in categories ke liye required (EWS included)
+const CASTE_REQUIRED_CATEGORIES = ["SC", "ST", "OBC", "Other", "EWS"];
+
+// ✅ File type/size rules
+const IMAGE_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+const IMAGE_MAX_BYTES = 3 * 1024 * 1024;   // 3 MB
+const PDF_MIME_TYPES = ["application/pdf"];
+const PDF_MAX_BYTES = 2 * 1024 * 1024;     // 2 MB
+
+// Photo & Signature → image only
+const IMAGE_ONLY_FIELDS = ["studentPhoto", "signature"];
+
+// Baaki sab documents → PDF only
+const PDF_ONLY_FIELDS = [
+  "aadharCard", "himachaliBonafide", "casteCertificate", "apaarCard",
+  "previousMarksheet", "incomeCertificate", "bplCertificate", "otherDocument"
+];
+
+// ✅ Category ke hisaab se required docs return karo
+function getRequiredDocs(category) {
+  const docs = [...BASE_REQUIRED_DOCS];
+  if (CASTE_REQUIRED_CATEGORIES.includes(category)) {
+    docs.push("casteCertificate");
+  }
+  return docs;
+}
 
 const CLASS_ORDER = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
 
 // ✅ Promoted status sirf 1 hour tak visible rahega
-const PROMOTED_VISIBLE_MS = 60 * 60 * 1000;         // 1 hour
-const AUTO_REVERT_INTERVAL_MS = 5 * 60 * 1000;      // Har 5 min check
+const PROMOTED_VISIBLE_MS = 60 * 60 * 1000;
+const AUTO_REVERT_INTERVAL_MS = 5 * 60 * 1000;
 
 // ==================== HELPERS ====================
 const toSnake = (s) => s.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase());
@@ -90,7 +118,61 @@ const nextClass = (currentClass) => {
 const q = (sql, params = []) => db.query(sql, params);
 
 // ============================================================
-// ✅ AUTO-REVERT PROMOTED → ACTIVE (after 1 hour)
+// ✅ AADHAAR VALIDATION HELPERS
+// ============================================================
+
+// Strip spaces/dashes → pure 12 digits
+function normalizeAadhaar(v) {
+  return String(v || "").replace(/[\s-]/g, "");
+}
+
+// Aadhaar must not start with 0 or 1
+function hasValidAadhaarStart(a) {
+  return /^[2-9]\d{11}$/.test(a);
+}
+
+// Verhoeff checksum algorithm (validates Aadhaar structural integrity)
+const d = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+  [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+  [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+  [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+  [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+  [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+  [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+  [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+  [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+];
+const p = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+  [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+  [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+  [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+  [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+  [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+  [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]
+];
+const inv = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
+
+function validateVerhoeff(num) {
+  let c = 0;
+  const reversed = String(num).split("").reverse().map(Number);
+  for (let i = 0; i < reversed.length; i++) {
+    c = d[c][p[i % 8][reversed[i]]];
+  }
+  return c === 0;
+}
+
+function isValidAadhaar(aadhaar12) {
+  if (!/^\d{12}$/.test(aadhaar12)) return false;
+  if (!hasValidAadhaarStart(aadhaar12)) return false;
+  return validateVerhoeff(aadhaar12);
+}
+
+// ============================================================
+// ✅ AUTO-REVERT PROMOTED → ACTIVE
 // ============================================================
 async function autoRevertExpiredPromotions() {
   try {
@@ -111,7 +193,6 @@ async function autoRevertExpiredPromotions() {
   }
 }
 
-// ✅ Single row pe same logic (response ke liye)
 function revertStatusIfExpired(student) {
   if (!student) return student;
   if (
@@ -126,31 +207,96 @@ function revertStatusIfExpired(student) {
 }
 
 // ============================================================
-// ✅ BACKGROUND TIMER — Har 5 minute mein auto-revert
-// Isse guaranteed revert hoga chahe koi request aaye ya na aaye
+// ✅ BACKGROUND TIMER
 // ============================================================
 let _autoRevertTimer = null;
 
 function startAutoRevertTimer() {
-  if (_autoRevertTimer) return; // already running
-
-  // Startup pe ek baar turant chalao
+  if (_autoRevertTimer) return;
   autoRevertExpiredPromotions();
-
   _autoRevertTimer = setInterval(() => {
     autoRevertExpiredPromotions();
   }, AUTO_REVERT_INTERVAL_MS);
-
-  // Node process ko cleanly shutdown karne ke liye
   if (_autoRevertTimer.unref) _autoRevertTimer.unref();
-
   console.log(`⏰ Auto-revert timer started (checks every ${AUTO_REVERT_INTERVAL_MS / 60000} min)`);
 }
 
-// Start the timer
 startAutoRevertTimer();
 
-// ==================== VALIDATION ====================
+// ============================================================
+// ✅ FILE VALIDATION MIDDLEWARE
+// Validates mime type + size per field
+// ============================================================
+function validateUploadedFiles(req, res, next) {
+  try {
+    if (!req.files) return next();
+
+    const errors = [];
+
+    // ✅ Photo & Signature → image only, max 3 MB
+    for (const field of IMAGE_ONLY_FIELDS) {
+      const fileArr = req.files[field];
+      if (!fileArr || !fileArr[0]) continue;
+
+      const file = fileArr[0];
+      const mime = file.mimetype || "";
+
+      if (!IMAGE_MIME_TYPES.includes(mime)) {
+        errors.push({
+          field,
+          message: `${field} must be an image (JPG, PNG or WEBP). Received: ${mime || "unknown"}`
+        });
+        continue;
+      }
+
+      if (file.size > IMAGE_MAX_BYTES) {
+        errors.push({
+          field,
+          message: `${field} size must not exceed 3 MB (received ${(file.size / 1024 / 1024).toFixed(2)} MB)`
+        });
+      }
+    }
+
+    // ✅ All other documents → PDF only, max 2 MB
+    for (const field of PDF_ONLY_FIELDS) {
+      const fileArr = req.files[field];
+      if (!fileArr || !fileArr[0]) continue;
+
+      const file = fileArr[0];
+      const mime = file.mimetype || "";
+
+      if (!PDF_MIME_TYPES.includes(mime)) {
+        errors.push({
+          field,
+          message: `${field} must be a PDF file. Received: ${mime || "unknown"}`
+        });
+        continue;
+      }
+
+      if (file.size > PDF_MAX_BYTES) {
+        errors.push({
+          field,
+          message: `${field} size must not exceed 2 MB (received ${(file.size / 1024 / 1024).toFixed(2)} MB)`
+        });
+      }
+    }
+
+    if (errors.length) {
+      return res.status(400).json({
+        success: false,
+        message: "File validation failed",
+        errors
+      });
+    }
+
+    next();
+  } catch (err) {
+    console.error("File validation error:", err);
+    res.status(500).json({ success: false, message: "File validation error" });
+  }
+}
+
+// ==================== VALIDATION RULES ====================
 const rules = () => [
   body("studentId").trim().notEmpty().withMessage("Student ID required"),
   body("admissionNumber").trim().notEmpty().withMessage("Admission Number required"),
@@ -159,7 +305,25 @@ const rules = () => [
   body("fatherName").trim().notEmpty().withMessage("Father name required"),
   body("motherName").trim().notEmpty().withMessage("Mother name required"),
   body("dob").isISO8601().withMessage("Valid DOB required"),
-  body("aadharNumber").matches(/^\d{12}$/).withMessage("Aadhar must be 12 digits"),
+
+  // ✅ Aadhaar: 12 digits, allow spaces/dashes in input but validate properly
+  body("aadharNumber")
+    .custom((v) => {
+      const a = normalizeAadhaar(v);
+      if (!/^\d{12}$/.test(a)) throw new Error("Aadhaar must be 12 digits (4-4-4 format)");
+      if (!hasValidAadhaarStart(a)) throw new Error("Aadhaar cannot start with 0 or 1");
+      if (!validateVerhoeff(a)) throw new Error("Invalid Aadhaar number (checksum failed)");
+      return true;
+    }),
+
+  // ✅ APAAR ID: exactly 12 digits
+  body("apaarId")
+    .custom((v) => {
+      const a = String(v || "").replace(/\s/g, "");
+      if (!/^\d{12}$/.test(a)) throw new Error("APAAR ID must be exactly 12 digits");
+      return true;
+    }),
+
   body("class").notEmpty().withMessage("Class required"),
   body("rollNumber").notEmpty().withMessage("Roll number required"),
   body("session").matches(/^\d{4}-\d{2,4}$/).withMessage("Session format YYYY-YY or YYYY-YYYY"),
@@ -278,7 +442,7 @@ router.get("/", async (req, res) => {
 });
 
 // ============================================================
-// SESSION SETTINGS — Get current
+// SESSION SETTINGS
 // ============================================================
 router.get("/current-session", async (req, res) => {
   try {
@@ -290,9 +454,6 @@ router.get("/current-session", async (req, res) => {
   }
 });
 
-// ============================================================
-// SESSION SETTINGS — Set current
-// ============================================================
 router.post("/current-session", async (req, res) => {
   try {
     const { session } = req.body;
@@ -338,7 +499,106 @@ router.get("/by-class", async (req, res) => {
 });
 
 // ============================================================
-// PROMOTE — Bulk selected students
+// ✅ AADHAAR VERIFICATION — name match check
+// Verifies Aadhaar format + checks name against existing student
+// records (or any passed reference name)
+// ============================================================
+router.post("/verify-aadhaar", async (req, res) => {
+  try {
+    const { aadharNumber, name, fatherName, dob } = req.body;
+
+    if (!aadharNumber) {
+      return res.status(400).json({ success: false, message: "Aadhaar number is required" });
+    }
+
+    const aadhaar12 = normalizeAadhaar(aadharNumber);
+
+    // Step 1: Format check
+    if (!/^\d{12}$/.test(aadhaar12)) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: "Aadhaar must be exactly 12 digits"
+      });
+    }
+    if (!hasValidAadhaarStart(aadhaar12)) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: "Aadhaar cannot start with 0 or 1"
+      });
+    }
+
+    // Step 2: Verhoeff checksum
+    if (!validateVerhoeff(aadhaar12)) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: "Invalid Aadhaar number (checksum failed). Please re-check."
+      });
+    }
+
+    // Step 3: Optional — check if this Aadhaar already exists in DB
+    const existingRows = await q(
+      "SELECT id, name, father_name, dob, student_id, admission_number FROM Nstudent WHERE aadhar_number = ?",
+      [aadhaar12]
+    );
+
+    // Step 4: Name matching — if user provided name, compare against DB (or provided name)
+    let nameMatch = null;
+
+    if (name && name.trim()) {
+      const userProvidedName = name.trim().toLowerCase();
+      const userProvidedFather = (fatherName || "").trim().toLowerCase();
+      const userProvidedDob = (dob || "").trim();
+
+      // If Aadhaar exists in DB, compare against stored record
+      if (existingRows.length > 0) {
+        const rec = existingRows[0];
+        const dbName = (rec.name || "").toLowerCase();
+        const dbFather = (rec.father_name || "").toLowerCase();
+
+        nameMatch = {
+          against: "existing_record",
+          studentId: rec.student_id,
+          admissionNumber: rec.admission_number,
+          nameMatches: dbName === userProvidedName,
+          fatherMatches: userProvidedFather ? dbFather === userProvidedFather : null,
+          dobMatches: userProvidedDob ? new Date(rec.dob).toISOString().slice(0, 10) === userProvidedDob.slice(0, 10) : null
+        };
+      } else {
+        // No DB match — just validate provided name consistency
+        nameMatch = {
+          against: "provided_only",
+          nameMatches: null,
+          note: "Aadhaar valid but no matching record found in school database. Name will be saved as entered."
+        };
+      }
+    }
+
+    // Step 5: Response
+    return res.json({
+      success: true,
+      verified: true,
+      aadhaar: {
+        formatted: aadhaar12.replace(/(\d{4})(\d{4})(\d{4})/, "$1 $2 $3"),
+        last4: aadhaar12.slice(-4),
+        valid: true
+      },
+      alreadyExists: existingRows.length > 0,
+      existingRecord: existingRows[0] || null,
+      nameMatch,
+      message: "Aadhaar verified successfully ✅"
+    });
+
+  } catch (err) {
+    console.error("❌ Aadhaar verify error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// PROMOTE
 // ============================================================
 router.post("/promote", async (req, res) => {
   try {
@@ -459,54 +719,89 @@ router.get("/search/:query", async (req, res) => {
 });
 
 // ============================================================
-// ADD STUDENT
+// ADD STUDENT — with file validation middleware
 // ============================================================
-router.post("/add", studentUploadFields, rules(), validate, async (req, res) => {
-  try {
-    const missing = [];
-    for (const docName of REQUIRED_DOCS) {
-      if (!req.files || !req.files[docName] || !req.files[docName][0]) {
-        missing.push(docName.replace(/([A-Z])/g, " $1").trim());
+router.post(
+  "/add",
+  studentUploadFields,
+  validateUploadedFiles,       // ✅ file type/size check
+  rules(),
+  validate,
+  async (req, res) => {
+    try {
+      const category = req.body.category;
+      const requiredDocs = getRequiredDocs(category);
+
+      const missing = [];
+      for (const docName of requiredDocs) {
+        if (!req.files || !req.files[docName] || !req.files[docName][0]) {
+          missing.push(docName.replace(/([A-Z])/g, " $1").trim());
+        }
       }
-    }
-    if (missing.length) {
-      return res.status(400).json({
-        success: false,
-        message: `Missing required documents: ${missing.join(", ")}`
+      if (missing.length) {
+        return res.status(400).json({
+          success: false,
+          message: `Missing required documents: ${missing.join(", ")}`,
+          category,
+          requiredDocuments: requiredDocs
+        });
+      }
+
+      // Drop caste cert for General category
+      const files = req.files ? { ...req.files } : {};
+      if (!CASTE_REQUIRED_CATEGORIES.includes(category) && files.casteCertificate) {
+        const droppedFile = files.casteCertificate[0];
+        if (droppedFile && droppedFile.filename) {
+          try {
+            await cloudinary.uploader.destroy(droppedFile.filename, { resource_type: "image" });
+          } catch (e) {
+            console.error("Failed to delete unwanted caste cert:", e.message);
+          }
+        }
+        delete files.casteCertificate;
+      }
+
+      // ✅ Normalize aadhaar before saving (remove spaces/dashes)
+      const bodyData = { ...req.body };
+      if (bodyData.aadharNumber) {
+        bodyData.aadharNumber = normalizeAadhaar(bodyData.aadharNumber);
+      }
+      if (bodyData.apaarId) {
+        bodyData.apaarId = String(bodyData.apaarId).replace(/\s/g, "");
+      }
+
+      const data = { ...pickBody(bodyData), ...extractFiles(files) };
+      if (!data.status) data.status = "Active";
+      if (!data.promoted_from) data.promoted_from = null;
+
+      const cols = Object.keys(data);
+      const vals = Object.values(data);
+      const ph = cols.map(() => "?").join(",");
+
+      const result = await q(
+        `INSERT INTO Nstudent (${cols.join(",")}) VALUES (${ph})`,
+        vals
+      );
+
+      const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]);
+      res.status(201).json({
+        success: true,
+        message: "Student added successfully ✅",
+        data: rows[0],
+        student: rows[0]
       });
+    } catch (err) {
+      console.error("❌ Add Student Error:", err);
+      if (err.code === "ER_DUP_ENTRY") {
+        return res.status(400).json({
+          success: false,
+          message: "Student ID or Admission Number already exists"
+        });
+      }
+      res.status(500).json({ success: false, message: err.message });
     }
-
-    const data = { ...pickBody(req.body), ...extractFiles(req.files) };
-    if (!data.status) data.status = "Active";
-    if (!data.promoted_from) data.promoted_from = null;
-
-    const cols = Object.keys(data);
-    const vals = Object.values(data);
-    const ph = cols.map(() => "?").join(",");
-
-    const result = await q(
-      `INSERT INTO Nstudent (${cols.join(",")}) VALUES (${ph})`,
-      vals
-    );
-
-    const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]);
-    res.status(201).json({
-      success: true,
-      message: "Student added successfully ✅",
-      data: rows[0],
-      student: rows[0]
-    });
-  } catch (err) {
-    console.error("❌ Add Student Error:", err);
-    if (err.code === "ER_DUP_ENTRY") {
-      return res.status(400).json({
-        success: false,
-        message: "Student ID or Admission Number already exists"
-      });
-    }
-    res.status(500).json({ success: false, message: err.message });
   }
-});
+);
 
 // ============================================================
 // GET SINGLE STUDENT
@@ -543,60 +838,115 @@ router.get("/:id", async (req, res) => {
 // ============================================================
 // UPDATE STUDENT
 // ============================================================
-router.put("/:id", studentUploadFields, async (req, res) => {
-  try {
-    const id = req.params.id;
-    if (!id || isNaN(id)) {
-      return res.status(400).json({ success: false, message: "Invalid student ID" });
-    }
-
-    const existingRows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
-    if (!existingRows.length) {
-      return res.status(404).json({ success: false, message: "Student not found" });
-    }
-    const existing = existingRows[0];
-
-    const newFiles = extractFiles(req.files);
-
-    for (const f of DOC_FIELDS) {
-      const snake = toSnake(f);
-      const newPid = newFiles[`${snake}_pid`];
-      const oldPid = existing[`${snake}_pid`];
-      if (newPid && oldPid) {
-        await destroyAsset(oldPid, existing[`${snake}_url`]);
+router.put(
+  "/:id",
+  studentUploadFields,
+  validateUploadedFiles,
+  async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (!id || isNaN(id)) {
+        return res.status(400).json({ success: false, message: "Invalid student ID" });
       }
-    }
 
-    const data = { ...pickBody(req.body), ...newFiles };
-    const cols = Object.keys(data);
+      const existingRows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
+      if (!existingRows.length) {
+        return res.status(404).json({ success: false, message: "Student not found" });
+      }
+      const existing = existingRows[0];
 
-    if (!cols.length) {
-      return res.json({ success: true, message: "No changes", data: existing, student: existing });
-    }
+      const finalCategory = req.body.category || existing.category;
+      const needsCaste = CASTE_REQUIRED_CATEGORIES.includes(finalCategory);
 
-    const setSql = cols.map((c) => `${c} = ?`).join(", ");
-    await q(`UPDATE Nstudent SET ${setSql} WHERE id = ?`, [...Object.values(data), id]);
+      const hasNewCaste = req.files?.casteCertificate?.[0];
+      const hasOldCaste = existing.caste_certificate_url;
 
-    const updatedRows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
-    const updated = revertStatusIfExpired(updatedRows[0]);
+      if (needsCaste && !hasNewCaste && !hasOldCaste) {
+        return res.status(400).json({
+          success: false,
+          message: `Caste Certificate is required for ${finalCategory} category. Please upload it.`,
+          category: finalCategory,
+          requiresCasteCertificate: true
+        });
+      }
 
-    res.json({
-      success: true,
-      message: "Student updated successfully ✅",
-      data: updated,
-      student: updated
-    });
-  } catch (err) {
-    console.error("❌ Update Student Error:", err);
-    if (err.code === "ER_DUP_ENTRY") {
-      return res.status(400).json({
-        success: false,
-        message: "Student ID or Admission Number already exists"
+      // ✅ Validate aadhaar/apaar if present in update
+      if (req.body.aadharNumber !== undefined) {
+        const a = normalizeAadhaar(req.body.aadharNumber);
+        if (!/^\d{12}$/.test(a) || !hasValidAadhaarStart(a) || !validateVerhoeff(a)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid Aadhaar number"
+          });
+        }
+        req.body.aadharNumber = a;
+      }
+      if (req.body.apaarId !== undefined) {
+        const p = String(req.body.apaarId).replace(/\s/g, "");
+        if (!/^\d{12}$/.test(p)) {
+          return res.status(400).json({
+            success: false,
+            message: "APAAR ID must be exactly 12 digits"
+          });
+        }
+        req.body.apaarId = p;
+      }
+
+      const newFiles = extractFiles(req.files);
+
+      if (!needsCaste && newFiles.caste_certificate_url) {
+        const droppedPid = newFiles.caste_certificate_pid;
+        if (droppedPid) {
+          try {
+            await cloudinary.uploader.destroy(droppedPid, { resource_type: "image" });
+          } catch (e) {
+            console.error("Failed to delete unwanted caste cert:", e.message);
+          }
+        }
+        delete newFiles.caste_certificate_url;
+        delete newFiles.caste_certificate_pid;
+      }
+
+      for (const f of DOC_FIELDS) {
+        const snake = toSnake(f);
+        const newPid = newFiles[`${snake}_pid`];
+        const oldPid = existing[`${snake}_pid`];
+        if (newPid && oldPid) {
+          await destroyAsset(oldPid, existing[`${snake}_url`]);
+        }
+      }
+
+      const data = { ...pickBody(req.body), ...newFiles };
+      const cols = Object.keys(data);
+
+      if (!cols.length) {
+        return res.json({ success: true, message: "No changes", data: existing, student: existing });
+      }
+
+      const setSql = cols.map((c) => `${c} = ?`).join(", ");
+      await q(`UPDATE Nstudent SET ${setSql} WHERE id = ?`, [...Object.values(data), id]);
+
+      const updatedRows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
+      const updated = revertStatusIfExpired(updatedRows[0]);
+
+      res.json({
+        success: true,
+        message: "Student updated successfully ✅",
+        data: updated,
+        student: updated
       });
+    } catch (err) {
+      console.error("❌ Update Student Error:", err);
+      if (err.code === "ER_DUP_ENTRY") {
+        return res.status(400).json({
+          success: false,
+          message: "Student ID or Admission Number already exists"
+        });
+      }
+      res.status(500).json({ success: false, message: err.message });
     }
-    res.status(500).json({ success: false, message: err.message });
   }
-});
+);
 
 // ============================================================
 // DELETE STUDENT
@@ -630,7 +980,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ============================================================
-// SERVER-SIDE PROFESSIONAL PDF — /:id/pdf
+// PDF (unchanged)
 // ============================================================
 const fetchImageBuffer = (url) => new Promise((resolve) => {
   if (!url) return resolve(null);
@@ -784,10 +1134,10 @@ router.post("/verify-login", async (req, res) => {
       });
     }
 
-    if (!/^\d{11}$/.test(apaarId)) {
+    if (!/^\d{12}$/.test(apaarId)) {
       return res.status(400).json({
         success: false,
-        message: "APAAR ID must be 11 digits"
+        message: "APAAR ID must be 12 digits"
       });
     }
 
