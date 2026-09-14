@@ -5,7 +5,6 @@ const PDFDocument = require("pdfkit");
 const https = require("https");
 const http = require("http");
 const path = require("path");
-const crypto = require("crypto");
 
 const db = require("../config/db");
 const { cloudinary, uploadStudent } = require("../config/cloudinary");
@@ -115,7 +114,7 @@ const nextClass = (currentClass) => {
 const q = (sql, params = []) => db.query(sql, params);
 
 // ============================================================
-// ✅ AADHAAR VALIDATION
+// ✅ AADHAAR VALIDATION (STRONG)
 // ============================================================
 function normalizeAadhaar(v) {
   return String(v || "").replace(/[\s-]/g, "");
@@ -208,14 +207,8 @@ function generateOTP() {
 
 async function saveOTP(type, target, otp, purpose = "verify") {
   const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
-  await q(
-    `DELETE FROM student_otps WHERE type = ? AND target = ? AND purpose = ?`,
-    [type, target, purpose]
-  );
-  await q(
-    `INSERT INTO student_otps (type, target, otp, purpose, expires_at) VALUES (?, ?, ?, ?, ?)`,
-    [type, target, otp, purpose, expiresAt]
-  );
+  await q(`DELETE FROM student_otps WHERE type = ? AND target = ? AND purpose = ?`, [type, target, purpose]);
+  await q(`INSERT INTO student_otps (type, target, otp, purpose, expires_at) VALUES (?, ?, ?, ?, ?)`, [type, target, otp, purpose, expiresAt]);
 }
 
 async function verifyOTP(type, target, otp, purpose = "verify") {
@@ -225,20 +218,16 @@ async function verifyOTP(type, target, otp, purpose = "verify") {
      ORDER BY id DESC LIMIT 1`,
     [type, target, purpose]
   );
-
   if (!rows.length) return { valid: false, reason: "NO_OTP_OR_EXPIRED" };
-
   const rec = rows[0];
   if (rec.attempts >= OTP_MAX_ATTEMPTS) {
     await q(`DELETE FROM student_otps WHERE id = ?`, [rec.id]);
     return { valid: false, reason: "TOO_MANY_ATTEMPTS", attempts: rec.attempts };
   }
-
   if (String(rec.otp) !== String(otp).trim()) {
     await q(`UPDATE student_otps SET attempts = attempts + 1 WHERE id = ?`, [rec.id]);
     return { valid: false, reason: "INVALID_OTP", attempts: rec.attempts + 1 };
   }
-
   await q(`UPDATE student_otps SET verified = 1 WHERE id = ?`, [rec.id]);
   return { valid: true };
 }
@@ -253,10 +242,9 @@ const SCHOOL_LOGO_URL = "https://gsssshilla07.pages.dev/logo(1).png";
 
 async function sendEmailOTP(toEmail, otp, purpose = "verify") {
   if (!BREVO_API_KEY) throw new Error("BREVO_API_KEY not configured");
-
   const headingText = purpose === "add" ? "Student Registration Verification"
-                    : purpose === "update" ? "Student Update Verification"
-                    : "Email Verification";
+    : purpose === "update" ? "Student Update Verification"
+      : "Email Verification";
 
   const htmlContent = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>OTP Verification</title></head>
@@ -288,18 +276,11 @@ If you didn't request this, ignore this email.
 <tr><td style="background:#f8fafc; padding: 16px 24px; text-align:center; border-top:1px solid #e2e8f0;">
 <p style="margin:0; color:#94a3b8; font-size:11px;">© ${new Date().getFullYear()} GSSS SHILLA</p>
 </td></tr>
-</table>
-</td></tr>
-</table>
-</body></html>`;
+</table></td></tr></table></body></html>`;
 
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-      "api-key": BREVO_API_KEY
-    },
+    headers: { "Content-Type": "application/json", "Accept": "application/json", "api-key": BREVO_API_KEY },
     body: JSON.stringify({
       sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
       to: [{ email: toEmail }],
@@ -308,7 +289,6 @@ If you didn't request this, ignore this email.
       textContent: `Your OTP: ${otp}\nValid for 5 minutes.`
     })
   });
-
   if (!response.ok) {
     const errBody = await response.text();
     throw new Error(`Email send failed (${response.status}): ${errBody}`);
@@ -323,7 +303,6 @@ function validateUploadedFiles(req, res, next) {
   try {
     if (!req.files) return next();
     const errors = [];
-
     for (const field of IMAGE_ONLY_FIELDS) {
       const fileArr = req.files[field];
       if (!fileArr || !fileArr[0]) continue;
@@ -332,11 +311,8 @@ function validateUploadedFiles(req, res, next) {
         errors.push({ field, message: `${field} must be an image (JPG, PNG or WEBP)` });
         continue;
       }
-      if (file.size > IMAGE_MAX_BYTES) {
-        errors.push({ field, message: `${field} must not exceed 3 MB` });
-      }
+      if (file.size > IMAGE_MAX_BYTES) errors.push({ field, message: `${field} must not exceed 3 MB` });
     }
-
     for (const field of PDF_ONLY_FIELDS) {
       const fileArr = req.files[field];
       if (!fileArr || !fileArr[0]) continue;
@@ -345,14 +321,9 @@ function validateUploadedFiles(req, res, next) {
         errors.push({ field, message: `${field} must be a PDF file` });
         continue;
       }
-      if (file.size > PDF_MAX_BYTES) {
-        errors.push({ field, message: `${field} must not exceed 2 MB` });
-      }
+      if (file.size > PDF_MAX_BYTES) errors.push({ field, message: `${field} must not exceed 2 MB` });
     }
-
-    if (errors.length) {
-      return res.status(400).json({ success: false, message: "File validation failed", errors });
-    }
+    if (errors.length) return res.status(400).json({ success: false, message: "File validation failed", errors });
     next();
   } catch (err) {
     res.status(500).json({ success: false, message: "File validation error" });
@@ -400,8 +371,7 @@ const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({
-      success: false,
-      message: "Validation failed",
+      success: false, message: "Validation failed",
       errors: errors.array().map((e) => ({ field: e.path, message: e.msg }))
     });
   }
@@ -418,14 +388,12 @@ const destroyAsset = async (publicId, url) => {
 // ✅ OTP ROUTES
 // ============================================================
 
-// Send email OTP
 router.post("/send-email-otp", async (req, res) => {
   try {
     const { email, purpose = "verify", excludeStudentId } = req.body;
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ success: false, message: "Valid email required" });
     }
-
     const normalizedEmail = email.toLowerCase().trim();
 
     const existing = await q(
@@ -446,9 +414,8 @@ router.post("/send-email-otp", async (req, res) => {
     await saveOTP("email", normalizedEmail, otp, purpose);
 
     console.log(`📧 Email OTP for ${normalizedEmail}: ${otp}`);
-    try {
-      await sendEmailOTP(normalizedEmail, otp, purpose);
-    } catch (err) {
+    try { await sendEmailOTP(normalizedEmail, otp, purpose); }
+    catch (err) {
       console.error("Email send error:", err.message);
       return res.status(500).json({ success: false, message: "OTP generated but email failed. Check config." });
     }
@@ -460,12 +427,10 @@ router.post("/send-email-otp", async (req, res) => {
   }
 });
 
-// Verify email OTP
 router.post("/verify-email-otp", async (req, res) => {
   try {
     const { email, otp, purpose } = req.body;
     if (!email || !otp) return res.status(400).json({ success: false, message: "Email and OTP required" });
-
     const normalizedEmail = email.toLowerCase().trim();
     const result = await verifyOTP("email", normalizedEmail, otp, purpose || "verify");
 
@@ -482,7 +447,6 @@ router.post("/verify-email-otp", async (req, res) => {
         code: result.reason
       });
     }
-
     res.json({ success: true, message: "Email verified ✅", verified: true });
   } catch (err) {
     console.error("❌ verify-email-otp error:", err);
@@ -491,37 +455,135 @@ router.post("/verify-email-otp", async (req, res) => {
 });
 
 // ============================================================
-// AADHAAR VERIFY
+// ✅ CHECK MOBILE — Kis-kis student ne use kiya hai
+// ============================================================
+router.post("/check-mobile", async (req, res) => {
+  try {
+    const { mobile, excludeStudentId } = req.body;
+    if (!mobile || !/^[6-9]\d{9}$/.test(mobile)) {
+      return res.status(400).json({ success: false, message: "Valid 10-digit mobile required" });
+    }
+
+    const rows = await q(
+      `SELECT id, student_id, admission_number, name, father_name, class, session, status
+       FROM Nstudent WHERE mobile_number = ? ${excludeStudentId ? "AND id != ?" : ""}
+       ORDER BY id ASC`,
+      excludeStudentId ? [mobile, excludeStudentId] : [mobile]
+    );
+
+    const limit = MOBILE_MAX_STUDENTS;
+    const used = rows.length;
+    const remaining = Math.max(0, limit - used);
+
+    res.json({
+      success: true,
+      mobile,
+      used,
+      limit,
+      remaining,
+      canUse: used < limit,
+      students: rows.map(r => ({
+        id: r.id,
+        studentId: r.student_id,
+        admissionNumber: r.admission_number,
+        name: r.name,
+        fatherName: r.father_name,
+        class: r.class,
+        session: r.session,
+        status: r.status
+      })),
+      message: used === 0
+        ? "Mobile number available ✅"
+        : used >= limit
+          ? `Mobile already used by ${limit} students. Cannot add more.`
+          : `Mobile used by ${used} student(s). ${remaining} slot(s) remaining.`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ CHECK APAAR — Unique check
+// ============================================================
+router.post("/check-apaar", async (req, res) => {
+  try {
+    const { apaarId, excludeStudentId } = req.body;
+    if (!apaarId) return res.status(400).json({ success: false, message: "APAAR ID required" });
+
+    const cleaned = String(apaarId).replace(/\s/g, "");
+    if (!/^\d{12}$/.test(cleaned)) {
+      return res.status(400).json({ success: false, available: false, message: "APAAR ID must be exactly 12 digits" });
+    }
+
+    const rows = await q(
+      `SELECT id, student_id, admission_number, name, father_name, class
+       FROM Nstudent WHERE apaar_id = ? ${excludeStudentId ? "AND id != ?" : ""} LIMIT 5`,
+      excludeStudentId ? [cleaned, excludeStudentId] : [cleaned]
+    );
+
+    if (rows.length > 0) {
+      const r = rows[0];
+      return res.json({
+        success: true,
+        available: false,
+        taken: true,
+        existingStudent: {
+          id: r.id,
+          studentId: r.student_id,
+          admissionNumber: r.admission_number,
+          name: r.name,
+          fatherName: r.father_name,
+          class: r.class
+        },
+        message: `APAAR ID already registered with ${r.name} (${r.student_id})`
+      });
+    }
+    res.json({ success: true, available: true, taken: false, message: "APAAR ID available ✅" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ ENHANCED AADHAAR VERIFY
 // ============================================================
 router.post("/verify-aadhaar", async (req, res) => {
   try {
-    const { aadharNumber, name, fatherName, dob } = req.body;
-    if (!aadharNumber) return res.status(400).json({ success: false, message: "Aadhaar required" });
+    const { aadharNumber, name, fatherName, dob, excludeStudentId } = req.body;
+    if (!aadharNumber) return res.status(400).json({ success: false, verified: false, message: "Aadhaar required" });
 
     const aadhaar12 = normalizeAadhaar(aadharNumber);
-    if (!/^\d{12}$/.test(aadhaar12)) return res.status(400).json({ success: false, verified: false, message: "Aadhaar must be 12 digits" });
-    if (!hasValidAadhaarStart(aadhaar12)) return res.status(400).json({ success: false, verified: false, message: "Aadhaar cannot start with 0 or 1" });
-    if (!validateVerhoeff(aadhaar12)) return res.status(400).json({ success: false, verified: false, message: "Invalid Aadhaar (checksum failed)" });
+
+    if (!/^\d{12}$/.test(aadhaar12)) {
+      return res.status(400).json({ success: false, verified: false, code: "INVALID_LENGTH", message: "Aadhaar must be exactly 12 digits" });
+    }
+    if (!hasValidAadhaarStart(aadhaar12)) {
+      return res.status(400).json({ success: false, verified: false, code: "INVALID_START", message: "Aadhaar cannot start with 0 or 1" });
+    }
+    if (!validateVerhoeff(aadhaar12)) {
+      return res.status(400).json({ success: false, verified: false, code: "CHECKSUM_FAILED", message: "Invalid Aadhaar number (checksum failed). Please check all digits." });
+    }
+    if (/^(\d)\1{11}$/.test(aadhaar12)) {
+      return res.status(400).json({ success: false, verified: false, code: "ALL_SAME_DIGITS", message: "Aadhaar cannot have all identical digits" });
+    }
 
     const existingRows = await q(
-      "SELECT id, name, father_name, dob, student_id, admission_number FROM Nstudent WHERE aadhar_number = ?",
-      [aadhaar12]
+      `SELECT id, name, father_name, dob, student_id, admission_number, class, mobile_number
+       FROM Nstudent WHERE aadhar_number = ? ${excludeStudentId ? "AND id != ?" : ""} LIMIT 5`,
+      excludeStudentId ? [aadhaar12, excludeStudentId] : [aadhaar12]
     );
 
     let nameMatch = null;
-    if (name && name.trim()) {
-      if (existingRows.length > 0) {
-        const rec = existingRows[0];
-        nameMatch = {
-          against: "existing_record",
-          studentId: rec.student_id,
-          nameMatches: (rec.name || "").toLowerCase() === name.trim().toLowerCase(),
-          fatherMatches: fatherName ? (rec.father_name || "").toLowerCase() === fatherName.trim().toLowerCase() : null,
-          dobMatches: dob ? new Date(rec.dob).toISOString().slice(0, 10) === dob.slice(0, 10) : null
-        };
-      } else {
-        nameMatch = { against: "provided_only", nameMatches: null, note: "No matching record in database." };
-      }
+    if (name && name.trim() && existingRows.length > 0) {
+      const rec = existingRows[0];
+      nameMatch = {
+        against: "existing_record",
+        studentId: rec.student_id,
+        nameMatches: (rec.name || "").toLowerCase() === name.trim().toLowerCase(),
+        fatherMatches: fatherName ? (rec.father_name || "").toLowerCase() === fatherName.trim().toLowerCase() : null,
+        dobMatches: dob ? new Date(rec.dob).toISOString().slice(0, 10) === dob.slice(0, 10) : null
+      };
     }
 
     res.json({
@@ -534,11 +596,22 @@ router.post("/verify-aadhaar", async (req, res) => {
       },
       alreadyExists: existingRows.length > 0,
       existingRecord: existingRows[0] || null,
+      existingStudents: existingRows.map(r => ({
+        id: r.id,
+        studentId: r.student_id,
+        admissionNumber: r.admission_number,
+        name: r.name,
+        class: r.class,
+        mobile: r.mobile_number
+      })),
       nameMatch,
-      message: "Aadhaar verified ✅"
+      message: existingRows.length > 0
+        ? `Aadhaar valid but already registered with ${existingRows[0].name} (${existingRows[0].student_id})`
+        : "Aadhaar verified ✅"
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Aadhaar verify error:", err);
+    res.status(500).json({ success: false, verified: false, message: err.message });
   }
 });
 
@@ -696,7 +769,7 @@ router.get("/search/:query", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADD STUDENT (only email OTP enforced)
+// ✅ ADD STUDENT
 // ============================================================
 router.post(
   "/add",
@@ -711,7 +784,6 @@ router.post(
       const mobile = String(req.body.mobileNumber || "").trim();
       const emailVerified = String(req.body.emailVerified) === "true";
 
-      // ✅ Only email verification required
       if (!emailVerified) {
         return res.status(400).json({
           success: false,
@@ -720,41 +792,37 @@ router.post(
         });
       }
 
-      // Double-check email verified in DB
       const emailVerifiedRec = await q(
         `SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`,
         [email]
       );
-
       if (!emailVerifiedRec.length) {
-        return res.status(400).json({
-          success: false,
-          message: "Email verification expired. Please verify again.",
-          code: "OTP_EXPIRED"
-        });
+        return res.status(400).json({ success: false, message: "Email verification expired. Please verify again.", code: "OTP_EXPIRED" });
       }
 
-      // ✅ Email uniqueness (max 1 student per email)
+      // Uniqueness checks
       const emailDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ?`, [email]);
       if (emailDup.length >= EMAIL_MAX_STUDENTS) {
-        return res.status(409).json({
-          success: false,
-          message: `Email already registered with ${emailDup[0].name} (${emailDup[0].student_id})`,
-          code: "EMAIL_ALREADY_REGISTERED"
-        });
+        return res.status(409).json({ success: false, message: `Email already registered with ${emailDup[0].name} (${emailDup[0].student_id})`, code: "EMAIL_ALREADY_REGISTERED" });
       }
 
-      // ✅ Mobile uniqueness (max 3 students per mobile)
       const mobileDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ?`, [mobile]);
       if (mobileDup.length >= MOBILE_MAX_STUDENTS) {
-        return res.status(409).json({
-          success: false,
-          message: `Mobile number already linked to ${MOBILE_MAX_STUDENTS} students`,
-          code: "MOBILE_LIMIT_REACHED"
-        });
+        return res.status(409).json({ success: false, message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED" });
       }
 
-      // Required docs check
+      const apaarVal = String(req.body.apaarId || "").replace(/\s/g, "");
+      if (apaarVal) {
+        const apaarDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ?`, [apaarVal]);
+        if (apaarDup.length > 0) {
+          return res.status(409).json({
+            success: false,
+            message: `APAAR ID already registered with ${apaarDup[0].name} (${apaarDup[0].student_id})`,
+            code: "APAAR_ALREADY_REGISTERED"
+          });
+        }
+      }
+
       const requiredDocs = getRequiredDocs(category);
       const missing = [];
       for (const docName of requiredDocs) {
@@ -763,15 +831,9 @@ router.post(
         }
       }
       if (missing.length) {
-        return res.status(400).json({
-          success: false,
-          message: `Missing required documents: ${missing.join(", ")}`,
-          category,
-          requiredDocuments: requiredDocs
-        });
+        return res.status(400).json({ success: false, message: `Missing required documents: ${missing.join(", ")}`, category, requiredDocuments: requiredDocs });
       }
 
-      // Drop caste cert for General
       const files = req.files ? { ...req.files } : {};
       if (!CASTE_REQUIRED_CATEGORIES.includes(category) && files.casteCertificate) {
         const df = files.casteCertificate[0];
@@ -782,7 +844,6 @@ router.post(
       const bodyData = { ...req.body };
       if (bodyData.aadharNumber) bodyData.aadharNumber = normalizeAadhaar(bodyData.aadharNumber);
       if (bodyData.apaarId) bodyData.apaarId = String(bodyData.apaarId).replace(/\s/g, "");
-
       delete bodyData.emailVerified;
 
       const data = { ...pickBody(bodyData), ...extractFiles(files) };
@@ -803,18 +864,14 @@ router.post(
           const v2 = Object.values(data);
           const p2 = c2.map(() => "?").join(",");
           result = await q(`INSERT INTO Nstudent (${c2.join(",")}) VALUES (${p2})`, v2);
-        } else {
-          throw insertErr;
-        }
+        } else throw insertErr;
       }
 
       const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]);
       res.status(201).json({ success: true, message: "Student added ✅", data: rows[0], student: rows[0] });
     } catch (err) {
       console.error("❌ Add Student Error:", err);
-      if (err.code === "ER_DUP_ENTRY") {
-        return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
-      }
+      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
       res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -838,7 +895,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // ============================================================
-// ✅ UPDATE (only email OTP enforced when email changes)
+// ✅ UPDATE
 // ============================================================
 router.put(
   "/:id",
@@ -855,42 +912,27 @@ router.put(
 
       const newEmail = String(req.body.emailId || existing.email_id || "").toLowerCase().trim();
       const newMobile = String(req.body.mobileNumber || existing.mobile_number || "").trim();
+      const newApaar = String(req.body.apaarId || existing.apaar_id || "").replace(/\s/g, "");
 
       const emailChanged = newEmail !== (existing.email_id || "").toLowerCase().trim();
       const mobileChanged = newMobile !== (existing.mobile_number || "").trim();
+      const apaarChanged = newApaar !== (existing.apaar_id || "").replace(/\s/g, "").trim();
 
       if (emailChanged) {
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? AND id != ?`, [newEmail, id]);
-        if (dup.length >= EMAIL_MAX_STUDENTS) {
-          return res.status(409).json({
-            success: false,
-            message: `Email already registered with ${dup[0].name} (${dup[0].student_id})`,
-            code: "EMAIL_ALREADY_REGISTERED"
-          });
-        }
-
-        const v = await q(
-          `SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`,
-          [newEmail]
-        );
-        if (!v.length) {
-          return res.status(400).json({
-            success: false,
-            message: "New email must be OTP-verified before updating.",
-            code: "EMAIL_NOT_VERIFIED"
-          });
-        }
+        if (dup.length >= EMAIL_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Email already registered with ${dup[0].name} (${dup[0].student_id})`, code: "EMAIL_ALREADY_REGISTERED" });
+        const v = await q(`SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`, [newEmail]);
+        if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified before updating.", code: "EMAIL_NOT_VERIFIED" });
       }
 
       if (mobileChanged) {
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? AND id != ?`, [newMobile, id]);
-        if (dup.length >= MOBILE_MAX_STUDENTS) {
-          return res.status(409).json({
-            success: false,
-            message: `Mobile number already linked to ${MOBILE_MAX_STUDENTS} students`,
-            code: "MOBILE_LIMIT_REACHED"
-          });
-        }
+        if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile number already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED" });
+      }
+
+      if (apaarChanged && newApaar) {
+        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ? AND id != ?`, [newApaar, id]);
+        if (dup.length > 0) return res.status(409).json({ success: false, message: `APAAR ID already registered with ${dup[0].name} (${dup[0].student_id})`, code: "APAAR_ALREADY_REGISTERED" });
       }
 
       const finalCategory = req.body.category || existing.category;
@@ -970,7 +1012,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ============================================================
-// STUDENT PDF
+// PDF (as before)
 // ============================================================
 const fetchImageBuffer = (url) => new Promise((resolve) => {
   if (!url) return resolve(null);
