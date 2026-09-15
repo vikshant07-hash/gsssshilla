@@ -1,7 +1,9 @@
 // ================================================================
-//  COMPLETE RESULT MANAGEMENT ROUTES
-//  Linked with Nstudent table (Student Management)
-//  Marksheets stored separately with nstudent_id FK
+//  COMPLETE RESULT MANAGEMENT ROUTES - FULLY FIXED
+//  Photo Upload Fixed - Base64 Support
+//  Session Format Support - Both "2025-26" and "March-2026"
+//  Exam Session Support Added - For marksheet upload
+//  Obtained Marks & Max Marks Support Added
 // ================================================================
 
 const express = require('express');
@@ -9,9 +11,11 @@ const router = express.Router();
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
+// ✅ Only import 'query' from db.js
 const { query } = require('../config/db');
 const cloudinary = require('../config/cloudinary').cloudinary;
 
+const VALID_CLASSES = [6, 7, 8, 9, 10, 11, 12];
 const VALID_EXAM_TYPES = [
     'Annual Examination',
     'Half Yearly Examination',
@@ -28,10 +32,49 @@ const VALID_EXAM_TYPES = [
 const asyncHandler = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
+// ✅ Session normalize - Supports both "2025-26" and "March-2026"
 function normalizeSession(value) {
     if (value === undefined || value === null) return null;
     const trimmed = String(value).trim();
     return trimmed === '' ? null : trimmed;
+}
+
+// ✅ Session mapping helper - Converts between formats if needed
+function getSessionVariants(session) {
+    if (!session) return [session];
+    
+    const variants = [session];
+    
+    // If format is "2025-26", also try "March-2026", "March-2025" etc.
+    const yearPattern = /^(\d{4})-(\d{2})$/;
+    const match = session.match(yearPattern);
+    
+    if (match) {
+        const startYear = parseInt(match[1]);
+        const endYear = parseInt(match[2]);
+        const fullEndYear = 2000 + endYear;
+        
+        // Add common month-based variants
+        variants.push(`March-${fullEndYear}`);
+        variants.push(`march-${fullEndYear}`);
+        variants.push(`MARCH-${fullEndYear}`);
+        variants.push(`December-${fullEndYear}`);
+        variants.push(`december-${fullEndYear}`);
+        variants.push(`DECEMBER-${fullEndYear}`);
+    }
+    
+    return variants;
+}
+
+// ✅ Build session WHERE clause helper
+function buildSessionClause(column, session, params) {
+    if (!session) return '';
+    
+    const variants = getSessionVariants(session);
+    const placeholders = variants.map(() => '?').join(',');
+    params.push(...variants);
+    
+    return ` AND ${column} IN (${placeholders})`;
 }
 
 function normalizeClass(value, { required = false } = {}) {
@@ -39,7 +82,11 @@ function normalizeClass(value, { required = false } = {}) {
         if (required) throw new Error('Class is required');
         return null;
     }
-    return String(value).trim();
+    const num = parseInt(value, 10);
+    if (isNaN(num) || !VALID_CLASSES.includes(num)) {
+        throw new Error('Invalid class. Must be 6-12');
+    }
+    return num;
 }
 
 function normalizeExamType(value, { required = false } = {}) {
@@ -54,18 +101,24 @@ function normalizeExamType(value, { required = false } = {}) {
     return trimmed;
 }
 
+function sendError(res, error, fallbackMessage) {
+    console.error('❌ Error:', error);
+    const message = error.message || fallbackMessage || 'Something went wrong';
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, message });
+}
+
 // ================================================================
-//  CLOUDINARY STORAGE (Marksheet PDFs)
+//  CLOUDINARY STORAGE
 // ================================================================
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: (req, file) => {
-        const session = normalizeSession(req.body.session) || 'unknown-session';
+        const session = normalizeSession(req.body.session) || '2026-27';
         const sessionSafe = session.replace(/[^a-zA-Z0-9-]/g, '-');
         const classNum = normalizeClass(req.body.class) || 'default';
         const studentId = (req.body.student_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
         const examType = (req.body.exam_type || 'exam').replace(/[^a-zA-Z0-9_-]/g, '-');
-
         return {
             folder: `gsssshilla/marksheets/${sessionSafe}/class-${classNum}`,
             resource_type: 'raw',
@@ -91,9 +144,9 @@ function handleUpload(req, res, next) {
     upload.single('pdf')(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({
-                    success: false,
-                    message: 'File too large. Maximum size is 10MB.'
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'File too large. Maximum size is 10MB.' 
                 });
             }
             return res.status(400).json({ success: false, message: 'Upload error: ' + err.message });
@@ -101,62 +154,73 @@ function handleUpload(req, res, next) {
         if (err) {
             return res.status(400).json({ success: false, message: err.message || 'Upload failed' });
         }
+        
         if (req.file) {
             console.log(`📄 File uploaded: ${req.file.originalname} (${req.file.size} bytes)`);
         }
+        
         next();
     });
 }
 
 // ================================================================
-//  SECTION 1: STUDENT MANAGEMENT (from Nstudent)
+//  SECTION 1: STUDENT MANAGEMENT
 // ================================================================
 
 // GET All Students
 router.get('/students', asyncHandler(async (req, res) => {
-    const classVal = normalizeClass(req.query.class);
+    const classNum = normalizeClass(req.query.class);
     const session = normalizeSession(req.query.session);
-    const { student_id, name, search } = req.query;
+    const { student_id, name } = req.query;
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const offset = (page - 1) * limit;
 
     let sql = `
         SELECT
-            id, student_id, apaar_id, name, father_name, mother_name,
-            dob, student_photo_url AS photo, class, session,
-            roll_number AS exam_roll_no, email_id, mobile_number
-        FROM Nstudent
+            s.id, s.student_id, s.apaar_id, s.name, s.father_name,
+            s.mother_name, s.dob, s.photo,
+            ar.session, ar.class, ar.section, ar.exam_roll_no
+        FROM students s
+        LEFT JOIN academic_records ar ON s.id = ar.student_id
         WHERE 1=1
     `;
     const params = [];
 
-    if (classVal !== null) { sql += ' AND class = ?'; params.push(classVal); }
-    if (session !== null) { sql += ' AND session = ?'; params.push(session); }
-    if (student_id) { sql += ' AND student_id LIKE ?'; params.push(`%${student_id}%`); }
-    if (name) { sql += ' AND name LIKE ?'; params.push(`%${name}%`); }
-    if (search) {
-        sql += ' AND (name LIKE ? OR student_id LIKE ? OR apaar_id LIKE ? OR father_name LIKE ?)';
-        const like = `%${search}%`;
-        params.push(like, like, like, like);
+    if (classNum !== null) { sql += ' AND ar.class = ?'; params.push(classNum); }
+    if (session !== null) { 
+        sql += buildSessionClause('ar.session', session, params);
     }
+    if (student_id) { sql += ' AND s.student_id LIKE ?'; params.push(`%${student_id}%`); }
+    if (name) { sql += ' AND s.name LIKE ?'; params.push(`%${name}%`); }
 
-    let countSql = 'SELECT COUNT(*) as total FROM Nstudent WHERE 1=1';
+    // Count total
+    const countSql = `
+        SELECT COUNT(DISTINCT s.id) as total 
+        FROM students s
+        LEFT JOIN academic_records ar ON s.id = ar.student_id
+        WHERE 1=1
+        ${classNum !== null ? ' AND ar.class = ?' : ''}
+        ${session !== null ? buildSessionClause('ar.session', session, []) : ''}
+        ${student_id ? ' AND s.student_id LIKE ?' : ''}
+        ${name ? ' AND s.name LIKE ?' : ''}
+    `;
+    
+    // Build count params properly
     const countParams = [];
-    if (classVal !== null) { countSql += ' AND class = ?'; countParams.push(classVal); }
-    if (session !== null) { countSql += ' AND session = ?'; countParams.push(session); }
-    if (student_id) { countSql += ' AND student_id LIKE ?'; countParams.push(`%${student_id}%`); }
-    if (name) { countSql += ' AND name LIKE ?'; countParams.push(`%${name}%`); }
-    if (search) {
-        countSql += ' AND (name LIKE ? OR student_id LIKE ? OR apaar_id LIKE ? OR father_name LIKE ?)';
-        const like = `%${search}%`;
-        countParams.push(like, like, like, like);
+    if (classNum !== null) countParams.push(classNum);
+    if (session !== null) {
+        const variants = getSessionVariants(session);
+        countParams.push(...variants);
     }
-
+    if (student_id) countParams.push(`%${student_id}%`);
+    if (name) countParams.push(`%${name}%`);
+    
     const countResult = await query(countSql, countParams);
     const total = countResult[0]?.total || 0;
 
-    sql += ' ORDER BY name ASC LIMIT ? OFFSET ?';
+    sql += ' GROUP BY s.id, ar.session, ar.class, ar.section, ar.exam_roll_no';
+    sql += ' ORDER BY s.name ASC LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
     const students = await query(sql, params);
@@ -168,17 +232,19 @@ router.get('/students', asyncHandler(async (req, res) => {
     });
 }));
 
-// GET Single Student with marksheets
+// GET Single Student
 router.get('/students/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
 
     const students = await query(`
         SELECT
-            id, student_id, apaar_id, name, father_name, mother_name,
-            dob, student_photo_url AS photo, class, session,
-            roll_number AS exam_roll_no, email_id, mobile_number
-        FROM Nstudent
-        WHERE student_id = ?
+            s.id, s.student_id, s.apaar_id, s.name, s.father_name,
+            s.mother_name, s.dob, s.photo,
+            ar.session, ar.class, ar.section, ar.exam_roll_no
+        FROM students s
+        LEFT JOIN academic_records ar ON s.id = ar.student_id
+        WHERE s.student_id = ?
+        ORDER BY ar.session DESC
         LIMIT 1
     `, [studentId]);
 
@@ -186,59 +252,203 @@ router.get('/students/:studentId', asyncHandler(async (req, res) => {
         return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    const student = students[0];
-
+    // ✅ UPDATED: Added exam_session, obtained_marks, max_marks
     const marksheets = await query(`
         SELECT
-            id, session, exam_session, class, exam_type,
-            obtained_marks, max_marks,
-            cloudinary_url, is_published, declaration_date,
-            uploaded_at, updated_at,
-            original_filename, file_size
-        FROM marksheets
-        WHERE nstudent_id = ?
-        ORDER BY uploaded_at DESC
-    `, [student.id]);
+            m.id, m.session, m.exam_session, m.class, m.exam_type,
+            m.obtained_marks, m.max_marks,
+            m.cloudinary_url, m.is_published, m.uploaded_at, m.updated_at,
+            m.original_filename, m.file_size
+        FROM marksheets m
+        WHERE m.student_id = ?
+        ORDER BY m.session DESC, m.exam_type
+    `, [students[0].id]);
 
     res.json({
         success: true,
-        data: { student, marksheets }
+        data: { student: students[0], marksheets }
     });
 }));
 
+// CREATE Student - ✅ PHOTO FIXED
+router.post('/students', asyncHandler(async (req, res) => {
+    const {
+        student_id, apaar_id, name, father_name, mother_name,
+        dob, photo, section, exam_roll_no
+    } = req.body;
+
+    const session = normalizeSession(req.body.session);
+    const classNum = normalizeClass(req.body.class, { required: true });
+
+    if (!student_id || !String(student_id).trim()) {
+        return res.status(400).json({ success: false, message: 'Student ID is required' });
+    }
+    if (!name || !String(name).trim()) {
+        return res.status(400).json({ success: false, message: 'Name is required' });
+    }
+    if (!session) {
+        return res.status(400).json({ success: false, message: 'Session is required' });
+    }
+
+    // Check existing
+    const existing = await query('SELECT id FROM students WHERE student_id = ?', [student_id]);
+    if (existing.length > 0) {
+        return res.status(409).json({ success: false, message: 'Student ID already exists' });
+    }
+
+    // ✅ PHOTO: Handle base64 or null
+    let photoData = null;
+    if (photo) {
+        if (typeof photo === 'string' && photo.startsWith('data:image')) {
+            photoData = photo;
+            console.log(`📸 Photo received: Base64 (${photo.length} chars)`);
+        } else if (typeof photo === 'string' && photo.length > 100) {
+            photoData = photo;
+            console.log(`📸 Photo received: String (${photo.length} chars)`);
+        } else {
+            console.log('📸 Photo not provided or too small');
+        }
+    }
+
+    // Insert student with photo
+    const studentResult = await query(`
+        INSERT INTO students (student_id, apaar_id, name, father_name, mother_name, dob, photo)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [student_id, apaar_id || null, name, father_name || null, mother_name || null, dob || null, photoData]);
+
+    const studentDbId = studentResult.insertId;
+
+    // Insert academic record
+    await query(`
+        INSERT INTO academic_records (student_id, session, class, section, exam_roll_no)
+        VALUES (?, ?, ?, ?, ?)
+    `, [studentDbId, session, classNum, section || null, exam_roll_no || null]);
+
+    res.status(201).json({
+        success: true,
+        message: 'Student created successfully',
+        data: { student_id, id: studentDbId }
+    });
+}));
+
+// UPDATE Student - ✅ PHOTO FIXED
+router.put('/students/:studentId', asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+    const { apaar_id, name, father_name, mother_name, dob, photo, section, exam_roll_no } = req.body;
+    const session = normalizeSession(req.body.session);
+    const classNum = normalizeClass(req.body.class);
+
+    const students = await query('SELECT id, photo FROM students WHERE student_id = ?', [studentId]);
+    if (students.length === 0) {
+        return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    const studentDbId = students[0].id;
+
+    // ✅ PHOTO: Handle base64, URL, or keep existing
+    let photoData = students[0].photo || null;
+    
+    if (photo !== undefined && photo !== null) {
+        if (photo === '') {
+            photoData = null;
+        } else if (typeof photo === 'string' && (photo.startsWith('data:image') || photo.startsWith('http'))) {
+            photoData = photo;
+            console.log(`📸 Photo updated: ${photo.length} chars`);
+        } else if (typeof photo === 'string' && photo.length > 100) {
+            photoData = photo;
+            console.log(`📸 Photo updated: ${photo.length} chars`);
+        }
+    }
+
+    // Update student with photo
+    await query(`
+        UPDATE students
+        SET apaar_id = ?, name = ?, father_name = ?, mother_name = ?, dob = ?, photo = ?
+        WHERE student_id = ?
+    `, [apaar_id || null, name, father_name || null, mother_name || null, dob || null, photoData, studentId]);
+
+    // Update academic record
+    if (session !== null && classNum !== null) {
+        const existingAr = await query(
+            'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
+            [studentDbId, session, classNum]
+        );
+        if (existingAr.length > 0) {
+            await query(
+                'UPDATE academic_records SET section = ?, exam_roll_no = ? WHERE id = ?',
+                [section || null, exam_roll_no || null, existingAr[0].id]
+            );
+        } else {
+            await query(
+                'INSERT INTO academic_records (student_id, session, class, section, exam_roll_no) VALUES (?, ?, ?, ?, ?)',
+                [studentDbId, session, classNum, section || null, exam_roll_no || null]
+            );
+        }
+    }
+
+    res.json({ success: true, message: 'Student updated successfully' });
+}));
+
+// DELETE Student
+router.delete('/students/:studentId', asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+
+    const students = await query('SELECT id FROM students WHERE student_id = ?', [studentId]);
+    if (students.length === 0) {
+        return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    const marksheets = await query(
+        'SELECT cloudinary_public_id FROM marksheets WHERE student_id = ?',
+        [students[0].id]
+    );
+
+    await query('DELETE FROM students WHERE student_id = ?', [studentId]);
+
+    for (const m of marksheets) {
+        if (m.cloudinary_public_id) {
+            try {
+                await cloudinary.uploader.destroy(m.cloudinary_public_id, { resource_type: 'raw' });
+            } catch (err) {
+                console.error('Cloudinary cleanup error:', err.message);
+            }
+        }
+    }
+
+    res.json({ success: true, message: 'Student deleted successfully' });
+}));
+
 // SEARCH Student
-router.get('/students/search/:query', asyncHandler(async (req, res) => {
-    const searchQuery = req.params.query;
+router.get('/students/search/:studentId', asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
 
     const students = await query(`
         SELECT
-            id, student_id, apaar_id, name, father_name, mother_name,
-            dob, student_photo_url AS photo, class, session,
-            roll_number AS exam_roll_no, email_id, mobile_number
-        FROM Nstudent
-        WHERE student_id = ? OR apaar_id = ?
-        LIMIT 1
-    `, [searchQuery, searchQuery]);
+            s.id, s.student_id, s.apaar_id, s.name, s.father_name,
+            s.mother_name, s.dob, s.photo,
+            ar.session, ar.class, ar.section, ar.exam_roll_no
+        FROM students s
+        LEFT JOIN academic_records ar ON s.id = ar.student_id
+        WHERE s.student_id = ?
+    `, [studentId]);
 
     if (students.length === 0) {
         return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    const student = students[0];
-
+    // ✅ UPDATED: Added obtained_marks, max_marks
     const marksheets = await query(`
         SELECT
-            id, session, exam_session, class, exam_type,
-            obtained_marks, max_marks,
-            cloudinary_url, is_published, declaration_date, uploaded_at
-        FROM marksheets
-        WHERE nstudent_id = ?
-        ORDER BY uploaded_at DESC
-    `, [student.id]);
+            m.id, m.session, m.exam_session, m.class, m.exam_type,
+            m.obtained_marks, m.max_marks,
+            m.cloudinary_url, m.is_published, m.uploaded_at
+        FROM marksheets m
+        WHERE m.student_id = ?
+        ORDER BY m.session DESC, m.exam_type
+    `, [students[0].id]);
 
     res.json({
         success: true,
-        data: { student, marksheets }
+        data: { student: students[0], marksheets }
     });
 }));
 
@@ -250,35 +460,38 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
     const classId = normalizeClass(req.params.classId, { required: true });
     const session = normalizeSession(req.query.session);
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const offset = (page - 1) * limit;
 
     const baseParams = [classId];
     let sessionClause = '';
     if (session !== null) {
-        sessionClause = ' AND s.session = ?';
-        baseParams.push(session);
+        sessionClause = buildSessionClause('ar.session', session, baseParams);
     }
 
-    const countResult = await query(
-        `SELECT COUNT(*) as total FROM Nstudent s WHERE s.class = ? ${sessionClause.replace('s.session', 'session')}`,
-        baseParams
-    );
+    const countResult = await query(`
+        SELECT COUNT(DISTINCT s.id) as total
+        FROM students s
+        JOIN academic_records ar ON s.id = ar.student_id
+        WHERE ar.class = ? ${sessionClause}
+    `, baseParams);
     const total = countResult[0]?.total || 0;
 
     const sql = `
         SELECT
             s.id, s.student_id, s.apaar_id, s.name, s.father_name,
-            s.mother_name, s.dob, s.student_photo_url AS photo,
-            s.class, s.session, s.roll_number AS exam_roll_no,
+            s.mother_name, s.dob, s.photo,
+            ar.session, ar.class, ar.section, ar.exam_roll_no,
             COUNT(DISTINCT m.id) as marksheet_count,
-            COALESCE(SUM(CASE WHEN m.is_published = 1 THEN 1 ELSE 0 END), 0) as published_count
-        FROM Nstudent s
-        LEFT JOIN marksheets m ON s.id = m.nstudent_id
-        WHERE s.class = ? ${sessionClause}
-        GROUP BY s.id, s.student_id, s.apaar_id, s.name, s.father_name,
-                 s.mother_name, s.dob, s.student_photo_url, s.class,
-                 s.session, s.roll_number
+            SUM(CASE WHEN m.is_published = 1 THEN 1 ELSE 0 END) as published_count
+        FROM students s
+        JOIN academic_records ar ON s.id = ar.student_id
+        LEFT JOIN marksheets m ON s.id = m.student_id AND m.session = ar.session AND m.class = ar.class
+        WHERE ar.class = ? ${sessionClause}
+        GROUP BY
+            s.id, s.student_id, s.apaar_id, s.name, s.father_name,
+            s.mother_name, s.dob, s.photo,
+            ar.session, ar.class, ar.section, ar.exam_roll_no
         ORDER BY s.name ASC
         LIMIT ? OFFSET ?
     `;
@@ -293,10 +506,10 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
 }));
 
 // ================================================================
-//  SECTION 3: MARKSHEET MANAGEMENT
+//  SECTION 3: MARKSHEET MANAGEMENT (UPDATED WITH exam_session, obtained_marks, max_marks)
 // ================================================================
 
-// Upload marksheet
+// ✅ Upload marksheet - Now accepts exam_session, obtained_marks, max_marks
 router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) => {
     const student_id = (req.body.student_id || '').trim();
     const session = normalizeSession(req.body.session);
@@ -306,31 +519,58 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     const obtained_marks = req.body.obtained_marks || null;
     const max_marks = req.body.max_marks || null;
 
-    const cleanupFile = async () => {
+    if (!student_id) {
         if (req.file && req.file.filename) {
-            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch (e) {}
+            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch(e) {}
         }
-    };
-
-    if (!student_id) { await cleanupFile(); return res.status(400).json({ success: false, message: 'Student ID is required' }); }
-    if (!session) { await cleanupFile(); return res.status(400).json({ success: false, message: 'Session is required' }); }
-    if (!req.file) { return res.status(400).json({ success: false, message: 'PDF file is required' }); }
-
-    console.log(`📝 Upload: Student=${student_id}, Session=${session}, Class=${classNum}, Exam=${exam_type}`);
-
-    const students = await query('SELECT id FROM Nstudent WHERE student_id = ?', [student_id]);
-    if (students.length === 0) {
-        await cleanupFile();
-        return res.status(404).json({ success: false, message: 'Student not found in Nstudent table' });
+        return res.status(400).json({ success: false, message: 'Student ID is required' });
     }
-    const nstudentId = students[0].id;
+    if (!session) {
+        if (req.file && req.file.filename) {
+            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch(e) {}
+        }
+        return res.status(400).json({ success: false, message: 'Session is required' });
+    }
+    if (!req.file) {
+        return res.status(400).json({ success: false, message: 'PDF file is required' });
+    }
+
+    console.log(`📝 Upload attempt: Student=${student_id}, Session=${session}, Class=${classNum}, Exam=${exam_type}, ExamSession=${exam_session || 'Not provided'}, ObtainedMarks=${obtained_marks || 'Not provided'}, MaxMarks=${max_marks || 'Not provided'}`);
+
+    const students = await query('SELECT id FROM students WHERE student_id = ?', [student_id]);
+    if (students.length === 0) {
+        if (req.file && req.file.filename) {
+            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch(e) {}
+        }
+        return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    const studentDbId = students[0].id;
+
+    let academicRecords = await query(
+        'SELECT id FROM academic_records WHERE student_id = ? AND session = ? AND class = ?',
+        [studentDbId, session, classNum]
+    );
+    let academicRecordId;
+    if (academicRecords.length === 0) {
+        const result = await query(
+            'INSERT INTO academic_records (student_id, session, class) VALUES (?, ?, ?)',
+            [studentDbId, session, classNum]
+        );
+        academicRecordId = result.insertId;
+        console.log(`✅ New academic record created: ID=${academicRecordId}`);
+    } else {
+        academicRecordId = academicRecords[0].id;
+        console.log(`✅ Existing academic record found: ID=${academicRecordId}`);
+    }
 
     const existing = await query(
-        'SELECT id FROM marksheets WHERE nstudent_id = ? AND session = ? AND class = ? AND exam_type = ?',
-        [nstudentId, session, classNum, exam_type]
+        'SELECT id FROM marksheets WHERE student_id = ? AND session = ? AND class = ? AND exam_type = ?',
+        [studentDbId, session, classNum, exam_type]
     );
     if (existing.length > 0) {
-        await cleanupFile();
+        if (req.file && req.file.filename) {
+            try { await cloudinary.uploader.destroy(req.file.filename, { resource_type: 'raw' }); } catch(e) {}
+        }
         return res.status(409).json({
             success: false,
             message: 'Marksheet already exists for this combination'
@@ -344,32 +584,37 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
         file_size: req.file.size
     };
 
+    // ✅ Insert with exam_session, obtained_marks, max_marks
     const insertResult = await query(`
         INSERT INTO marksheets (
-            nstudent_id, session, class, exam_type,
+            student_id, academic_record_id, session, class, exam_type, 
             exam_session, obtained_marks, max_marks,
             cloudinary_public_id, cloudinary_url, original_filename, file_size,
             is_published
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-        nstudentId, session, classNum, exam_type,
+        studentDbId, academicRecordId, session, classNum, exam_type,
         exam_session || null, obtained_marks, max_marks,
         cloudinaryData.public_id, cloudinaryData.secure_url,
-        cloudinaryData.original_filename, cloudinaryData.file_size
+        cloudinaryData.original_filename, cloudinaryData.file_size,
+        0
     ]);
 
     res.status(201).json({
         success: true,
         message: 'Marksheet uploaded successfully (Unpublished)',
-        data: {
-            cloudinary_url: cloudinaryData.secure_url,
+        data: { 
+            cloudinary_url: cloudinaryData.secure_url, 
             status: 'unpublished',
-            marksheet_id: insertResult.insertId
+            marksheet_id: insertResult.insertId,
+            exam_session: exam_session || null,
+            obtained_marks: obtained_marks,
+            max_marks: max_marks
         }
     });
 }));
 
-// Get marksheets list
+// ✅ Get marksheets - Now returns exam_session, obtained_marks, max_marks
 router.get('/marksheets', asyncHandler(async (req, res) => {
     const student_id = req.query.student_id;
     const session = normalizeSession(req.query.session);
@@ -384,18 +629,21 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
         SELECT
             m.id, m.session, m.exam_session, m.class, m.exam_type,
             m.obtained_marks, m.max_marks,
-            m.cloudinary_url, m.is_published, m.declaration_date,
-            m.uploaded_at, m.updated_at,
+            m.cloudinary_url, m.is_published, m.uploaded_at, m.updated_at,
             m.original_filename, m.file_size,
-            s.student_id, s.name, s.father_name, s.roll_number AS exam_roll_no
+            s.student_id, s.name, s.father_name,
+            ar.exam_roll_no
         FROM marksheets m
-        JOIN Nstudent s ON m.nstudent_id = s.id
+        JOIN students s ON m.student_id = s.id
+        LEFT JOIN academic_records ar ON m.academic_record_id = ar.id
         WHERE 1=1
     `;
     const params = [];
 
     if (student_id) { sql += ' AND s.student_id LIKE ?'; params.push(`%${student_id}%`); }
-    if (session !== null) { sql += ' AND m.session = ?'; params.push(session); }
+    if (session !== null) { 
+        sql += buildSessionClause('m.session', session, params);
+    }
     if (classNum !== null) { sql += ' AND m.class = ?'; params.push(classNum); }
     if (exam_type !== null) { sql += ' AND m.exam_type = ?'; params.push(exam_type); }
     if (is_published !== undefined && is_published !== '') {
@@ -403,17 +651,23 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
         params.push(is_published === 'true' || is_published === '1' ? 1 : 0);
     }
 
-    let countSql = `SELECT COUNT(*) as total FROM marksheets m JOIN Nstudent s ON m.nstudent_id = s.id WHERE 1=1`;
+    // Count total - build properly
     const countParams = [];
+    let countSql = `SELECT COUNT(*) as total FROM marksheets m JOIN students s ON m.student_id = s.id LEFT JOIN academic_records ar ON m.academic_record_id = ar.id WHERE 1=1`;
+    
     if (student_id) { countSql += ' AND s.student_id LIKE ?'; countParams.push(`%${student_id}%`); }
-    if (session !== null) { countSql += ' AND m.session = ?'; countParams.push(session); }
+    if (session !== null) { 
+        const variants = getSessionVariants(session);
+        countSql += ` AND m.session IN (${variants.map(() => '?').join(',')})`;
+        countParams.push(...variants);
+    }
     if (classNum !== null) { countSql += ' AND m.class = ?'; countParams.push(classNum); }
     if (exam_type !== null) { countSql += ' AND m.exam_type = ?'; countParams.push(exam_type); }
     if (is_published !== undefined && is_published !== '') {
         countSql += ' AND m.is_published = ?';
         countParams.push(is_published === 'true' || is_published === '1' ? 1 : 0);
     }
-
+    
     const countResult = await query(countSql, countParams);
     const total = countResult[0]?.total || 0;
 
@@ -429,7 +683,7 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
     });
 }));
 
-// Get single marksheet
+// ✅ Get single marksheet - Now returns exam_session, obtained_marks, max_marks
 router.get('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -440,12 +694,13 @@ router.get('/marksheets/:id', asyncHandler(async (req, res) => {
         SELECT
             m.id, m.session, m.exam_session, m.class, m.exam_type,
             m.obtained_marks, m.max_marks,
-            m.cloudinary_url, m.is_published, m.declaration_date,
-            m.uploaded_at, m.original_filename, m.file_size,
+            m.cloudinary_url, m.is_published, m.uploaded_at,
+            m.original_filename, m.file_size,
             s.student_id, s.name, s.father_name, s.mother_name, s.dob,
-            s.roll_number AS exam_roll_no, s.student_photo_url AS photo
+            ar.exam_roll_no
         FROM marksheets m
-        JOIN Nstudent s ON m.nstudent_id = s.id
+        JOIN students s ON m.student_id = s.id
+        LEFT JOIN academic_records ar ON m.academic_record_id = ar.id
         WHERE m.id = ?
     `, [id]);
 
@@ -455,7 +710,6 @@ router.get('/marksheets/:id', asyncHandler(async (req, res) => {
     res.json({ success: true, data: marksheets[0] });
 }));
 
-// Replace marksheet file
 router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -497,7 +751,6 @@ router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res
     res.json({ success: true, message: 'Marksheet replaced successfully', data: { cloudinary_url: cloudinaryData.secure_url } });
 }));
 
-// Delete marksheet
 router.delete('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -572,6 +825,7 @@ router.post('/marksheets/:id/unpublish', asyncHandler(async (req, res) => {
     res.json({ success: true, message: 'Marksheet unpublished successfully' });
 }));
 
+// Bulk publish
 router.post('/marksheets/bulk-publish', asyncHandler(async (req, res) => {
     const { ids, declaration_date } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -617,7 +871,7 @@ router.get('/public/classes', asyncHandler(async (req, res) => {
         WHERE is_published = 1
         GROUP BY class
         HAVING COUNT(*) > 0
-        ORDER BY CAST(class AS UNSIGNED), class
+        ORDER BY class
     `);
 
     const formattedData = classes.map((c) => ({
@@ -632,6 +886,7 @@ router.get('/public/classes', asyncHandler(async (req, res) => {
     res.json({ success: true, data: formattedData });
 }));
 
+// ✅ Public results - Supports session variants
 router.get('/public/:session/:class', asyncHandler(async (req, res) => {
     const session = normalizeSession(req.params.session);
     const classNum = normalizeClass(req.params.class, { required: true });
@@ -639,16 +894,21 @@ router.get('/public/:session/:class', asyncHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: 'Session is required' });
     }
 
+    // Get all session variants
+    const sessionVariants = getSessionVariants(session);
+    const placeholders = sessionVariants.map(() => '?').join(',');
+
     const results = await query(`
         SELECT
             m.id, m.exam_type, m.obtained_marks, m.max_marks, m.cloudinary_url,
             s.student_id, s.name, s.father_name, s.mother_name,
-            s.roll_number AS exam_roll_no
+            ar.exam_roll_no
         FROM marksheets m
-        JOIN Nstudent s ON m.nstudent_id = s.id
-        WHERE m.session = ? AND m.class = ? AND m.is_published = 1
+        JOIN students s ON m.student_id = s.id
+        LEFT JOIN academic_records ar ON m.academic_record_id = ar.id
+        WHERE m.session IN (${placeholders}) AND m.class = ? AND m.is_published = 1
         ORDER BY s.name
-    `, [session, classNum]);
+    `, [...sessionVariants, classNum]);
 
     res.json({ success: true, data: results });
 }));
@@ -663,64 +923,82 @@ router.post('/public/search', asyncHandler(async (req, res) => {
 
     const students = await query(`
         SELECT
-            id, student_id, apaar_id, name, father_name, mother_name,
-            dob, student_photo_url AS photo, class, session,
-            roll_number AS exam_roll_no
-        FROM Nstudent
-        WHERE student_id = ? AND DATE(dob) = DATE(?)
+            s.id, s.student_id, s.apaar_id, s.name, s.father_name,
+            s.mother_name, s.dob, s.photo,
+            ar.session, ar.class, ar.section, ar.exam_roll_no
+        FROM students s
+        LEFT JOIN academic_records ar ON s.id = ar.student_id
+        WHERE s.student_id = ? AND DATE(s.dob) = DATE(?)
     `, [student_id, dob]);
 
     if (students.length === 0) {
         return res.status(404).json({ success: false, message: 'No student found with the provided Student ID and DOB' });
     }
 
-    const student = students[0];
-
+    // ✅ UPDATED: Added obtained_marks, max_marks
     const marksheets = await query(`
-        SELECT id, session, exam_session, class, exam_type,
-               obtained_marks, max_marks, cloudinary_url,
-               declaration_date, uploaded_at
+        SELECT id, session, exam_session, class, exam_type, obtained_marks, max_marks, cloudinary_url, uploaded_at
         FROM marksheets
-        WHERE nstudent_id = ? AND is_published = 1
-        ORDER BY session DESC, uploaded_at DESC
-    `, [student.id]);
+        WHERE student_id = ? AND is_published = 1
+        ORDER BY session DESC, exam_type
+    `, [students[0].id]);
 
-    res.json({ success: true, data: { student, marksheets } });
+    res.json({ success: true, data: { student: students[0], marksheets } });
 }));
 
-// Public marksheet view
+// ================================================================
+//  PUBLIC MARKSHEET VIEW
+// ================================================================
+
 router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
+    
     if (isNaN(id) || id <= 0) {
-        return res.status(400).json({ success: false, message: 'Invalid marksheet ID' });
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid marksheet ID' 
+        });
     }
 
     const marksheets = await query(
-        `SELECT cloudinary_url FROM marksheets WHERE id = ? AND is_published = 1`,
+        `SELECT cloudinary_url, is_published 
+         FROM marksheets 
+         WHERE id = ? AND is_published = 1`,
         [id]
     );
-
+    
     if (marksheets.length === 0) {
-        return res.status(404).json({ success: false, message: 'Marksheet not found or not published' });
+        return res.status(404).json({ 
+            success: false, 
+            message: 'Marksheet not found or not published' 
+        });
     }
-
+    
     return res.redirect(marksheets[0].cloudinary_url);
 }));
 
-// Public marksheet download
 router.get('/public/marksheet/:id/download', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
+    
     if (isNaN(id) || id <= 0) {
-        return res.status(400).json({ success: false, message: 'Invalid marksheet ID' });
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid marksheet ID' 
+        });
     }
 
     const marksheets = await query(
-        `SELECT cloudinary_public_id, original_filename FROM marksheets WHERE id = ? AND is_published = 1`,
+        `SELECT cloudinary_public_id, original_filename, is_published 
+         FROM marksheets 
+         WHERE id = ? AND is_published = 1`,
         [id]
     );
-
+    
     if (marksheets.length === 0) {
-        return res.status(404).json({ success: false, message: 'Marksheet not found or not published' });
+        return res.status(404).json({ 
+            success: false, 
+            message: 'Marksheet not found or not published' 
+        });
     }
 
     const downloadUrl = cloudinary.url(marksheets[0].cloudinary_public_id, {
@@ -733,29 +1011,29 @@ router.get('/public/marksheet/:id/download', asyncHandler(async (req, res) => {
 }));
 
 // ================================================================
-//  SECTION 6: ADMIN DASHBOARD STATS
+//  SECTION 6: ADMIN DASHBOARD STATISTICS
 // ================================================================
 
 router.get('/dashboard/stats', asyncHandler(async (req, res) => {
     const overallStats = await query(`
         SELECT
-            (SELECT COUNT(*) FROM Nstudent) as total_students,
+            COUNT(DISTINCT student_id) as total_students,
             COUNT(*) as total_marksheets,
-            COALESCE(SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END), 0) as published_results,
-            COALESCE(SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END), 0) as unpublished_results
+            SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END) as published_results,
+            SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) as unpublished_results
         FROM marksheets
     `);
 
     const classStats = await query(`
         SELECT
             class,
-            COUNT(DISTINCT nstudent_id) as students,
+            COUNT(DISTINCT student_id) as students,
             COUNT(*) as marksheets,
-            COALESCE(SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END), 0) as published,
-            COALESCE(SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END), 0) as unpublished
+            SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END) as published,
+            SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) as unpublished
         FROM marksheets
         GROUP BY class
-        ORDER BY CAST(class AS UNSIGNED), class
+        ORDER BY class
     `);
 
     res.json({
