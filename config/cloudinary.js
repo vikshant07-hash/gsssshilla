@@ -110,22 +110,21 @@ const facultyStorage = new CloudinaryStorage({
 // ============================================================
 // STORAGE FOR STUDENT DOCUMENTS  🆕
 // ============================================================
+
 const studentStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: (req, file) => {
-    const isPdf = file.mimetype === "application/pdf";
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
 
     return {
       folder: process.env.CLOUDINARY_STUDENT_FOLDER || "school/students",
-      resource_type: isPdf ? "raw" : "image",
+      resource_type: "auto",   // ✅ Ye change karo (pehle "raw" tha)
       allowed_formats: ["jpg", "jpeg", "png", "webp", "pdf"],
       public_id: `${file.fieldname}-${originalName}-${uniqueSuffix}`
     };
   }
 });
-
 // ============================================================
 // MULTER UPLOAD: SLIDER IMAGES
 // ============================================================
