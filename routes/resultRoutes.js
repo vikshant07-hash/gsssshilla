@@ -117,7 +117,7 @@ const storage = new CloudinaryStorage({
         const session = normalizeSession(req.body.session) || '2026-27';
         const sessionSafe = session.replace(/[^a-zA-Z0-9-]/g, '-');
         const classNum = normalizeClass(req.body.class) || 'default';
-        const studentId = (req.body.student_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
+        const studentId = (req.body.nstudent_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
         const examType = (req.body.exam_type || 'exam').replace(/[^a-zA-Z0-9_-]/g, '-');
         return {
             folder: `gsssshilla/marksheets/${sessionSafe}/class-${classNum}`,
@@ -178,7 +178,7 @@ router.get('/students', asyncHandler(async (req, res) => {
 
     let sql = `
         SELECT
-            s.id, s.student_id, s.apaar_id, s.name, s.father_name,
+            s.id, s.nstudent_id, s.apaar_id, s.name, s.father_name,
             s.mother_name, s.dob, s.photo,
             ar.session, ar.class, ar.section, ar.exam_roll_no
         FROM students s
@@ -213,7 +213,7 @@ router.get('/students', asyncHandler(async (req, res) => {
         const variants = getSessionVariants(session);
         countParams.push(...variants);
     }
-    if (student_id) countParams.push(`%${student_id}%`);
+    if (student_id) countParams.push(`%${nstudent_id}%`);
     if (name) countParams.push(`%${name}%`);
     
     const countResult = await query(countSql, countParams);
