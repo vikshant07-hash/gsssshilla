@@ -1,6 +1,6 @@
 // ================================================================
-//  COMPLETE RESULT MANAGEMENT ROUTES — Linked with Nstudent
-//  Student data comes from Nstudent table (Student Management)
+//  COMPLETE RESULT MANAGEMENT ROUTES
+//  Linked with Nstudent table (Student Management)
 //  Marksheets stored separately with nstudent_id FK
 // ================================================================
 
@@ -112,7 +112,7 @@ function handleUpload(req, res, next) {
 //  SECTION 1: STUDENT MANAGEMENT (from Nstudent)
 // ================================================================
 
-// ✅ GET All Students — from Nstudent table
+// GET All Students
 router.get('/students', asyncHandler(async (req, res) => {
     const classVal = normalizeClass(req.query.class);
     const session = normalizeSession(req.query.session);
@@ -124,7 +124,7 @@ router.get('/students', asyncHandler(async (req, res) => {
     let sql = `
         SELECT
             id, student_id, apaar_id, name, father_name, mother_name,
-            dob, student_photo_url AS photo, class, section, session,
+            dob, student_photo_url AS photo, class, session,
             roll_number AS exam_roll_no, email_id, mobile_number
         FROM Nstudent
         WHERE 1=1
@@ -141,7 +141,6 @@ router.get('/students', asyncHandler(async (req, res) => {
         params.push(like, like, like, like);
     }
 
-    // Count query
     let countSql = 'SELECT COUNT(*) as total FROM Nstudent WHERE 1=1';
     const countParams = [];
     if (classVal !== null) { countSql += ' AND class = ?'; countParams.push(classVal); }
@@ -169,14 +168,14 @@ router.get('/students', asyncHandler(async (req, res) => {
     });
 }));
 
-// ✅ GET Single Student with marksheets
+// GET Single Student with marksheets
 router.get('/students/:studentId', asyncHandler(async (req, res) => {
     const { studentId } = req.params;
 
     const students = await query(`
         SELECT
             id, student_id, apaar_id, name, father_name, mother_name,
-            dob, student_photo_url AS photo, class, section, session,
+            dob, student_photo_url AS photo, class, session,
             roll_number AS exam_roll_no, email_id, mobile_number
         FROM Nstudent
         WHERE student_id = ?
@@ -207,14 +206,14 @@ router.get('/students/:studentId', asyncHandler(async (req, res) => {
     });
 }));
 
-// ✅ SEARCH Student (by ID or APAAR)
+// SEARCH Student
 router.get('/students/search/:query', asyncHandler(async (req, res) => {
-    const { query: searchQuery } = req.params;
+    const searchQuery = req.params.query;
 
     const students = await query(`
         SELECT
             id, student_id, apaar_id, name, father_name, mother_name,
-            dob, student_photo_url AS photo, class, section, session,
+            dob, student_photo_url AS photo, class, session,
             roll_number AS exam_roll_no, email_id, mobile_number
         FROM Nstudent
         WHERE student_id = ? OR apaar_id = ?
@@ -257,12 +256,12 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
     const baseParams = [classId];
     let sessionClause = '';
     if (session !== null) {
-        sessionClause = ' AND session = ?';
+        sessionClause = ' AND s.session = ?';
         baseParams.push(session);
     }
 
     const countResult = await query(
-        `SELECT COUNT(*) as total FROM Nstudent WHERE class = ? ${sessionClause}`,
+        `SELECT COUNT(*) as total FROM Nstudent s WHERE s.class = ? ${sessionClause.replace('s.session', 'session')}`,
         baseParams
     );
     const total = countResult[0]?.total || 0;
@@ -271,15 +270,15 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
         SELECT
             s.id, s.student_id, s.apaar_id, s.name, s.father_name,
             s.mother_name, s.dob, s.student_photo_url AS photo,
-            s.class, s.section, s.session, s.roll_number AS exam_roll_no,
+            s.class, s.session, s.roll_number AS exam_roll_no,
             COUNT(DISTINCT m.id) as marksheet_count,
             COALESCE(SUM(CASE WHEN m.is_published = 1 THEN 1 ELSE 0 END), 0) as published_count
         FROM Nstudent s
         LEFT JOIN marksheets m ON s.id = m.nstudent_id
-        WHERE s.class = ? ${sessionClause.replace('session = ?', 's.session = ?')}
+        WHERE s.class = ? ${sessionClause}
         GROUP BY s.id, s.student_id, s.apaar_id, s.name, s.father_name,
                  s.mother_name, s.dob, s.student_photo_url, s.class,
-                 s.section, s.session, s.roll_number
+                 s.session, s.roll_number
         ORDER BY s.name ASC
         LIMIT ? OFFSET ?
     `;
@@ -297,7 +296,7 @@ router.get('/class/:classId/students', asyncHandler(async (req, res) => {
 //  SECTION 3: MARKSHEET MANAGEMENT
 // ================================================================
 
-// ✅ Upload marksheet
+// Upload marksheet
 router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) => {
     const student_id = (req.body.student_id || '').trim();
     const session = normalizeSession(req.body.session);
@@ -319,7 +318,6 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
 
     console.log(`📝 Upload: Student=${student_id}, Session=${session}, Class=${classNum}, Exam=${exam_type}`);
 
-    // ✅ Student lookup from Nstudent
     const students = await query('SELECT id FROM Nstudent WHERE student_id = ?', [student_id]);
     if (students.length === 0) {
         await cleanupFile();
@@ -327,7 +325,6 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     }
     const nstudentId = students[0].id;
 
-    // Check existing
     const existing = await query(
         'SELECT id FROM marksheets WHERE nstudent_id = ? AND session = ? AND class = ? AND exam_type = ?',
         [nstudentId, session, classNum, exam_type]
@@ -372,7 +369,7 @@ router.post('/marksheets/upload', handleUpload, asyncHandler(async (req, res) =>
     });
 }));
 
-// ✅ Get marksheets list
+// Get marksheets list
 router.get('/marksheets', asyncHandler(async (req, res) => {
     const student_id = req.query.student_id;
     const session = normalizeSession(req.query.session);
@@ -406,7 +403,6 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
         params.push(is_published === 'true' || is_published === '1' ? 1 : 0);
     }
 
-    // Count
     let countSql = `SELECT COUNT(*) as total FROM marksheets m JOIN Nstudent s ON m.nstudent_id = s.id WHERE 1=1`;
     const countParams = [];
     if (student_id) { countSql += ' AND s.student_id LIKE ?'; countParams.push(`%${student_id}%`); }
@@ -433,7 +429,7 @@ router.get('/marksheets', asyncHandler(async (req, res) => {
     });
 }));
 
-// ✅ Get single marksheet
+// Get single marksheet
 router.get('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -459,7 +455,7 @@ router.get('/marksheets/:id', asyncHandler(async (req, res) => {
     res.json({ success: true, data: marksheets[0] });
 }));
 
-// ✅ Replace marksheet file
+// Replace marksheet file
 router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -501,7 +497,7 @@ router.put('/marksheets/:id/replace', handleUpload, asyncHandler(async (req, res
     res.json({ success: true, message: 'Marksheet replaced successfully', data: { cloudinary_url: cloudinaryData.secure_url } });
 }));
 
-// ✅ Delete marksheet
+// Delete marksheet
 router.delete('/marksheets/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
@@ -668,7 +664,7 @@ router.post('/public/search', asyncHandler(async (req, res) => {
     const students = await query(`
         SELECT
             id, student_id, apaar_id, name, father_name, mother_name,
-            dob, student_photo_url AS photo, class, section, session,
+            dob, student_photo_url AS photo, class, session,
             roll_number AS exam_roll_no
         FROM Nstudent
         WHERE student_id = ? AND DATE(dob) = DATE(?)
@@ -692,7 +688,7 @@ router.post('/public/search', asyncHandler(async (req, res) => {
     res.json({ success: true, data: { student, marksheets } });
 }));
 
-// Public marksheet view — redirect to Cloudinary
+// Public marksheet view
 router.get('/public/marksheet/:id', asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id) || id <= 0) {
