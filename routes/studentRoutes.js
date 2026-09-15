@@ -240,7 +240,6 @@ const BREVO_SENDER_NAME = "GSSS SHILLA";
 const SCHOOL_LOGO_URL = "https://gsssshilla07.pages.dev/logo(1).png";
 const SCHOOL_WEBSITE = "https://gsssshilla07.pages.dev";
 
-// OTP email (existing)
 async function sendEmailOTP(toEmail, otp, purpose = "verify") {
   if (!BREVO_API_KEY) throw new Error("BREVO_API_KEY not configured");
   const headingText = purpose === "add" ? "Student Registration Verification"
@@ -301,7 +300,7 @@ If you didn't request this, ignore this email.
 }
 
 // ============================================================
-// ✅ REGISTRATION SUCCESS EMAIL (Beautiful Welcome)
+// ✅ REGISTRATION SUCCESS EMAIL
 // ============================================================
 async function sendRegistrationSuccessEmail(student, pdfBuffer) {
   if (!BREVO_API_KEY) {
@@ -332,7 +331,6 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
       Congratulations! Your registration at <b>Govt. Sr. Sec. School Shilla</b> has been completed successfully. We're delighted to welcome you to our school family.
     </p>
 
-    <!-- Student Details Card -->
     <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px solid #c7d2fe; border-radius: 14px; margin-bottom: 24px;">
       <tr><td style="padding: 20px 24px;">
         <p style="margin:0 0 14px; color:#4f46e5; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.2px;">📋 Your Student Details</p>
@@ -346,7 +344,6 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
       </td></tr>
     </table>
 
-    <!-- Login Credentials -->
     <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1.5px solid #f59e0b; border-radius: 14px; margin-bottom: 24px;">
       <tr><td style="padding: 20px 24px;">
         <p style="margin:0 0 14px; color:#92400e; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.2px;">🔐 Your Login Credentials</p>
@@ -365,7 +362,6 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
       </td></tr>
     </table>
 
-    <!-- Login Button -->
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
       <tr><td align="center">
         <a href="${loginUrl}" style="display:inline-block; padding: 16px 48px; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color:#fff; text-decoration:none; border-radius:50px; font-weight:800; font-size:15px; letter-spacing:1px; box-shadow: 0 8px 24px rgba(79,70,229,0.4);">
@@ -374,7 +370,6 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
       </td></tr>
     </table>
 
-    <!-- Attachment Note -->
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4; border:1.5px solid #86efac; border-radius:14px; margin-bottom: 24px;">
       <tr><td style="padding: 16px 20px;">
         <p style="margin:0; color:#166534; font-size:13px; line-height:1.6;">
@@ -383,7 +378,6 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
       </td></tr>
     </table>
 
-    <!-- Help -->
     <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e2e8f0; padding-top:20px;">
       <tr><td>
         <p style="margin:0 0 8px; color:#64748b; font-size:12px; line-height:1.6;">
@@ -437,7 +431,7 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
 }
 
 // ============================================================
-// ✅ WELCOME PDF GENERATOR (Provisional Application Form)
+// ✅ WELCOME PDF GENERATOR
 // ============================================================
 function fetchImageBuffer(url) {
   return new Promise((resolve) => {
@@ -483,9 +477,7 @@ async function generateWelcomePDF(student) {
       const MR = 45;
       const contentW = pageW - ML - MR;
 
-      // ============================================================
-      // WATERMARK
-      // ============================================================
+      // Watermark
       doc.save();
       doc.opacity(0.04);
       doc.fontSize(80).fillColor("#c9972b").font("Helvetica-Bold");
@@ -501,9 +493,7 @@ async function generateWelcomePDF(student) {
         doc.restore();
       }
 
-      // ============================================================
-      // HEADER
-      // ============================================================
+      // Header
       let y = 40;
       if (logoBuf) {
         try {
@@ -526,9 +516,7 @@ async function generateWelcomePDF(student) {
       doc.moveTo(ML, y).lineTo(pageW - MR, y).lineWidth(3).strokeColor("#c9972b").stroke();
       doc.moveTo(ML, y + 3).lineTo(pageW - MR, y + 3).lineWidth(0.5).strokeColor("#0d1b2a").stroke();
 
-      // ============================================================
-      // TITLE BADGE
-      // ============================================================
+      // Title
       y += 20;
       const titleText = "PROVISIONAL REGISTRATION FORM";
       doc.font("Helvetica-Bold").fontSize(13);
@@ -541,23 +529,7 @@ async function generateWelcomePDF(student) {
 
       y += 40;
 
-      // ============================================================
-      // PERSONAL INFO TABLE
-      // ============================================================
-      const drawRow = (label, value, isLast) => {
-        const rowH = 22;
-        doc.rect(ML, y, 160, rowH).fillColor("#fef8ed").fill();
-        doc.rect(ML, y, 160, rowH).lineWidth(0.5).strokeColor("#c9972b").stroke();
-        doc.rect(ML + 160, y, contentW - 160, rowH).lineWidth(0.5).strokeColor("#94a3b8").stroke();
-
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
-           .text(label, ML + 8, y + 7, { width: 145 });
-        doc.font("Helvetica").fontSize(10.5).fillColor("#1a2332")
-           .text(String(value || "—"), ML + 168, y + 7, { width: contentW - 176, lineBreak: false });
-        y += rowH;
-      };
-
-      // Photo box (right side)
+      // Photo box
       const photoBoxW = 90, photoBoxH = 105;
       const photoBoxX = pageW - MR - photoBoxW;
       const photoBoxY = y;
@@ -595,9 +567,6 @@ async function generateWelcomePDF(student) {
       y = photoBoxY + photoBoxH + 8;
       if (y < afterInfoY) y = afterInfoY;
 
-      // ============================================================
-      // MORE DETAILS
-      // ============================================================
       y += 8;
       const sectionTitle = (text) => {
         doc.font("Helvetica-Bold").fontSize(12).fillColor("#0d1b2a").text(text, ML, y);
@@ -605,7 +574,6 @@ async function generateWelcomePDF(student) {
         y += 22;
       };
 
-      sectionTitle("Personal Details");
       const drawFullRow = (label, value) => {
         const rowH = 20;
         doc.rect(ML, y, 160, rowH).fillColor("#fef8ed").fill();
@@ -616,6 +584,7 @@ async function generateWelcomePDF(student) {
         y += rowH;
       };
 
+      sectionTitle("Personal Details");
       drawFullRow("Mother's Name", s.mother_name);
       drawFullRow("Date of Birth", s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) : "—");
       drawFullRow("Gender", s.gender);
@@ -642,9 +611,7 @@ async function generateWelcomePDF(student) {
       drawFullRow("State", s.state);
       drawFullRow("Pincode", s.pincode);
 
-      // ============================================================
-      // LOGIN CREDENTIALS BOX
-      // ============================================================
+      // Login credentials box
       y += 12;
       const credBoxH = 95;
       if (y + credBoxH < pageH - 150) {
@@ -652,7 +619,7 @@ async function generateWelcomePDF(student) {
         doc.roundedRect(ML, y, contentW, credBoxH, 8).lineWidth(1.5).strokeColor("#f59e0b").stroke();
 
         doc.font("Helvetica-Bold").fontSize(11).fillColor("#92400e")
-           .text("🔐 LOGIN CREDENTIALS — KEEP SAFE", ML + 14, y + 12);
+           .text("LOGIN CREDENTIALS — KEEP SAFE", ML + 14, y + 12);
         doc.font("Helvetica").fontSize(9.5).fillColor("#78350f")
            .text("Use these details to login to your student portal:", ML + 14, y + 30);
 
@@ -671,9 +638,7 @@ async function generateWelcomePDF(student) {
         y += credBoxH + 12;
       }
 
-      // ============================================================
-      // SIGNATURE
-      // ============================================================
+      // Signature
       if (y < pageH - 130) {
         const sigW = 180;
         const sigX = pageW - MR - sigW;
@@ -690,9 +655,6 @@ async function generateWelcomePDF(student) {
            .text("Govt. Sr. Sec. School Shilla", sigX, lineY + 20, { width: sigW, align: "center" });
       }
 
-      // ============================================================
-      // FOOTER
-      // ============================================================
       doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
          .text(`Generated: ${new Date().toLocaleString("en-IN")} · GSSS Shilla Official Document`, ML, pageH - 40, {
            width: contentW, align: "center", characterSpacing: 0.5
@@ -961,7 +923,54 @@ router.post("/verify-aadhaar", async (req, res) => {
 });
 
 // ============================================================
-// GET ALL
+// ✅ PDF PROXY — Cloudinary /raw/ PDF view fix
+// ⚠️ IMPORTANT: Ye route /:id se PEHLE hona chahiye
+// ============================================================
+router.get("/proxy-pdf", async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ success: false, message: "URL required" });
+    if (!url.includes("res.cloudinary.com")) return res.status(400).json({ success: false, message: "Only Cloudinary URLs allowed" });
+
+    const client = url.startsWith("https") ? https : http;
+    client.get(url, (remoteRes) => {
+      if ([301, 302, 307, 308].includes(remoteRes.statusCode) && remoteRes.headers.location) {
+        remoteRes.resume();
+        return res.redirect(remoteRes.headers.location);
+      }
+      if (remoteRes.statusCode !== 200) {
+        remoteRes.resume();
+        return res.status(remoteRes.statusCode).json({
+          success: false,
+          message: `Cloudinary returned ${remoteRes.statusCode}`
+        });
+      }
+
+      let contentType = remoteRes.headers["content-type"] || "";
+      const urlLower = url.toLowerCase();
+      if (urlLower.endsWith(".pdf") || contentType.includes("pdf")) {
+        contentType = "application/pdf";
+      } else if (!contentType) {
+        contentType = "application/octet-stream";
+      }
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", "inline");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      remoteRes.pipe(res);
+    }).on("error", (err) => {
+      console.error("❌ Proxy PDF error:", err.message);
+      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+    });
+  } catch (err) {
+    console.error("❌ Proxy catch error:", err.message);
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ GET ALL
 // ============================================================
 router.get("/", async (req, res) => {
   try {
@@ -1000,7 +1009,7 @@ router.get("/", async (req, res) => {
 });
 
 // ============================================================
-// SESSION
+// ✅ SESSION
 // ============================================================
 router.get("/current-session", async (req, res) => {
   try {
@@ -1021,7 +1030,7 @@ router.post("/current-session", async (req, res) => {
 });
 
 // ============================================================
-// GROUP BY CLASS
+// ✅ GROUP BY CLASS
 // ============================================================
 router.get("/by-class", async (req, res) => {
   try {
@@ -1040,7 +1049,7 @@ router.get("/by-class", async (req, res) => {
 });
 
 // ============================================================
-// PROMOTE
+// ✅ PROMOTE
 // ============================================================
 router.post("/promote", async (req, res) => {
   try {
@@ -1089,7 +1098,7 @@ router.post("/promote-session", async (req, res) => {
 });
 
 // ============================================================
-// SEARCH
+// ✅ SEARCH
 // ============================================================
 router.get("/search/:query", async (req, res) => {
   try {
@@ -1105,7 +1114,7 @@ router.get("/search/:query", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADD STUDENT (with welcome email)
+// ✅ ADD STUDENT
 // ============================================================
 router.post(
   "/add",
@@ -1132,7 +1141,6 @@ router.post(
         return res.status(400).json({ success: false, message: "Email verification expired. Please verify again.", code: "OTP_EXPIRED" });
       }
 
-      // Uniqueness
       const emailDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ?`, [email]);
       if (emailDup.length >= EMAIL_MAX_STUDENTS) {
         return res.status(409).json({ success: false, message: `Email already registered with ${emailDup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
@@ -1150,7 +1158,6 @@ router.post(
         }
       }
 
-      // Required docs
       const requiredDocs = getRequiredDocs(category);
       const missing = [];
       for (const docName of requiredDocs) {
@@ -1162,7 +1169,6 @@ router.post(
         return res.status(400).json({ success: false, message: `Missing required documents: ${missing.join(", ")}`, category, requiredDocuments: requiredDocs });
       }
 
-      // Drop caste cert for General
       const files = req.files ? { ...req.files } : {};
       if (!CASTE_REQUIRED_CATEGORIES.includes(category) && files.casteCertificate) {
         const df = files.casteCertificate[0];
@@ -1198,7 +1204,6 @@ router.post(
 
       const savedStudent = (await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]))[0];
 
-      // ✅ Send welcome email async (don't block response)
       (async () => {
         try {
           console.log(`📧 Generating welcome PDF for ${savedStudent.name}...`);
@@ -1226,7 +1231,7 @@ router.post(
 );
 
 // ============================================================
-// GET SINGLE
+// ✅ GET SINGLE
 // ============================================================
 router.get("/:id", async (req, res) => {
   try {
@@ -1240,7 +1245,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // ============================================================
-// UPDATE
+// ✅ UPDATE
 // ============================================================
 router.put(
   "/:id",
@@ -1334,7 +1339,7 @@ router.put(
 );
 
 // ============================================================
-// DELETE
+// ✅ DELETE
 // ============================================================
 router.delete("/:id", async (req, res) => {
   try {
@@ -1353,33 +1358,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ============================================================
-// PDF PROXY (Cloudinary PDF access fix)
-// ============================================================
-router.get("/proxy-pdf", async (req, res) => {
-  try {
-    const { url } = req.query;
-    if (!url) return res.status(400).json({ success: false, message: "URL required" });
-    if (!url.includes("res.cloudinary.com")) return res.status(400).json({ success: false, message: "Only Cloudinary URLs allowed" });
-
-    const client = url.startsWith("https") ? https : http;
-    client.get(url, (remoteRes) => {
-      if (remoteRes.statusCode !== 200) {
-        return res.status(remoteRes.statusCode).json({ success: false, message: `Cloudinary error: ${remoteRes.statusCode}` });
-      }
-      res.setHeader("Content-Type", remoteRes.headers["content-type"] || "application/pdf");
-      res.setHeader("Content-Disposition", "inline");
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      remoteRes.pipe(res);
-    }).on("error", (err) => {
-      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
-    });
-  } catch (err) {
-    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// PDF
+// ✅ STUDENT PDF (full admission record)
 // ============================================================
 router.get("/:id/pdf", async (req, res) => {
   try {
@@ -1448,7 +1427,7 @@ router.get("/:id/pdf", async (req, res) => {
 });
 
 // ============================================================
-// STUDENT LOGIN VERIFY
+// ✅ STUDENT LOGIN VERIFY
 // ============================================================
 router.post("/verify-login", async (req, res) => {
   try {
