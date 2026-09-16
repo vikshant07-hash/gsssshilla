@@ -897,6 +897,9 @@ router.get("/public/marksheet/:id/download", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 6: STUDENT APIs
 // ============================================================
+// ============================================================
+// SECTION 6: STUDENT APIs — COMPLETE DATA
+// ============================================================
 
 router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
@@ -905,9 +908,19 @@ router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
         return fail(res, "Student ID is required", 400);
     }
 
+    // ✅ COMPLETE STUDENT FETCH — saari fields (print ke liye zaroori)
     const students = await q(`
-        SELECT id, student_id, name, class, session, roll_number,
-               student_photo_url AS photo, status
+        SELECT
+            id, student_id, admission_number, apaar_id,
+            name, father_name, mother_name,
+            dob, gender, category,
+            class, stream, session, roll_number,
+            student_photo_url AS photo,
+            signature_url,
+            aadhar_number,
+            mobile_number, email_id,
+            status,
+            address, village, post_office, tehsil, district, state, pincode
         FROM Nstudent
         WHERE student_id = ?
         LIMIT 1
@@ -917,6 +930,7 @@ router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
         return fail(res, `Student not found: ${studentId}`, 404);
     }
 
+    // ✅ COMPLETE MARKSHEETS with subjects parsed
     const marksheetsRaw = await q(`
         SELECT
             id, session, exam_session, class, exam_type,
@@ -933,8 +947,10 @@ router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
         subjects: parseStoredSubjects(m.subjects)
     }));
 
+    // ✅ Auto overall status
     const overallStatus = calculateOverallStatus(marksheets);
 
+    // ✅ Summary calculation
     let totalObtained = 0, totalMax = 0;
     marksheets.forEach(m => {
         totalObtained += parseInt(m.obtained_marks) || 0;
@@ -943,7 +959,11 @@ router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
     const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(2) : "0.00";
     const grade = getGrade(percentage);
 
-    log.info(`Student my-results fetched`, { studentId, marksheets: marksheets.length, overall_status: overallStatus?.status });
+    log.info(`Student my-results fetched`, {
+        studentId,
+        marksheets: marksheets.length,
+        overall_status: overallStatus?.status
+    });
 
     return ok(res, {
         student: students[0],
@@ -960,6 +980,16 @@ router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
         }
     }, marksheets.length > 0 ? "Results fetched successfully" : "No published results yet");
 }));
+
+
+
+
+
+
+
+
+
+        
 
 // ============================================================
 // SECTION 7: DASHBOARD STATS
