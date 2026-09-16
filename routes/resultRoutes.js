@@ -1,11 +1,10 @@
 // ============================================================
-//  RESULT MANAGEMENT ROUTES — Professional Edition
-//  --------------------------------------------------------
-//  ✅ Student details: Nstudent table se fetch
-//  ✅ Marksheets: marksheets table me store
-//  ✅ Cloudinary: PDF uploads (raw resource type)
-//  ✅ Public + Admin APIs: separate sections
-//  ✅ Full validation, error handling, logging
+//  RESULT MANAGEMENT ROUTES — Final Production Version
+//  ✅ Auto overall status calculation
+//  ✅ Subject-wise marks (JSON)
+//  ✅ Admin filters (Session, Class, Status)
+//  ✅ Public + Student + Admin APIs
+//  ✅ Proper error handling order
 // ============================================================
 
 const express = require("express");
@@ -58,6 +57,19 @@ const VALID_EXAM_TYPES = [
     "Unit Test"
 ];
 
+const VALID_RESULT_STATUSES = [
+    "Pass", "Fail", "Compartment", "Supply", "Absent", "Withheld"
+];
+
+const STATUS_PRIORITY = {
+    "Pass": 1,
+    "Compartment": 2,
+    "Supply": 3,
+    "Fail": 4,
+    "Absent": 5,
+    "Withheld": 6
+};
+
 const MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 200;
@@ -107,6 +119,18 @@ function normalizeExamType(v, { required = false } = {}) {
     return s;
 }
 
+function normalizeResultStatus(v, { required = false } = {}) {
+    if (v === undefined || v === null || String(v).trim() === "") {
+        if (required) throw new Error("Result status is required");
+        return null;
+    }
+    const s = String(v).trim();
+    if (!VALID_RESULT_STATUSES.includes(s)) {
+        throw new Error(`Invalid result status. Allowed: ${VALID_RESULT_STATUSES.join(", ")}`);
+    }
+    return s;
+}
+
 function parsePagination(query) {
     const page = Math.max(parseInt(query.page, 10) || 1, 1);
     const limit = Math.min(
@@ -122,6 +146,92 @@ function parseMarksheetId(raw) {
     return id;
 }
 
+function getGrade(percentage) {
+    const p = parseFloat(percentage) || 0;
+    if (p >= 90) return "A+";
+    if (p >= 80) return "A";
+    if (p >= 70) return "B+";
+    if (p >= 60) return "B";
+    if (p >= 50) return "C";
+    if (p >= 40) return "D";
+    if (p >= 33) return "E";
+    return "F";
+}
+
+function calculateOverallStatus(marksheets) {
+    if (!marksheets || marksheets.length === 0) return null;
+
+    const statuses = marksheets
+        .map(m => m.result_status)
+        .filter(s => s && s !== "");
+
+    if (statuses.length === 0) return null;
+
+    let worstStatus = statuses[0];
+    let worstPriority = STATUS_PRIORITY[worstStatus] || 0;
+
+    for (const status of statuses) {
+        const p = STATUS_PRIORITY[status] || 0;
+        if (p > worstPriority) {
+            worstStatus = status;
+            worstPriority = p;
+        }
+    }
+
+    const breakdown = statuses.reduce((acc, s) => {
+        acc[s] = (acc[s] || 0) + 1;
+        return acc;
+    }, {});
+
+    return {
+        status: worstStatus,
+        priority: worstPriority,
+        total_results: statuses.length,
+        breakdown,
+        reason: getStatusReason(worstStatus, breakdown)
+    };
+}
+
+function getStatusReason(worstStatus, breakdown) {
+    switch (worstStatus) {
+        case "Withheld": return "Result withheld by school administration";
+        case "Absent": return `Student was absent in ${breakdown["Absent"] || 1} examination(s)`;
+        case "Fail": return `Failed in ${breakdown["Fail"] || 1} examination(s)`;
+        case "Supply": return `Supply in ${breakdown["Supply"] || 1} examination(s)`;
+        case "Compartment": return `Compartment in ${breakdown["Compartment"] || 1} examination(s)`;
+        case "Pass": return "All examinations passed successfully";
+        default: return "";
+    }
+}
+
+function parseSubjects(raw) {
+    if (!raw) return null;
+    try {
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+        return parsed
+            .map(s => ({
+                name: String(s.name || "").trim().slice(0, 100),
+                obtained: parseInt(s.obtained) || 0,
+                max: parseInt(s.max) || 0
+            }))
+            .filter(s => s.name && s.max > 0);
+    } catch (e) {
+        throw new Error("Invalid subjects JSON format");
+    }
+}
+
+function parseStoredSubjects(raw) {
+    if (!raw) return [];
+    try {
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        return [];
+    }
+}
+
 // ============================================================
 // CLOUDINARY STORAGE
 // ============================================================
@@ -131,7 +241,7 @@ const storage = new CloudinaryStorage({
     params: (req, file) => {
         const session = normalizeSession(req.body.session) || "2026-27";
         const sessionSafe = session.replace(/[^a-zA-Z0-9-]/g, "-");
-        const classStr = normalizeClass(req.body.class) || "default";
+        const classStr = (req.body.class || "default").replace(/[^a-zA-Z0-9-]/g, "-");
         const studentId = (req.body.student_id || "unknown").replace(/[^a-zA-Z0-9_-]/g, "");
         const examType = (req.body.exam_type || "exam").replace(/[^a-zA-Z0-9_-]/g, "-");
 
@@ -236,10 +346,11 @@ router.get("/students/:studentId", asyncHandler(async (req, res) => {
         return fail(res, `Student not found: ${studentId}`, 404);
     }
 
-    const marksheets = await q(`
+    const marksheetsRaw = await q(`
         SELECT
             id, session, exam_session, class, exam_type,
             obtained_marks, max_marks,
+            result_status, subjects, remarks,
             cloudinary_url, cloudinary_public_id,
             is_published, uploaded_at, updated_at,
             original_filename, file_size, declaration_date
@@ -248,7 +359,22 @@ router.get("/students/:studentId", asyncHandler(async (req, res) => {
         ORDER BY session DESC, exam_type ASC
     `, [studentId]);
 
-    return ok(res, { student: students[0], marksheets }, "Student fetched successfully");
+    const marksheets = marksheetsRaw.map(m => ({
+        ...m,
+        subjects: parseStoredSubjects(m.subjects)
+    }));
+
+    const publishedOnly = marksheets.filter(m => m.is_published === 1);
+    const overallStatus = calculateOverallStatus(publishedOnly);
+
+    return ok(res, {
+        student: students[0],
+        marksheets,
+        overall_status: overallStatus?.status || null,
+        overall_status_reason: overallStatus?.reason || null,
+        status_breakdown: overallStatus?.breakdown || {},
+        total_published: publishedOnly.length
+    }, "Student fetched successfully");
 }));
 
 // ============================================================
@@ -257,25 +383,37 @@ router.get("/students/:studentId", asyncHandler(async (req, res) => {
 
 router.post("/marksheets/upload", handleUpload, asyncHandler(async (req, res) => {
     const student_id = (req.body.student_id || "").trim();
-    const session = normalizeSession(req.body.session);
-    const classStr = normalizeClass(req.body.class, { required: true });
-    const exam_type = normalizeExamType(req.body.exam_type, { required: true });
-    const exam_session = normalizeSession(req.body.exam_session);
-    const obtained_marks = req.body.obtained_marks || null;
-    const max_marks = req.body.max_marks || null;
 
     const cleanupFile = async () => {
         if (req.file?.filename) await destroyCloudinaryFile(req.file.filename, "raw");
     };
 
     if (!student_id) { await cleanupFile(); return fail(res, "Student ID is required", 400); }
+
+    let session, classStr, exam_type, exam_session, result_status, subjects;
+    try {
+        session = normalizeSession(req.body.session);
+        classStr = normalizeClass(req.body.class, { required: true });
+        exam_type = normalizeExamType(req.body.exam_type, { required: true });
+        exam_session = normalizeSession(req.body.exam_session);
+        result_status = normalizeResultStatus(req.body.result_status);
+        subjects = parseSubjects(req.body.subjects);
+    } catch (err) {
+        await cleanupFile();
+        return fail(res, err.message, 400);
+    }
+
+    const obtained_marks = req.body.obtained_marks || null;
+    const max_marks = req.body.max_marks || null;
+    const remarks = req.body.remarks ? String(req.body.remarks).trim().slice(0, 500) : null;
+
     if (!session) { await cleanupFile(); return fail(res, "Session is required", 400); }
     if (!req.file) return fail(res, "PDF file is required", 400);
 
     const students = await q("SELECT id FROM Nstudent WHERE student_id = ? LIMIT 1", [student_id]);
     if (students.length === 0) {
         await cleanupFile();
-        return fail(res, `Student not found in Nstudent: ${student_id}`, 404);
+        return fail(res, `Student not found: ${student_id}`, 404);
     }
 
     const existing = await q(
@@ -289,29 +427,40 @@ router.post("/marksheets/upload", handleUpload, asyncHandler(async (req, res) =>
         return fail(res, "Marksheet already exists for this exam & session", 409);
     }
 
+    let finalObtained = obtained_marks;
+    let finalMax = max_marks;
+    if (subjects && subjects.length > 0) {
+        if (!finalObtained) finalObtained = String(subjects.reduce((s, x) => s + x.obtained, 0));
+        if (!finalMax) finalMax = String(subjects.reduce((s, x) => s + x.max, 0));
+    }
+
     const insertResult = await q(`
         INSERT INTO marksheets (
             student_id, session, class, exam_type,
             exam_session, obtained_marks, max_marks,
+            result_status, subjects, remarks,
             cloudinary_public_id, cloudinary_url, original_filename, file_size, is_published
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
         student_id, session, classStr, exam_type,
-        exam_session || null, obtained_marks, max_marks,
+        exam_session || null, finalObtained, finalMax,
+        result_status, subjects ? JSON.stringify(subjects) : null, remarks,
         req.file.filename, req.file.path, req.file.originalname, req.file.size, 0
     ]);
 
-    log.success(`Marksheet uploaded`, { student_id, exam_type, id: insertResult.insertId });
+    log.success(`Marksheet uploaded`, { student_id, exam_type, status: result_status, id: insertResult.insertId });
 
     return ok(res, {
         marksheet_id: insertResult.insertId,
         cloudinary_url: req.file.path,
-        status: "unpublished"
+        status: "unpublished",
+        result_status,
+        subjects_count: subjects?.length || 0
     }, "Marksheet uploaded successfully (Unpublished)", 201);
 }));
 
 router.get("/marksheets", asyncHandler(async (req, res) => {
-    const { student_id, session, class: cls, exam_type, is_published } = req.query;
+    const { student_id, session, class: cls, exam_type, is_published, result_status } = req.query;
     const { page, limit, offset } = parsePagination(req.query);
 
     const where = [];
@@ -329,16 +478,21 @@ router.get("/marksheets", asyncHandler(async (req, res) => {
         where.push("m.is_published = ?");
         params.push(is_published === "true" || is_published === "1" ? 1 : 0);
     }
+    if (result_status) {
+        where.push("m.result_status = ?");
+        params.push(normalizeResultStatus(result_status));
+    }
 
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
     const countResult = await q(`SELECT COUNT(*) AS total FROM marksheets m ${whereSql}`, params);
     const total = countResult[0]?.total || 0;
 
-    const marksheets = await q(`
+    const rows = await q(`
         SELECT
             m.id, m.session, m.exam_session, m.class, m.exam_type,
             m.obtained_marks, m.max_marks,
+            m.result_status, m.subjects, m.remarks,
             m.cloudinary_url, m.is_published, m.uploaded_at, m.updated_at,
             m.original_filename, m.file_size, m.declaration_date,
             s.student_id, s.name, s.father_name, s.mother_name, s.dob,
@@ -352,11 +506,13 @@ router.get("/marksheets", asyncHandler(async (req, res) => {
         LIMIT ? OFFSET ?
     `, [...params, limit, offset]);
 
+    const marksheets = rows.map(m => ({
+        ...m,
+        subjects: parseStoredSubjects(m.subjects)
+    }));
+
     return ok(res, marksheets, "Marksheets fetched successfully", 200, {
-        pagination: {
-            page, limit, total,
-            totalPages: Math.max(Math.ceil(total / limit), 1)
-        }
+        pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) }
     });
 }));
 
@@ -378,7 +534,12 @@ router.get("/marksheets/:id", asyncHandler(async (req, res) => {
 
     if (rows.length === 0) return fail(res, `Marksheet not found: ${id}`, 404);
 
-    return ok(res, rows[0], "Marksheet fetched successfully");
+    const marksheet = {
+        ...rows[0],
+        subjects: parseStoredSubjects(rows[0].subjects)
+    };
+
+    return ok(res, marksheet, "Marksheet fetched successfully");
 }));
 
 router.put("/marksheets/:id/replace", handleUpload, asyncHandler(async (req, res) => {
@@ -404,6 +565,34 @@ router.put("/marksheets/:id/replace", handleUpload, asyncHandler(async (req, res
 
     log.success(`Marksheet replaced`, { id });
     return ok(res, { cloudinary_url: req.file.path }, "Marksheet replaced successfully");
+}));
+
+router.patch("/marksheets/:id/status", asyncHandler(async (req, res) => {
+    const id = parseMarksheetId(req.params.id);
+    const { result_status, remarks } = req.body;
+
+    if (!result_status) return fail(res, "result_status is required", 400);
+
+    let status;
+    try {
+        status = normalizeResultStatus(result_status, { required: true });
+    } catch (err) {
+        return fail(res, err.message, 400);
+    }
+
+    const cleanRemarks = remarks ? String(remarks).trim().slice(0, 500) : null;
+
+    const result = await q(
+        `UPDATE marksheets 
+         SET result_status = ?, remarks = ?, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = ?`,
+        [status, cleanRemarks, id]
+    );
+
+    if (result.affectedRows === 0) return fail(res, `Marksheet not found: ${id}`, 404);
+
+    log.success(`Marksheet status updated`, { id, status });
+    return ok(res, { result_status: status, remarks: cleanRemarks }, "Status updated successfully");
 }));
 
 router.delete("/marksheets/:id", asyncHandler(async (req, res) => {
@@ -488,6 +677,36 @@ router.post("/marksheets/bulk-publish", asyncHandler(async (req, res) => {
     }, `${result.affectedRows} marksheet(s) published`);
 }));
 
+router.post("/marksheets/bulk-status", asyncHandler(async (req, res) => {
+    const { ids, result_status, remarks } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) return fail(res, "ids array is required", 400);
+    if (!result_status) return fail(res, "result_status is required", 400);
+
+    let status;
+    try {
+        status = normalizeResultStatus(result_status, { required: true });
+    } catch (err) {
+        return fail(res, err.message, 400);
+    }
+
+    const cleanIds = ids.map((v) => parseInt(v, 10)).filter((v) => !isNaN(v) && v > 0);
+    if (cleanIds.length === 0) return fail(res, "No valid ids", 400);
+
+    const cleanRemarks = remarks ? String(remarks).trim().slice(0, 500) : null;
+    const ph = cleanIds.map(() => "?").join(",");
+
+    const result = await q(
+        `UPDATE marksheets 
+         SET result_status = ?, remarks = COALESCE(?, remarks), updated_at = CURRENT_TIMESTAMP 
+         WHERE id IN (${ph})`,
+        [status, cleanRemarks, ...cleanIds]
+    );
+
+    log.success(`Bulk status update`, { status, count: result.affectedRows });
+    return ok(res, { updated: result.affectedRows, status }, `${result.affectedRows} marksheet(s) status updated`);
+}));
+
 // ============================================================
 // SECTION 4: CLASS-WISE STUDENTS
 // ============================================================
@@ -529,10 +748,7 @@ router.get("/class/:classId/students", asyncHandler(async (req, res) => {
     `, [...baseParams, limit, offset]);
 
     return ok(res, students, "Class students fetched successfully", 200, {
-        pagination: {
-            page, limit, total,
-            totalPages: Math.max(Math.ceil(total / limit), 1)
-        }
+        pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) }
     });
 }));
 
@@ -573,8 +789,9 @@ router.post("/public/search", asyncHandler(async (req, res) => {
 
     let mSql = `
         SELECT id, session, exam_session, class, exam_type,
-               obtained_marks, max_marks, cloudinary_url,
-               uploaded_at, declaration_date
+               obtained_marks, max_marks,
+               result_status, subjects, remarks,
+               cloudinary_url, uploaded_at, declaration_date
         FROM marksheets
         WHERE student_id = ? AND is_published = 1
     `;
@@ -588,10 +805,22 @@ router.post("/public/search", asyncHandler(async (req, res) => {
 
     mSql += " ORDER BY session DESC, exam_type ASC";
 
-    const marksheets = await q(mSql, mParams);
+    const marksheetsRaw = await q(mSql, mParams);
+    const marksheets = marksheetsRaw.map(m => ({
+        ...m,
+        subjects: parseStoredSubjects(m.subjects)
+    }));
 
-    log.info(`Public search success`, { student_id, marksheets: marksheets.length });
-    return ok(res, { student: students[0], marksheets }, "Result fetched successfully");
+    const overallStatus = calculateOverallStatus(marksheets);
+
+    log.info(`Public search success`, { student_id, marksheets: marksheets.length, overall_status: overallStatus?.status });
+
+    return ok(res, {
+        student: students[0],
+        marksheets,
+        overall_status: overallStatus?.status || null,
+        overall_status_reason: overallStatus?.reason || null
+    }, "Result fetched successfully");
 }));
 
 router.get("/public/classes", asyncHandler(async (req, res) => {
@@ -618,9 +847,7 @@ router.get("/public/classes", asyncHandler(async (req, res) => {
         exam_type: c.latest_exam_type || "Various",
         declared_date: c.declared_date
             ? new Date(c.declared_date).toLocaleDateString("en-IN", {
-                day: "2-digit",
-                month: "short",
-                year: "numeric"
+                day: "2-digit", month: "short", year: "numeric"
             })
             : null
     }));
@@ -668,7 +895,74 @@ router.get("/public/marksheet/:id/download", asyncHandler(async (req, res) => {
 }));
 
 // ============================================================
-// SECTION 6: DASHBOARD STATS
+// SECTION 6: STUDENT APIs
+// ============================================================
+
+router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+
+    if (!studentId || studentId.trim() === "") {
+        return fail(res, "Student ID is required", 400);
+    }
+
+    const students = await q(`
+        SELECT id, student_id, name, class, session, roll_number,
+               student_photo_url AS photo, status
+        FROM Nstudent
+        WHERE student_id = ?
+        LIMIT 1
+    `, [studentId]);
+
+    if (students.length === 0) {
+        return fail(res, `Student not found: ${studentId}`, 404);
+    }
+
+    const marksheetsRaw = await q(`
+        SELECT
+            id, session, exam_session, class, exam_type,
+            obtained_marks, max_marks,
+            result_status, subjects, remarks,
+            cloudinary_url, is_published, uploaded_at, declaration_date
+        FROM marksheets
+        WHERE student_id = ? AND is_published = 1
+        ORDER BY session DESC, exam_type ASC
+    `, [studentId]);
+
+    const marksheets = marksheetsRaw.map(m => ({
+        ...m,
+        subjects: parseStoredSubjects(m.subjects)
+    }));
+
+    const overallStatus = calculateOverallStatus(marksheets);
+
+    let totalObtained = 0, totalMax = 0;
+    marksheets.forEach(m => {
+        totalObtained += parseInt(m.obtained_marks) || 0;
+        totalMax += parseInt(m.max_marks) || 0;
+    });
+    const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(2) : "0.00";
+    const grade = getGrade(percentage);
+
+    log.info(`Student my-results fetched`, { studentId, marksheets: marksheets.length, overall_status: overallStatus?.status });
+
+    return ok(res, {
+        student: students[0],
+        marksheets,
+        summary: {
+            totalObtained,
+            totalMax,
+            percentage,
+            grade,
+            overall_status: overallStatus?.status || null,
+            overall_status_reason: overallStatus?.reason || null,
+            status_breakdown: overallStatus?.breakdown || {},
+            total_published: marksheets.length
+        }
+    }, marksheets.length > 0 ? "Results fetched successfully" : "No published results yet");
+}));
+
+// ============================================================
+// SECTION 7: DASHBOARD STATS
 // ============================================================
 
 router.get("/dashboard/stats", asyncHandler(async (req, res) => {
@@ -677,7 +971,11 @@ router.get("/dashboard/stats", asyncHandler(async (req, res) => {
             COUNT(DISTINCT student_id) AS total_students,
             COUNT(*) AS total_marksheets,
             SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END) AS published_results,
-            SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) AS unpublished_results
+            SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) AS unpublished_results,
+            SUM(CASE WHEN result_status = 'Pass' THEN 1 ELSE 0 END) AS pass_count,
+            SUM(CASE WHEN result_status = 'Fail' THEN 1 ELSE 0 END) AS fail_count,
+            SUM(CASE WHEN result_status = 'Compartment' THEN 1 ELSE 0 END) AS compartment_count,
+            SUM(CASE WHEN result_status = 'Supply' THEN 1 ELSE 0 END) AS supply_count
         FROM marksheets
     `);
 
@@ -687,7 +985,9 @@ router.get("/dashboard/stats", asyncHandler(async (req, res) => {
             COUNT(DISTINCT student_id) AS students,
             COUNT(*) AS marksheets,
             SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END) AS published,
-            SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) AS unpublished
+            SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) AS unpublished,
+            SUM(CASE WHEN result_status = 'Pass' THEN 1 ELSE 0 END) AS pass_count,
+            SUM(CASE WHEN result_status = 'Fail' THEN 1 ELSE 0 END) AS fail_count
         FROM marksheets
         GROUP BY class
         ORDER BY FIELD(class, 'Nursery','LKG','UKG','1','2','3','4','5','6','7','8','9','10','11','12')
@@ -695,17 +995,16 @@ router.get("/dashboard/stats", asyncHandler(async (req, res) => {
 
     return ok(res, {
         overall: overall[0] || {
-            total_students: 0,
-            total_marksheets: 0,
-            published_results: 0,
-            unpublished_results: 0
+            total_students: 0, total_marksheets: 0,
+            published_results: 0, unpublished_results: 0,
+            pass_count: 0, fail_count: 0, compartment_count: 0, supply_count: 0
         },
         class_wise: classWise
     }, "Dashboard stats fetched successfully");
 }));
 
 // ============================================================
-// GLOBAL ERROR HANDLER
+// GLOBAL ERROR HANDLER — MUST BE LAST
 // ============================================================
 
 router.use((err, req, res, next) => {
@@ -717,80 +1016,5 @@ router.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
     return fail(res, err.message || "Internal server error", 500);
 });
-
-// ============================================================
-// ✅ PUBLIC: Student apni published results dekhe (login ke baad)
-// ============================================================
-router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
-    const { studentId } = req.params;
-
-    if (!studentId || studentId.trim() === "") {
-        return fail(res, "Student ID is required", 400);
-    }
-
-    // Student verify karo (Nstudent table se)
-    const students = await q(`
-        SELECT id, student_id, name, class, session, roll_number, 
-               student_photo_url AS photo, status
-        FROM Nstudent
-        WHERE student_id = ?
-        LIMIT 1
-    `, [studentId]);
-
-    if (students.length === 0) {
-        return fail(res, `Student not found: ${studentId}`, 404);
-    }
-
-    // Sirf PUBLISHED marksheets fetch karo
-    const marksheets = await q(`
-        SELECT
-            id, session, exam_session, class, exam_type,
-            obtained_marks, max_marks,
-            cloudinary_url,
-            is_published, uploaded_at, declaration_date
-        FROM marksheets
-        WHERE student_id = ? AND is_published = 1
-        ORDER BY session DESC, exam_type ASC
-    `, [studentId]);
-
-    // Summary calculate karo
-    let totalObtained = 0, totalMax = 0;
-    marksheets.forEach(m => {
-        totalObtained += parseInt(m.obtained_marks) || 0;
-        totalMax += parseInt(m.max_marks) || 0;
-    });
-    const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(2) : "0.00";
-    const grade = getGrade(percentage);
-    const result = parseFloat(percentage) >= 33 ? "PASS" : "FAIL";
-
-    log.info(`Student my-results fetched`, { studentId, marksheets: marksheets.length });
-
-    return ok(res, {
-        student: students[0],
-        marksheets,
-        summary: {
-            totalObtained,
-            totalMax,
-            percentage,
-            grade,
-            result
-        }
-    }, marksheets.length > 0 ? "Results fetched successfully" : "No published results yet");
-}));
-
-// ============================================================
-// HELPER: Grade calculator (file ke top pe helpers me daalo)
-// ============================================================
-function getGrade(percentage) {
-    const p = parseFloat(percentage) || 0;
-    if (p >= 90) return "A+";
-    if (p >= 80) return "A";
-    if (p >= 70) return "B+";
-    if (p >= 60) return "B";
-    if (p >= 50) return "C";
-    if (p >= 40) return "D";
-    if (p >= 33) return "E";
-    return "F";
-}
 
 module.exports = router;
