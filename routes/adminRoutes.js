@@ -5,7 +5,6 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
-const nodemailer = require('nodemailer');   // ✅ NEW: Gmail SMTP
 require('dotenv').config();
 
 console.log('🔧 adminRoutes.js loaded!');
@@ -256,54 +255,53 @@ if (ADMINS.length === 0) {
 } else {
     console.log(`✅ ${ADMINS.length} admin(s) configured:`, ADMINS.map(a => a.username));
 }
-
-// ✅ Gmail SMTP diagnostics
-if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-    console.error('❌❌❌ GMAIL_USER or GMAIL_APP_PASSWORD MISSING! OTP emails will NOT be sent.');
-    console.error('   Add these in Render → Environment:');
-    console.error('   GMAIL_USER = magicalmathsquiz@gmail.com');
-    console.error('   GMAIL_APP_PASSWORD = <16-char app password>');
+if (!process.env.BREVO_API_KEY) {
+    console.error('❌❌❌ BREVO_API_KEY is MISSING! OTP emails will NOT be sent.');
 } else {
-    console.log('✅ Gmail SMTP credentials configured');
-    console.log('   Gmail User:', process.env.GMAIL_USER);
+    console.log('✅ Brevo API key configured');
 }
 
 // ============================================================
-// 📧 EMAIL SENDING — Gmail SMTP (Instant Delivery)
+// EMAIL SENDING (with timeout + retry)
 // ============================================================
+const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || 'magicalmathsquiz@gmail.com';
+const BREVO_SENDER_NAME = 'GSSS SHILLA';
 const SCHOOL_LOGO_URL = process.env.SCHOOL_LOGO_URL || 'https://res.cloudinary.com/dwupxj7vf/image/upload/v1786266974/school/recent_updates/update-logo%281%29-1786266967378-883005917.png';
 
-// ✅ Gmail SMTP Transporter with connection pooling
-const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // TLS (STARTTLS)
-    auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD
-    },
-    pool: true,
-    maxConnections: 3,
-    maxMessages: 100,
-    connectionTimeout: 10000,   // 10s
-    greetingTimeout: 8000,       // 8s
-    socketTimeout: 15000,        // 15s
-    tls: {
-        rejectUnauthorized: false
-    }
-});
+// ✅ Single-attempt email send with 8s timeout
+async function sendEmailOnce(payload, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-// ✅ Verify transporter on startup (non-blocking)
-if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
-    transporter.verify((error, success) => {
-        if (error) {
-            console.error('❌❌❌ Gmail SMTP verification FAILED:', error.message);
-            console.error('   → Check GMAIL_USER and GMAIL_APP_PASSWORD');
-            console.error('   → Make sure 2-Step Verification is ON in Google Account');
-        } else {
-            console.log('✅ Gmail SMTP ready — OTP emails will be delivered instantly');
+    try {
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'api-key': process.env.BREVO_API_KEY
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            const err = new Error(`Brevo API error (${response.status}): ${errorBody}`);
+            err.status = response.status;
+            throw err;
         }
-    });
+
+        return await response.json();
+    } catch (err) {
+        clearTimeout(timeoutId);
+        if (err.name === 'AbortError') {
+            throw new Error(`Email API timeout (${timeoutMs}ms)`);
+        }
+        throw err;
+    }
 }
 
 async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Admin') {
@@ -373,24 +371,24 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
 
     const textContent = `${headingText}\n\nHi, ${recipientName}!\n${introText}\n\nYour OTP Code: ${otp}\n\nThis OTP is valid for 5 minutes.\nIf you did not request this, please ignore this email or contact the school administration.\n\n© ${new Date().getFullYear()} GSSS SHILLA`;
 
-    const mailOptions = {
-        from: `"GSSS SHILLA" <${process.env.GMAIL_USER}>`,
-        to: toEmail,
+    const payload = {
+        sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+        to: [{ email: toEmail }],
         subject: subjectText,
-        html: htmlContent,
-        text: textContent
+        htmlContent: htmlContent,
+        textContent: textContent
     };
 
-    // ✅ Send with 1 retry on failure
+    // ✅ Retry logic: 2 attempts with 1s gap
     let lastErr;
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-            const info = await transporter.sendMail(mailOptions);
-            console.log(`📬 Gmail sent (attempt ${attempt}). messageId: ${info.messageId}`);
-            return info;
+            const result = await sendEmailOnce(payload, 8000);
+            console.log(`📬 Email sent (attempt ${attempt}). messageId: ${result.messageId || 'n/a'}`);
+            return result;
         } catch (err) {
             lastErr = err;
-            console.error(`⚠️ Gmail attempt ${attempt} failed: ${err.message}`);
+            console.error(`⚠️ Email attempt ${attempt} failed: ${err.message}`);
             if (attempt < 2) {
                 await new Promise(r => setTimeout(r, 1000));
             }
@@ -402,12 +400,12 @@ async function sendOTPEmail(toEmail, otp, purpose = 'login', recipientName = 'Ad
 // ✅ Fire-and-forget email wrapper (response ko block nahi karta)
 function sendOTPEmailAsync(toEmail, otp, purpose, recipientName) {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('📧 SENDING OTP EMAIL (Gmail SMTP, async)');
+    console.log('📧 SENDING OTP EMAIL (async)');
     console.log('   To:', toEmail);
     console.log('   OTP:', otp);
     console.log('   Purpose:', purpose);
-    console.log('   Gmail User:', process.env.GMAIL_USER ? '✅ Set' : '❌ MISSING');
-    console.log('   App Password:', process.env.GMAIL_APP_PASSWORD ? '✅ Set' : '❌ MISSING');
+    console.log('   Brevo Key:', process.env.BREVO_API_KEY ? '✅ Set' : '❌ MISSING');
+    console.log('   Sender:', BREVO_SENDER_EMAIL);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     sendOTPEmail(toEmail, otp, purpose, recipientName)
@@ -457,9 +455,7 @@ router.get('/test', (req, res) => {
 // 2. CSRF Token
 router.get('/csrf-token', (req, res) => {
     const csrfToken = uuidv4();
-    if (req.session) {
-        req.session.csrfToken = csrfToken;
-    }
+    req.session.csrfToken = csrfToken;
     res.json({ success: true, token: csrfToken });
 });
 
@@ -498,6 +494,7 @@ router.post('/login', checkLoginAttempts, async (req, res) => {
         }
 
         const otp = generateOTP();
+        // ✅ Save with normalized username key
         setOTP(admin.username, otp, 5 * 60 * 1000, 'login');
 
         console.log(`📧 OTP generated for ${admin.username}: ${otp}`);
@@ -562,6 +559,7 @@ router.post('/verify-otp', async (req, res) => {
             });
         }
 
+        // ✅ Use normalized username (admin.username) for lookup — matches setOTP
         const stored = getOTP(admin.username, 'login');
 
         if (!stored) {
@@ -581,6 +579,7 @@ router.post('/verify-otp', async (req, res) => {
             });
         }
 
+        // ✅ Case-insensitive compare + trim spaces
         const providedOtp = String(otp).trim().toUpperCase();
         const storedOtp = String(stored.otp).trim().toUpperCase();
 
@@ -605,24 +604,25 @@ router.post('/verify-otp', async (req, res) => {
             });
         }
 
+        // ✅ Valid — delete OTP
         deleteOTP(admin.username, 'login');
 
-        if (req.session) {
-            req.session.admin_id = admin.id;
-            req.session.admin_name = admin.name;
-            req.session.admin_email = admin.email;
-            req.session.admin_role = admin.role;
-            req.session.admin_username = admin.username;
+        // ✅ Set session
+        req.session.admin_id = admin.id;
+        req.session.admin_name = admin.name;
+        req.session.admin_email = admin.email;
+        req.session.admin_role = admin.role;
+        req.session.admin_username = admin.username;
 
-            req.session.save((err) => {
-                if (err) {
-                    console.error('❌ Session save error:', err);
-                } else {
-                    console.log('✅ Session saved for admin:', admin.username);
-                }
-            });
-        }
+        req.session.save((err) => {
+            if (err) {
+                console.error('❌ Session save error:', err);
+            } else {
+                console.log('✅ Session saved for admin:', admin.username);
+            }
+        });
 
+        // ✅ Generate JWT Token
         const token = jwt.sign(
             {
                 id: admin.id,
@@ -755,10 +755,12 @@ router.post('/send-reset-otp', async (req, res) => {
         }
 
         const otp = generateOTP();
+        // ✅ Use email as key with 'reset' purpose
         setOTP(admin.email, otp, 5 * 60 * 1000, 'reset');
 
         console.log(`📧 Reset OTP for ${admin.email}: ${otp}`);
 
+        // ✅ Fire-and-forget
         sendOTPEmailAsync(admin.email, otp, 'reset', admin.name);
 
         res.json({
@@ -816,6 +818,7 @@ router.post('/reset-password', async (req, res) => {
             });
         }
 
+        // ✅ Use email as key with 'reset' purpose
         const stored = getOTP(admin.email, 'reset');
 
         if (!stored) {
@@ -1130,8 +1133,6 @@ router.get('/debug', (req, res) => {
         admins_configured: ADMINS.length,
         admins: ADMINS.map(a => ({ username: a.username, email: a.email, role: a.role })),
         activeOTPs: Object.keys(otpStore).map(k => ({ key: k, expiresIn: Math.max(0, otpStore[k].expiry - Date.now()) + 'ms' })),
-        emailProvider: 'Gmail SMTP',
-        gmailConfigured: !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD),
         routes: {
             public: ['/test', '/csrf-token', '/login', '/verify-otp', '/refresh-token', '/verify', '/send-reset-otp', '/reset-password', '/generate-hash/:password'],
             protected: ['/profile', '/logout', '/extend-session', '/session-status', '/login-status', '/clear-attempts/:username', '/debug']
@@ -1212,7 +1213,6 @@ router.get('/blocked-users', (req, res) => {
 });
 
 console.log('✅ All routes registered successfully!');
-console.log('📧 Email provider: Gmail SMTP');
 console.log('🔓 Public: /login, /verify-otp, /refresh-token, /send-reset-otp, /reset-password, /verify');
 console.log('🛡️ Protected: /profile, /logout, /extend-session, /session-status, /login-status, /clear-attempts/:username, /debug');
 
