@@ -718,4 +718,79 @@ router.use((err, req, res, next) => {
     return fail(res, err.message || "Internal server error", 500);
 });
 
+// ============================================================
+// ✅ PUBLIC: Student apni published results dekhe (login ke baad)
+// ============================================================
+router.get("/student/my-results/:studentId", asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+
+    if (!studentId || studentId.trim() === "") {
+        return fail(res, "Student ID is required", 400);
+    }
+
+    // Student verify karo (Nstudent table se)
+    const students = await q(`
+        SELECT id, student_id, name, class, session, roll_number, 
+               student_photo_url AS photo, status
+        FROM Nstudent
+        WHERE student_id = ?
+        LIMIT 1
+    `, [studentId]);
+
+    if (students.length === 0) {
+        return fail(res, `Student not found: ${studentId}`, 404);
+    }
+
+    // Sirf PUBLISHED marksheets fetch karo
+    const marksheets = await q(`
+        SELECT
+            id, session, exam_session, class, exam_type,
+            obtained_marks, max_marks,
+            cloudinary_url,
+            is_published, uploaded_at, declaration_date
+        FROM marksheets
+        WHERE student_id = ? AND is_published = 1
+        ORDER BY session DESC, exam_type ASC
+    `, [studentId]);
+
+    // Summary calculate karo
+    let totalObtained = 0, totalMax = 0;
+    marksheets.forEach(m => {
+        totalObtained += parseInt(m.obtained_marks) || 0;
+        totalMax += parseInt(m.max_marks) || 0;
+    });
+    const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(2) : "0.00";
+    const grade = getGrade(percentage);
+    const result = parseFloat(percentage) >= 33 ? "PASS" : "FAIL";
+
+    log.info(`Student my-results fetched`, { studentId, marksheets: marksheets.length });
+
+    return ok(res, {
+        student: students[0],
+        marksheets,
+        summary: {
+            totalObtained,
+            totalMax,
+            percentage,
+            grade,
+            result
+        }
+    }, marksheets.length > 0 ? "Results fetched successfully" : "No published results yet");
+}));
+
+// ============================================================
+// HELPER: Grade calculator (file ke top pe helpers me daalo)
+// ============================================================
+function getGrade(percentage) {
+    const p = parseFloat(percentage) || 0;
+    if (p >= 90) return "A+";
+    if (p >= 80) return "A";
+    if (p >= 70) return "B+";
+    if (p >= 60) return "B";
+    if (p >= 50) return "C";
+    if (p >= 40) return "D";
+    if (p >= 33) return "E";
+    return "F";
+}
+
 module.exports = router;
