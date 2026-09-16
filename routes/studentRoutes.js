@@ -1,1477 +1,1453 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Results Manager - Admin | GSSS Shilla</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
-    <style>
-        :root {
-            --bg: #f5f7fb; --bg-white: #ffffff; --text-primary: #1a2332; --text-secondary: #5a6a7e;
-            --text-muted: #94a3b8; --gold: #c9972b; --gold-light: #e8b84b; --gold-bg: #fef8ed;
-            --blue: #4a8af4; --blue-bg: #eef4ff; --green: #10b981; --green-bg: #ecfdf5;
-            --purple: #8b5cf6; --purple-bg: #f5f0ff; --pink: #ec4899; --pink-bg: #fdf2f8;
-            --orange: #f59e0b; --orange-bg: #fffbeb; --red: #ef4444; --border: #e8edf8;
-            --shadow: 0 2px 12px rgba(0,0,0,0.04); --shadow-hover: 0 8px 30px rgba(0,0,0,0.08);
-            --radius: 16px; --radius-sm: 10px; --transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text-primary); min-height: 100vh; display: flex; flex-direction: column; }
+const express = require("express");
+const router = express.Router();
+const { body, validationResult } = require("express-validator");
+const PDFDocument = require("pdfkit");
+const https = require("https");
+const http = require("http");
+const path = require("path");
 
-        .session-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); z-index: 9999; justify-content: center; align-items: center; }
-        .session-overlay.active { display: flex; }
-        .session-popup { background: var(--bg-white); border-radius: 24px; padding: 40px 32px; max-width: 440px; width: 92%; text-align: center; box-shadow: 0 25px 80px rgba(0,0,0,0.3); border: 1px solid rgba(201,151,43,0.15); }
-        .session-popup .school-logo { width: 80px; height: 80px; border-radius: 20px; background: var(--gold-bg); margin: 0 auto 16px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--gold); }
-        .session-popup .school-logo img { width: 100%; height: 100%; object-fit: contain; border-radius: 12px; }
-        .icon-box { width: 72px; height: 72px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; font-size: 36px; }
-        .icon-box.expired, .icon-box.invalid { background: #fef2f2; color: var(--red); }
-        .session-popup h2 { font-size: 26px; font-weight: 800; color: var(--text-primary); margin-bottom: 6px; }
-        .session-popup h2 span { color: var(--gold); }
-        .sub-text { font-size: 14px; color: var(--text-secondary); margin-bottom: 8px; }
-        .session-timer { font-size: 13px; color: var(--text-muted); background: var(--bg); padding: 8px 16px; border-radius: 50px; display: inline-block; margin: 8px 0 20px; }
-        .school-name-popup { font-size: 13px; font-weight: 600; color: var(--gold); margin-bottom: 20px; }
-        .login-again-btn { display: inline-flex; align-items: center; gap: 12px; padding: 14px 40px; background: linear-gradient(135deg, var(--gold), var(--gold-light)); color: #fff; border: none; border-radius: 50px; font-size: 16px; font-weight: 700; cursor: pointer; font-family: 'Inter', sans-serif; }
-        .login-again-btn:hover { transform: translateY(-4px); }
+const db = require("../config/db");
+const { cloudinary, uploadStudent } = require("../config/cloudinary");
 
-        .navbar { background: var(--bg-white); border-bottom: 1px solid var(--border); padding: 0 32px; height: 68px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow); }
-        .navbar .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
-        .navbar .brand .logo-placeholder { width: 42px; height: 42px; border-radius: var(--radius-sm); background: #fff; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-        .navbar .brand .logo-placeholder img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
-        .navbar .brand .name { font-size: 16px; font-weight: 700; color: var(--text-primary); } 
-        .navbar .brand .name span { color: var(--gold); }
-        .nav-links { display: flex; gap: 8px; list-style: none; } 
-        .nav-links a { text-decoration: none; color: var(--text-secondary); padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; transition: var(--transition); } 
-        .nav-links a:hover { background: var(--bg); color: var(--text-primary); } 
-        .nav-links a.active { background: var(--gold-bg); color: var(--gold); }
-        .nav-links a i { margin-right: 6px; }
-        .nav-right { display: flex; align-items: center; gap: 12px; } 
-        .admin-badge { display: flex; align-items: center; gap: 8px; padding: 6px 14px 6px 10px; background: var(--bg); border-radius: 50px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
-        .avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--gold), var(--gold-light)); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; }
-        .online-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
-        .hamburger { display: none; background: none; border: none; font-size: 22px; cursor: pointer; color: var(--text-primary); }
+// ==================== MULTER FIELDS ====================
+const studentUploadFields = uploadStudent.fields([
+  { name: "studentPhoto", maxCount: 1 },
+  { name: "signature", maxCount: 1 },
+  { name: "aadharCard", maxCount: 1 },
+  { name: "himachaliBonafide", maxCount: 1 },
+  { name: "casteCertificate", maxCount: 1 },
+  { name: "apaarCard", maxCount: 1 },
+  { name: "previousMarksheet", maxCount: 1 },
+  { name: "incomeCertificate", maxCount: 1 },
+  { name: "bplCertificate", maxCount: 1 },
+  { name: "otherDocument", maxCount: 1 }
+]);
 
-        .main-container { flex: 1; max-width: 1400px; margin: 0 auto; padding: 24px 32px 40px; width: 100%; }
-        .page-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 28px; padding: 20px 28px; background: var(--bg-white); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
-        .page-header h1 { font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 10px; } 
-        .page-header h1 i { color: var(--gold); }
-        .header-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+// ==================== CONSTANTS ====================
+const DOC_FIELDS = [
+  "studentPhoto", "signature", "aadharCard", "himachaliBonafide",
+  "casteCertificate", "apaarCard", "previousMarksheet",
+  "incomeCertificate", "bplCertificate", "otherDocument"
+];
 
-        .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border: none; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; transition: var(--transition); text-decoration: none; font-family: 'Inter', sans-serif; }
-        .btn-primary { background: var(--gold); color: #fff; } 
-        .btn-primary:hover { background: var(--gold-light); transform: translateY(-2px); }
-        .btn-success { background: var(--green); color: #fff; } 
-        .btn-success:hover { background: #059669; transform: translateY(-2px); }
-        .btn-danger { background: var(--red); color: #fff; } 
-        .btn-danger:hover { background: #dc2626; transform: translateY(-2px); }
-        .btn-outline { background: var(--bg); color: var(--text-secondary); border: 1px solid var(--border); } 
-        .btn-outline:hover { background: var(--border); }
-        .btn-sm { padding: 6px 14px; font-size: 12px; border-radius: 8px; }
-        .btn-xs { padding: 4px 10px; font-size: 11px; border-radius: 6px; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+const BASE_REQUIRED_DOCS = [
+  "studentPhoto", "signature", "aadharCard", "himachaliBonafide",
+  "apaarCard", "previousMarksheet"
+];
 
-        .tabs { display: flex; gap: 4px; margin-bottom: 24px; background: var(--bg-white); padding: 6px; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); flex-wrap: wrap; }
-        .tab-btn { padding: 10px 24px; border: none; background: transparent; border-radius: var(--radius-sm); cursor: pointer; font-weight: 600; font-size: 13px; color: var(--text-secondary); transition: var(--transition); font-family: 'Inter', sans-serif; } 
-        .tab-btn:hover { background: var(--bg); } 
-        .tab-btn.active { background: var(--gold); color: #fff; }
-        .tab-btn i { margin-right: 6px; }
-        .tab-content { display: none; } 
-        .tab-content.active { display: block; }
+const CASTE_REQUIRED_CATEGORIES = ["SC", "ST", "OBC", "Other", "EWS"];
 
-        .search-section { background: var(--bg-white); padding: 24px; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 20px; box-shadow: var(--shadow); }
-        .search-section h3 { font-size: 15px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; } 
-        .search-section h3 i { color: var(--gold); margin-right: 6px; }
-        .search-section p { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
-        .search-row { display: flex; gap: 10px; flex-wrap: wrap; }
-        .search-input { flex: 1; min-width: 250px; padding: 12px 16px; border: 2px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; font-family: 'Inter', sans-serif; background: var(--bg); transition: var(--transition); }
-        .search-input:focus { outline: none; border-color: var(--gold); background: var(--bg-white); }
+const IMAGE_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+const PDF_MIME_TYPES = ["application/pdf"];
+const PDF_MAX_BYTES = 2 * 1024 * 1024;
 
-        .class-nav { background: var(--bg-white); padding: 20px 24px; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 20px; box-shadow: var(--shadow); }
-        .class-nav h3 { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 12px; } 
-        .class-nav h3 i { color: var(--gold); margin-right: 6px; }
-        .class-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
-        .class-btn { padding: 8px 20px; border: 2px solid var(--border); background: var(--bg-white); border-radius: 50px; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--text-secondary); transition: var(--transition); font-family: 'Inter', sans-serif; } 
-        .class-btn:hover { border-color: var(--gold); color: var(--gold); } 
-        .class-btn.active { background: var(--gold); color: #fff; border-color: var(--gold); }
-        .class-stats { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; color: var(--text-secondary); align-items: center; } 
-        .class-stats strong { color: var(--text-primary); }
+const IMAGE_ONLY_FIELDS = ["studentPhoto", "signature"];
+const PDF_ONLY_FIELDS = [
+  "aadharCard", "himachaliBonafide", "casteCertificate", "apaarCard",
+  "previousMarksheet", "incomeCertificate", "bplCertificate", "otherDocument"
+];
 
-        .student-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; margin-top: 16px; }
-        .student-card { background: var(--bg-white); border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; cursor: pointer; transition: var(--transition); box-shadow: var(--shadow); } 
-        .student-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-hover); border-color: var(--gold); }
-        .card-header { padding: 16px 20px 12px; display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border); }
-        .student-name { font-size: 16px; font-weight: 700; color: var(--text-primary); } 
-        .student-id { font-size: 12px; color: var(--text-muted); }
-        .status-badge { font-size: 11px; padding: 3px 12px; border-radius: 50px; font-weight: 600; white-space: nowrap; } 
-        .uploaded { background: var(--green-bg); color: var(--green); } 
-        .pending { background: var(--orange-bg); color: var(--orange); }
-        .card-body { padding: 12px 20px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; } 
-        .detail { font-size: 13px; color: var(--text-secondary); } 
-        .detail label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; display: block; font-weight: 600; } 
-        .detail span { font-weight: 500; color: var(--text-primary); }
-        .card-footer { padding: 10px 20px 14px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; } 
-        .exam-tag { font-size: 10px; padding: 2px 10px; border-radius: 12px; background: var(--bg); color: var(--text-secondary); }
-        .action-btns { display: flex; gap: 6px; flex-wrap: wrap; } 
-        .action-btn { padding: 4px 12px; border: none; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; transition: var(--transition); font-family: 'Inter', sans-serif; display: inline-flex; align-items: center; gap: 4px; } 
-        .action-btn:hover { transform: scale(1.05); } 
-        .edit { background: var(--orange-bg); color: var(--orange); } 
-        .delete { background: #fee2e2; color: var(--red); } 
-        .print { background: var(--pink-bg); color: var(--pink); } 
-        .view { background: var(--purple-bg); color: var(--purple); }
+const EMAIL_MAX_STUDENTS = 1;
+const MOBILE_MAX_STUDENTS = 3;
 
-        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 1000; padding: 20px; } 
-        .modal-overlay.active { display: flex; }
-        .modal-content { background: var(--bg-white); padding: 30px; border-radius: var(--radius); max-width: 700px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
-        .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--border); padding-bottom: 14px; margin-bottom: 18px; } 
-        .modal-header h2 { font-size: 18px; font-weight: 700; color: var(--text-primary); } 
-        .modal-header h2 i { color: var(--gold); margin-right: 8px; } 
-        .close-btn { background: none; border: none; font-size: 24px; color: var(--text-muted); cursor: pointer; transition: var(--transition); } 
-        .close-btn:hover { color: var(--red); transform: rotate(90deg); }
-        .student-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; padding: 8px 0 16px; border-bottom: 1px solid var(--border); margin-bottom: 16px; } 
-        .item label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.3px; display: block; } 
-        .item span { font-weight: 600; color: var(--text-primary); }
-        .exam-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: var(--bg); border-radius: var(--radius-sm); margin-bottom: 8px; border: 1px solid var(--border); transition: var(--transition); } 
-        .exam-item:hover { border-color: var(--gold); }
-        .exam-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; } 
-        .exam-name { font-weight: 600; font-size: 13px; color: var(--text-primary); } 
-        .exam-session { font-size: 12px; color: var(--text-muted); }
-        .badge { display: inline-block; padding: 3px 12px; border-radius: 50px; font-size: 11px; font-weight: 600; } 
-        .badge-success { background: var(--green-bg); color: var(--green); } 
-        .badge-warning { background: var(--orange-bg); color: var(--orange); } 
-        .badge-info { background: var(--blue-bg); color: var(--blue); }
+const OTP_EXPIRY_MS = 5 * 60 * 1000;
+const OTP_MAX_ATTEMPTS = 5;
 
-        .toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; } 
-        .toast { padding: 14px 24px; border-radius: var(--radius-sm); color: #fff; font-weight: 600; font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,0.15); min-width: 250px; animation: slideIn 0.3s ease; } 
-        .toast-success { background: var(--green); } 
-        .toast-error { background: var(--red); } 
-        .toast-warning { background: var(--orange); } 
-        .toast-info { background: var(--text-primary); }
-        @keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
-
-        .alert-box { padding: 14px 18px; border-radius: var(--radius-sm); margin: 12px 0; } 
-        .alert-box.error { background: #fee2e2; color: var(--red); border: 1px solid #fecaca; } 
-        .alert-box.success { background: var(--green-bg); color: var(--green); border: 1px solid #bbf7d0; } 
-        .alert-box.info { background: var(--blue-bg); color: var(--blue); border: 1px solid #bfdbfe; }
-        .loading { text-align: center; padding: 40px; color: var(--text-muted); }
-
-        .form-group { display: flex; flex-direction: column; gap: 6px; }
-        .form-group label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
-        .form-group input, .form-group select { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; font-family: 'Inter', sans-serif; background: var(--bg); }
-        .form-group input:disabled { background: #f1f5f9; color: var(--text-muted); cursor: not-allowed; }
-        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
-
-        .table-wrap { overflow-x: auto; }
-        .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        .data-table thead tr { background: var(--bg); }
-        .data-table th { padding: 10px 14px; text-align: left; font-weight: 600; color: var(--text-secondary); border-bottom: 2px solid var(--border); }
-        .data-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); }
-        .data-table tbody tr:hover { background: var(--bg); }
-
-        .footer { background: var(--bg-white); border-top: 1px solid var(--border); padding: 20px 32px; text-align: center; font-size: 13px; color: var(--text-muted); }
-
-        @media (max-width: 768px) { 
-            .navbar { padding: 0 20px; } 
-            .nav-links { display: none; flex-direction: column; position: absolute; top: 68px; left: 0; right: 0; background: var(--bg-white); padding: 16px; border-bottom: 1px solid var(--border); } 
-            .nav-links.open { display: flex; } 
-            .hamburger { display: block; } 
-            .main-container { padding: 16px; } 
-            .page-header { padding: 16px; flex-direction: column; align-items: stretch; } 
-            .student-grid { grid-template-columns: 1fr; } 
-            .student-detail-grid { grid-template-columns: 1fr; }
-            .class-stats { flex-direction: column; align-items: flex-start; gap: 8px; }
-        }
-    </style>
-</head>
-<body>
-
-<div class="session-overlay" id="sessionOverlay">
-    <div class="session-popup">
-        <div class="school-logo"><img src="logo(1).png" alt="GSSS SHILLA Logo"></div>
-        <div class="school-name-popup"><i class="fas fa-school"></i> Govt. Sr. Sec. School Shilla</div>
-        <div class="icon-box expired" id="popupIconBox"><i class="fas fa-clock" id="popupIcon"></i></div>
-        <h2 id="popupTitle">Session <span>Expired</span></h2>
-        <p class="sub-text" id="popupSubText">Your session has been expired due to inactivity.<br>Please login again to continue.</p>
-        <div class="session-timer"><i class="fas fa-shield-alt"></i> <span id="popupStatusText">Secure session ended</span></div>
-        <button class="login-again-btn" onclick="redirectToLogin()"><i class="fas fa-sign-in-alt"></i> <span id="popupBtnText">Login Again</span></button>
-    </div>
-</div>
-
-<nav class="navbar">
-    <a href="#" class="brand">
-        <div class="logo-placeholder"><img src="logo(1).png" alt="Logo"></div>
-        <div class="name">GSSS<span> SHILLA</span></div>
-    </a>
-    <ul class="nav-links" id="navLinks">
-        <li><a href="admin-dashboard.html"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
-        <li><a href="admin-students.html"><i class="fas fa-users"></i> Students</a></li>
-        <li><a href="admin-result.html" class="active"><i class="fas fa-graduation-cap"></i> Results</a></li>
-    </ul>
-    <div class="nav-right">
-        <div class="admin-badge">
-            <span class="avatar" id="adminAvatar">🛡️</span>
-            <span id="adminName">Admin</span>
-            <span class="online-dot"></span>
-        </div>
-        <button class="hamburger" onclick="toggleNav()"><i class="fas fa-bars"></i></button>
-    </div>
-</nav>
-
-<div class="main-container">
-    <div class="page-header">
-        <h1><i class="fas fa-graduation-cap"></i> Result Management</h1>
-        <div class="header-actions">
-            <button class="btn btn-primary" onclick="refreshAll()"><i class="fas fa-sync-alt"></i> Refresh</button>
-            <a href="admin-students.html" class="btn btn-outline"><i class="fas fa-users"></i> Manage Students</a>
-        </div>
-    </div>
-
-    <div class="tabs">
-        <button class="tab-btn active" data-tab="search" onclick="switchTab('search')"><i class="fas fa-search"></i> Search Student</button>
-        <button class="tab-btn" data-tab="classwise" onclick="switchTab('classwise')"><i class="fas fa-users"></i> Class-wise</button>
-        <button class="tab-btn" data-tab="upload" onclick="switchTab('upload')"><i class="fas fa-upload"></i> Upload Marksheet</button>
-        <button class="tab-btn" data-tab="publish" onclick="switchTab('publish')"><i class="fas fa-check-circle"></i> Publish</button>
-    </div>
-
-    <!-- TAB 1: SEARCH STUDENT -->
-    <div id="tab-search" class="tab-content active">
-        <div class="search-section">
-            <h3><i class="fas fa-user-graduate"></i> Student Result Search</h3>
-            <p>Student ID daalo aur uski saari marksheets dekho. Student details Nstudent table se fetch hoti hain.</p>
-            <div class="search-row">
-                <input type="text" class="search-input" id="searchStudentId" placeholder="Enter Student ID (e.g. GSSS2025001)" onkeypress="if(event.key==='Enter') searchStudent()">
-                <button class="btn btn-primary" onclick="searchStudent()"><i class="fas fa-search"></i> Search</button>
-                <button class="btn btn-outline" onclick="clearSearch()"><i class="fas fa-times"></i> Clear</button>
-            </div>
-        </div>
-        <div id="searchResultArea"></div>
-    </div>
-
-    <!-- TAB 2: CLASS-WISE -->
-    <div id="tab-classwise" class="tab-content">
-        <div class="class-nav">
-            <h3><i class="fas fa-school"></i> Select Class</h3>
-            <div class="class-buttons" id="classButtons">
-                <button class="class-btn" data-class="6" onclick="selectClass(6)">Class 6</button>
-                <button class="class-btn" data-class="7" onclick="selectClass(7)">Class 7</button>
-                <button class="class-btn" data-class="8" onclick="selectClass(8)">Class 8</button>
-                <button class="class-btn" data-class="9" onclick="selectClass(9)">Class 9</button>
-                <button class="class-btn active" data-class="10" onclick="selectClass(10)">Class 10</button>
-                <button class="class-btn" data-class="11" onclick="selectClass(11)">Class 11</button>
-                <button class="class-btn" data-class="12" onclick="selectClass(12)">Class 12</button>
-            </div>
-            <div class="class-stats">
-                <span>👨‍🎓 Students: <strong id="classStudentCount">-</strong></span>
-                <span>📄 Marksheets: <strong id="classMarksheetCount">-</strong></span>
-                <span>✅ Published: <strong id="classPublishedCount">-</strong></span>
-                <select id="sortSelect" class="btn btn-outline" style="padding:6px 14px;font-size:12px;margin-left:auto;cursor:pointer;" onchange="applySort()">
-                    <option value="name_asc">Name A-Z</option>
-                    <option value="name_desc">Name Z-A</option>
-                    <option value="roll_asc">Roll No ↑</option>
-                    <option value="roll_desc">Roll No ↓</option>
-                    <option value="id_asc">Student ID ↑</option>
-                    <option value="id_desc">Student ID ↓</option>
-                </select>
-            </div>
-        </div>
-        <div id="studentGridContainer"><div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading students...</div></div>
-        <div id="pagination" style="display:flex;justify-content:center;gap:6px;margin-top:20px;"></div>
-    </div>
-
-    <!-- TAB 3: UPLOAD -->
-    <div id="tab-upload" class="tab-content">
-        <div class="class-nav">
-            <h3><i class="fas fa-upload"></i> Upload Marksheet PDF</h3>
-            <div class="alert-box info" style="margin-bottom:16px;">
-                <i class="fas fa-info-circle"></i> Student ID daalo → Fetch karo → Marksheet PDF upload karo.
-                Student add karne ke liye <a href="admin-students.html" style="color:var(--gold);font-weight:600;">Student Management</a> me jao.
-            </div>
-            <form id="uploadForm" enctype="multipart/form-data">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label>Student ID *</label>
-                        <input type="text" id="upStudentId" placeholder="Enter Student ID" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Student Name</label>
-                        <input type="text" id="upName" disabled placeholder="Auto-fill hoga">
-                    </div>
-                    <div class="form-group">
-                        <label>Session</label>
-                        <input type="text" id="upSession" disabled placeholder="Auto-fill hoga">
-                    </div>
-                    <div class="form-group">
-                        <label>Class</label>
-                        <input type="text" id="upClass" disabled placeholder="Auto-fill hoga">
-                    </div>
-                    <div class="form-group">
-                        <label>Exam Type *</label>
-                        <select id="upExamType">
-                            <option>Annual Examination</option>
-                            <option>Half Yearly Examination</option>
-                            <option>Pre Board</option>
-                            <option>Board Examination</option>
-                            <option>Final Examination</option>
-                            <option>Monthly Test</option>
-                            <option>Unit Test</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Exam Session *</label>
-                        <input type="month" id="upExamSession" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Obtained Marks</label>
-                        <input type="text" id="upObtainedMarks" placeholder="e.g. 407">
-                    </div>
-                    <div class="form-group">
-                        <label>Max Marks</label>
-                        <input type="text" id="upMaxMarks" placeholder="e.g. 500">
-                    </div>
-                    <div class="form-group" style="grid-column:1/-1;">
-                        <label>PDF File * (Max 10MB)</label>
-                        <input type="file" id="upPdf" accept=".pdf" required>
-                    </div>
-                </div>
-                <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
-                    <button type="button" class="btn btn-primary" onclick="fetchStudentForUpload()"><i class="fas fa-search"></i> Fetch Student</button>
-                    <button type="submit" class="btn btn-success" id="uploadBtn"><i class="fas fa-upload"></i> Upload Marksheet</button>
-                </div>
-            </form>
-            <div id="uploadStatus" class="alert-box info" style="margin-top:12px;">
-                <i class="fas fa-info-circle"></i> Enter Student ID and click Fetch
-            </div>
-        </div>
-    </div>
-
-    <!-- TAB 4: PUBLISH -->
-    <div id="tab-publish" class="tab-content">
-        <div class="class-nav">
-            <h3><i class="fas fa-check-circle"></i> Publish Results</h3>
-            <div class="class-buttons" id="publishClassButtons">
-                <button class="class-btn" data-class="6" onclick="selectPublishClass(6)">Class 6</button>
-                <button class="class-btn" data-class="7" onclick="selectPublishClass(7)">Class 7</button>
-                <button class="class-btn" data-class="8" onclick="selectPublishClass(8)">Class 8</button>
-                <button class="class-btn" data-class="9" onclick="selectPublishClass(9)">Class 9</button>
-                <button class="class-btn active" data-class="10" onclick="selectPublishClass(10)">Class 10</button>
-                <button class="class-btn" data-class="11" onclick="selectPublishClass(11)">Class 11</button>
-                <button class="class-btn" data-class="12" onclick="selectPublishClass(12)">Class 12</button>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:10px;margin:16px 0;align-items:center;">
-                <select id="publishExamFilter" style="width:auto;min-width:200px;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',sans-serif;background:var(--bg);" onchange="loadPublishableStudents(publishClass)">
-                    <option value="">All Exams</option>
-                    <option>Annual Examination</option>
-                    <option>Half Yearly Examination</option>
-                    <option>Pre Board</option>
-                    <option>Board Examination</option>
-                    <option>Final Examination</option>
-                    <option>Monthly Test</option>
-                    <option>Unit Test</option>
-                </select>
-                <label style="font-weight:600;font-size:13px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;">
-                    Declaration Date *
-                    <input type="date" id="publishDate" style="padding:8px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',sans-serif;background:var(--bg);" required>
-                </label>
-                <button class="btn btn-success" onclick="bulkPublish()" style="margin-left:auto;"><i class="fas fa-check-double"></i> Bulk Publish</button>
-            </div>
-            <div class="table-wrap">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th style="width:40px;"><input type="checkbox" id="selectAllPublish" onchange="toggleAllPublish()"></th>
-                            <th>Student ID</th>
-                            <th>Name</th>
-                            <th>Exam Type</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="publishTableBody">
-                        <tr><td colspan="6" class="loading">Loading...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal-overlay" id="studentModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2 id="modalStudentName"><i class="fas fa-user-graduate"></i> Student Details</h2>
-            <button class="close-btn" onclick="closeModal('studentModal')">&times;</button>
-        </div>
-        <div id="modalStudentContent"><div class="loading">Loading...</div></div>
-    </div>
-</div>
-
-<div class="toast-container" id="toastContainer"></div>
-
-<footer class="footer">
-    <div>&copy; 2026 Govt. Sr. Sec. School Shilla. All rights reserved.</div>
-</footer>
-
-<script>
-// ============================================================
-// CONFIG
-// ============================================================
-const API_BASE = window.location.hostname === "localhost"
-    ? "http://localhost:5000/api/admin/results"
-    : "https://gsssshilla.onrender.com/api/admin/results";
-
-const VERIFY_API = window.location.hostname === "localhost"
-    ? "http://localhost:5000/api/admin/verify"
-    : "https://gsssshilla.onrender.com/api/admin/verify";
-
-const PAGE_SIZE = 20;
-
-// ============================================================
-// STATE
-// ============================================================
-let currentClass = 10;
-let currentPage = 1;
-let publishClass = 10;
-let sortField = "name";
-let sortOrder = "asc";
-let currentStudentsCache = [];
-
-// ============================================================
-// AUTH
-// ============================================================
-function getAuthHeaders() {
-    try {
-        const token = localStorage.getItem("adminToken");
-        if (!token) { showPopup("invalid"); return null; }
-        return { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" };
-    } catch (e) { showPopup("invalid"); return null; }
+function getRequiredDocs(category) {
+  const docs = [...BASE_REQUIRED_DOCS];
+  if (CASTE_REQUIRED_CATEGORIES.includes(category)) docs.push("casteCertificate");
+  return docs;
 }
 
-async function checkAuth() {
-    let token = null;
-    try { token = localStorage.getItem("adminToken"); } catch (e) {}
-    if (!token) { showPopup("invalid"); return false; }
-
-    try {
-        const res = await fetch(VERIFY_API, { headers: { Authorization: `Bearer ${token}` } });
-        const data = await res.json();
-        if (data.success) {
-            if (data.admin?.username) {
-                document.getElementById("adminAvatar").textContent = data.admin.username.charAt(0).toUpperCase();
-                document.getElementById("adminName").textContent = data.admin.username;
-            }
-            return true;
-        }
-        showPopup("expired");
-        return false;
-    } catch (err) {
-        showPopup("expired");
-        return false;
-    }
-}
-
-function showPopup(type = "expired") {
-    const overlay = document.getElementById("sessionOverlay");
-    document.getElementById("popupIconBox").className = "icon-box " + (type === "invalid" ? "invalid" : "expired");
-    document.getElementById("popupIcon").className = type === "invalid" ? "fas fa-lock" : "fas fa-clock";
-    document.getElementById("popupTitle").innerHTML = type === "invalid" ? 'Invalid <span>Access</span>' : 'Session <span>Expired</span>';
-    document.getElementById("popupSubText").innerHTML = type === "invalid"
-        ? "You are not authorized to access this page.<br>Please login with valid credentials."
-        : "Your session has been expired due to inactivity.<br>Please login again to continue.";
-    document.getElementById("popupStatusText").textContent = type === "invalid" ? "Access denied" : "Secure session ended";
-    document.getElementById("popupBtnText").textContent = type === "invalid" ? "Go to Login" : "Login Again";
-    overlay.classList.add("active");
-    try { localStorage.removeItem("adminToken"); } catch (e) {}
-}
-
-function redirectToLogin() {
-    document.getElementById("sessionOverlay").classList.remove("active");
-    window.location.replace("login.html");
-}
-
-// ============================================================
-// HELPERS
-// ============================================================
-function esc(v) {
-    return v === null || v === undefined ? "" : String(v)
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-}
-
-function formatDate(v) {
-    if (!v) return "-";
-    const d = new Date(v);
-    return isNaN(d) ? "-" : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function formatMonth(v) {
-    if (!v) return "-";
-    const parts = v.split("-");
-    if (parts.length !== 2) return v;
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    return months[parseInt(parts[1]) - 1] + " " + parts[0];
-}
-
-function showToast(msg, type = "info") {
-    const c = document.getElementById("toastContainer");
-    const t = document.createElement("div");
-    t.className = `toast toast-${type}`;
-    t.textContent = msg;
-    c.appendChild(t);
-    setTimeout(() => { t.style.opacity = "0"; setTimeout(() => t.remove(), 400); }, 4000);
-}
-
-async function apiCall(url, options = {}) {
-    const headers = getAuthHeaders();
-    if (!headers) throw new Error("Not authenticated");
-
-    let res;
-    try {
-        res = await fetch(url, { ...options, headers: { ...headers, ...(options.headers || {}) } });
-    } catch (e) {
-        throw new Error("Network error. Check connection.");
-    }
-
-    if (res.status === 401) {
-        showPopup("expired");
-        throw new Error("Session expired");
-    }
-
-    let data;
-    try { data = await res.json(); } catch (e) { throw new Error(`Server error ${res.status}`); }
-    if (!res.ok) throw new Error(data.message || `Request failed ${res.status}`);
-    return data;
-}
-
-function toggleNav() { document.getElementById("navLinks").classList.toggle("open"); }
-function openModal(id) { document.getElementById(id).classList.add("active"); }
-function closeModal(id) { document.getElementById(id).classList.remove("active"); }
-document.addEventListener("click", (e) => { if (e.target.classList.contains("modal-overlay")) closeModal(e.target.id); });
-
-// ============================================================
-// TAB SWITCHING
-// ============================================================
-function switchTab(tab) {
-    document.querySelectorAll(".tab-content").forEach(el => el.classList.remove("active"));
-    document.querySelectorAll(".tab-btn").forEach(el => el.classList.remove("active"));
-    document.getElementById(`tab-${tab}`).classList.add("active");
-    document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add("active");
-
-    if (tab === "classwise") loadStudents(currentClass);
-    if (tab === "publish") loadPublishableStudents(publishClass);
-}
-
-// ============================================================
-// SEARCH STUDENT
-// ============================================================
-async function searchStudent() {
-    const studentId = document.getElementById("searchStudentId").value.trim();
-    if (!studentId) return showToast("Enter Student ID", "warning");
-
-    const area = document.getElementById("searchResultArea");
-    area.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Fetching student...</div>';
-
-    try {
-        const data = await apiCall(`${API_BASE}/students/${encodeURIComponent(studentId)}`);
-        renderStudentSearchResult(data.data.student, data.data.marksheets);
-    } catch (e) {
-        if (e.message !== "Session expired") {
-            area.innerHTML = `<div class="alert-box error"><i class="fas fa-exclamation-circle"></i> ${esc(e.message)}</div>`;
-        }
-    }
-}
-
-function clearSearch() {
-    document.getElementById("searchStudentId").value = "";
-    document.getElementById("searchResultArea").innerHTML = "";
-}
-
-function renderStudentSearchResult(student, marksheets) {
-    const area = document.getElementById("searchResultArea");
-    const photo = student.photo || "";
-
-    let totalObtained = 0, totalMax = 0;
-    marksheets.forEach(m => {
-        totalObtained += parseInt(m.obtained_marks) || 0;
-        totalMax += parseInt(m.max_marks) || 0;
-    });
-    const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(2) + "%" : "-";
-
-    const marksheetsHtml = marksheets.length === 0
-        ? `<div class="alert-box info"><i class="fas fa-info-circle"></i> No marksheets uploaded yet.</div>`
-        : marksheets.map(m => `
-            <div class="exam-item">
-                <div class="exam-info">
-                    <span class="exam-name">${esc(m.exam_type)}</span>
-                    <span class="exam-session"><i class="far fa-calendar-alt"></i> ${formatMonth(m.exam_session)}</span>
-                    <span class="exam-session"><i class="fas fa-star"></i> ${esc(m.obtained_marks || "-")}/${esc(m.max_marks || "-")}</span>
-                    <span class="badge ${m.is_published ? "badge-success" : "badge-warning"}">
-                        ${m.is_published ? "✅ Published" : "⏳ Unpublished"}
-                    </span>
-                </div>
-                <div class="action-btns">
-                    <button class="action-btn view" onclick="viewMarksheet(${m.id})"><i class="fas fa-eye"></i></button>
-                    <button class="action-btn print" onclick="printSingleMarksheet(${m.id})"><i class="fas fa-print"></i></button>
-                    <button class="action-btn delete" onclick="deleteMarksheet(${m.id}, '${esc(student.student_id)}')"><i class="fas fa-trash"></i></button>
-                </div>
-            </div>
-        `).join("");
-
-    area.innerHTML = `
-        <div class="student-card" style="cursor:default;">
-            <div class="card-header">
-                <div style="display:flex;gap:12px;align-items:center;">
-                    ${photo ? `<img src="${esc(photo)}" style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:2px solid var(--gold);" onerror="this.style.display='none'">` : ''}
-                    <div>
-                        <div class="student-name">${esc(student.name)}</div>
-                        <div class="student-id">ID: ${esc(student.student_id)}</div>
-                    </div>
-                </div>
-                <span class="status-badge ${marksheets.length ? "uploaded" : "pending"}">
-                    ${marksheets.length ? "✅ " + marksheets.length + " Marksheet(s)" : "⏳ No Marksheets"}
-                </span>
-            </div>
-            <div class="student-detail-grid" style="padding:16px 20px;">
-                <div class="item"><label>Father's Name</label><span>${esc(student.father_name || "-")}</span></div>
-                <div class="item"><label>Mother's Name</label><span>${esc(student.mother_name || "-")}</span></div>
-                <div class="item"><label>Class</label><span>${esc(student.class || "-")}</span></div>
-                <div class="item"><label>Roll No</label><span>${esc(student.roll_number || "-")}</span></div>
-                <div class="item"><label>Session</label><span>${esc(student.session || "-")}</span></div>
-                <div class="item"><label>DOB</label><span>${student.dob ? formatDate(student.dob) : "-"}</span></div>
-                <div class="item"><label>APAAR ID</label><span>${esc(student.apaar_id || "-")}</span></div>
-                <div class="item"><label>Status</label><span>${esc(student.status || "-")}</span></div>
-            </div>
-        </div>
-
-        <div class="class-nav" style="margin-top:20px;">
-            <h3><i class="fas fa-file-pdf"></i> Marksheets (${marksheets.length})</h3>
-            <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">
-                <button class="btn btn-sm btn-primary" onclick="printFullMarksheet('${esc(student.student_id)}')">
-                    <i class="fas fa-print"></i> Print Full Marksheet
-                </button>
-            </div>
-            ${marksheetsHtml}
-        </div>
-
-        <div class="class-nav" style="margin-top:20px;">
-            <h3><i class="fas fa-chart-line"></i> Summary</h3>
-            <div class="class-stats">
-                <span>📊 Total Obtained: <strong>${totalObtained}</strong></span>
-                <span>📈 Max Marks: <strong>${totalMax}</strong></span>
-                <span>🎯 Percentage: <strong>${percentage}</strong></span>
-            </div>
-        </div>
-    `;
-}
-
-// ============================================================
-// CLASS-WISE
-// ============================================================
-function selectClass(c) {
-    currentClass = c;
-    currentPage = 1;
-    document.querySelectorAll("#classButtons .class-btn").forEach(b => b.classList.remove("active"));
-    document.querySelector(`#classButtons .class-btn[data-class="${c}"]`).classList.add("active");
-    loadStudents(c);
-}
-
-async function loadStudents(classNum, page = 1) {
-    currentPage = page;
-    const container = document.getElementById("studentGridContainer");
-    container.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
-
-    try {
-        const data = await apiCall(`${API_BASE}/class/${classNum}/students?page=${page}&limit=${PAGE_SIZE}`);
-        let students = data.data || [];
-        currentStudentsCache = students;
-        students = sortStudents(students);
-        renderStudentCards(students);
-        renderPagination(data.pagination, (p) => loadStudents(classNum, p));
-
-        document.getElementById("classStudentCount").textContent = data.pagination?.total ?? students.length;
-        document.getElementById("classMarksheetCount").textContent = students.reduce((s, x) => s + (Number(x.marksheet_count) || 0), 0);
-        document.getElementById("classPublishedCount").textContent = students.reduce((s, x) => s + (Number(x.published_count) || 0), 0);
-    } catch (e) {
-        if (e.message !== "Session expired") {
-            container.innerHTML = `<div class="alert-box error">${esc(e.message)} <button onclick="loadStudents(${classNum},${page})" class="btn btn-sm btn-outline">Retry</button></div>`;
-        }
-    }
-}
-
-function sortStudents(students) {
-    return [...students].sort((a, b) => {
-        let valA, valB;
-        if (sortField === "roll") {
-            valA = parseInt(a.exam_roll_no) || 0;
-            valB = parseInt(b.exam_roll_no) || 0;
-        } else if (sortField === "name") {
-            valA = (a.name || "").toLowerCase();
-            valB = (b.name || "").toLowerCase();
-        } else {
-            valA = (a.student_id || "").toUpperCase();
-            valB = (b.student_id || "").toUpperCase();
-        }
-        if (sortOrder === "asc") return valA > valB ? 1 : valA < valB ? -1 : 0;
-        return valA < valB ? 1 : valA > valB ? -1 : 0;
-    });
-}
-
-function applySort() {
-    const v = document.getElementById("sortSelect").value;
-    const map = {
-        name_asc: ["name", "asc"], name_desc: ["name", "desc"],
-        roll_asc: ["roll", "asc"], roll_desc: ["roll", "desc"],
-        id_asc: ["student_id", "asc"], id_desc: ["student_id", "desc"]
-    };
-    [sortField, sortOrder] = map[v] || ["name", "asc"];
-    renderStudentCards(sortStudents(currentStudentsCache));
-}
-
-function renderStudentCards(students) {
-    const container = document.getElementById("studentGridContainer");
-    if (!students || students.length === 0) {
-        container.innerHTML = `
-            <div style="text-align:center;padding:40px;color:var(--text-muted);">
-                <i class="fas fa-users" style="font-size:40px;"></i>
-                <p style="margin-top:12px;">No students found</p>
-                <p style="font-size:12px;margin-top:8px;">Add students from <a href="admin-students.html" style="color:var(--gold);font-weight:600;">Student Management</a></p>
-            </div>`;
-        return;
-    }
-
-    container.innerHTML = students.map(s => {
-        const has = (Number(s.marksheet_count) || 0) > 0;
-        const photo = s.photo || "";
-        return `
-            <div class="student-card" onclick="openStudentDetail('${esc(s.student_id)}')">
-                <div class="card-header">
-                    <div style="display:flex;gap:12px;align-items:center;">
-                        ${photo ? `<img src="${esc(photo)}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid var(--gold);" onerror="this.style.display='none'">` : ''}
-                        <div>
-                            <div class="student-name">${esc(s.name)}</div>
-                            <div class="student-id">ID: ${esc(s.student_id)}</div>
-                        </div>
-                    </div>
-                    <span class="status-badge ${has ? "uploaded" : "pending"}">${has ? "✅ " + s.marksheet_count : "⏳ Pending"}</span>
-                </div>
-                <div class="card-body">
-                    <div class="detail"><label>Roll No</label><span>${esc(s.exam_roll_no || "-")}</span></div>
-                    <div class="detail"><label>Session</label><span>${esc(s.session || "-")}</span></div>
-                    <div class="detail"><label>Father</label><span>${esc(s.father_name || "-")}</span></div>
-                    <div class="detail"><label>Class</label><span>${esc(s.class || "-")}</span></div>
-                </div>
-                <div class="card-footer">
-                    <span class="exam-tag">${s.marksheet_count || 0} marksheet(s)</span>
-                    <div class="action-btns">
-                        <button class="action-btn view" onclick="event.stopPropagation();openStudentDetail('${esc(s.student_id)}')">
-                            <i class="fas fa-eye"></i> View
-                        </button>
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join("");
-}
-
-function renderPagination(pagination, onPage) {
-    const container = document.getElementById("pagination");
-    if (!pagination || pagination.totalPages <= 1) { container.innerHTML = ""; return; }
-    const { page, totalPages } = pagination;
-
-    let html = `<button ${page <= 1 ? "disabled" : ""} onclick="window._onPage(${page - 1})" class="btn btn-sm btn-outline"><i class="fas fa-chevron-left"></i></button>`;
-    for (let i = Math.max(1, page - 2); i <= Math.min(totalPages, page + 2); i++) {
-        html += `<button onclick="window._onPage(${i})" class="btn btn-sm" style="background:${i === page ? "var(--gold)" : "var(--bg-white)"};color:${i === page ? "#fff" : "var(--text-secondary)"};border:1px solid var(--border);">${i}</button>`;
-    }
-    html += `<button ${page >= totalPages ? "disabled" : ""} onclick="window._onPage(${page + 1})" class="btn btn-sm btn-outline"><i class="fas fa-chevron-right"></i></button>`;
-    container.innerHTML = html;
-    window._onPage = onPage;
-}
-
-// ============================================================
-// STUDENT DETAIL MODAL
-// ============================================================
-async function openStudentDetail(studentId) {
-    const modalContent = document.getElementById("modalStudentContent");
-    modalContent.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
-    openModal("studentModal");
-    document.getElementById("studentModal").dataset.studentId = studentId;
-
-    try {
-        const data = await apiCall(`${API_BASE}/students/${encodeURIComponent(studentId)}`);
-        renderStudentDetail(data.data);
-    } catch (error) {
-        modalContent.innerHTML = `<div class="alert-box error">${esc(error.message)}</div>`;
-    }
-}
-
-function renderStudentDetail(data) {
-    const s = data.student;
-    const marksheets = data.marksheets || [];
-    document.getElementById("modalStudentName").innerHTML = `<i class="fas fa-user-graduate"></i> ${esc(s.name)}`;
-
-    const marksheetHtml = marksheets.length === 0
-        ? `<div class="alert-box info">No marksheets uploaded yet.</div>`
-        : marksheets.map(m => `
-            <div class="exam-item">
-                <div class="exam-info">
-                    <span class="exam-name">${esc(m.exam_type)}</span>
-                    <span class="exam-session"><i class="far fa-calendar-alt"></i> ${formatMonth(m.exam_session)}</span>
-                    <span class="exam-session"><i class="fas fa-star"></i> ${esc(m.obtained_marks || "-")}/${esc(m.max_marks || "-")}</span>
-                    <span class="badge ${m.is_published ? "badge-success" : "badge-warning"}">${m.is_published ? "Published" : "Unpublished"}</span>
-                </div>
-                <div class="action-btns">
-                    <button class="action-btn view" onclick="viewMarksheet(${m.id})"><i class="fas fa-eye"></i></button>
-                    <button class="action-btn delete" onclick="deleteMarksheet(${m.id}, '${esc(s.student_id)}')"><i class="fas fa-trash"></i></button>
-                </div>
-            </div>
-        `).join("");
-
-    document.getElementById("modalStudentContent").innerHTML = `
-        <div class="student-detail-grid">
-            <div class="item"><label>Student ID</label><span>${esc(s.student_id)}</span></div>
-            <div class="item"><label>APAAR ID</label><span>${esc(s.apaar_id || "-")}</span></div>
-            <div class="item"><label>Father's Name</label><span>${esc(s.father_name || "-")}</span></div>
-            <div class="item"><label>Mother's Name</label><span>${esc(s.mother_name || "-")}</span></div>
-            <div class="item"><label>Date of Birth</label><span>${s.dob ? formatDate(s.dob) : "-"}</span></div>
-            <div class="item"><label>Session</label><span>${esc(s.session || "-")}</span></div>
-            <div class="item"><label>Class</label><span>${esc(s.class || "-")}</span></div>
-            <div class="item"><label>Roll No</label><span>${esc(s.roll_number || "-")}</span></div>
-        </div>
-        <h4 style="font-size:14px;color:var(--text-secondary);margin-bottom:10px;">
-            <i class="fas fa-file-pdf"></i> Marksheets (${marksheets.length})
-        </h4>
-        ${marksheetHtml}
-        <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-sm btn-primary" onclick="printFullMarksheet('${esc(s.student_id)}')">
-                <i class="fas fa-print"></i> Print Marksheet
-            </button>
-            <button class="btn btn-sm btn-outline" onclick="closeModal('studentModal')">
-                <i class="fas fa-times"></i> Close
-            </button>
-        </div>
-    `;
-}
-
-// ============================================================
-// VIEW / DELETE MARKSHEET
-// ============================================================
-async function viewMarksheet(id) {
-    try {
-        const data = await apiCall(`${API_BASE}/marksheets/${id}`);
-        if (data.success && data.data.cloudinary_url) {
-            window.open(data.data.cloudinary_url, "_blank");
-        } else {
-            showToast("URL not found", "error");
-        }
-    } catch (e) {
-        showToast("Failed to open: " + e.message, "error");
-    }
-}
-
-async function deleteMarksheet(id, studentId) {
-    if (!confirm("Delete this marksheet? Ye action undo nahi hoga.")) return;
-    try {
-        await apiCall(`${API_BASE}/marksheets/${id}`, { method: "DELETE" });
-        showToast("Marksheet deleted ✅", "success");
-        if (document.getElementById("studentModal").classList.contains("active")) openStudentDetail(studentId);
-        if (document.getElementById("searchStudentId").value.trim() === studentId) searchStudent();
-        if (document.getElementById("tab-classwise").classList.contains("active")) loadStudents(currentClass);
-    } catch (e) {
-        showToast(e.message, "error");
-    }
-}
-
-// ============================================================
-// UPLOAD
-// ============================================================
-async function fetchStudentForUpload() {
-    const id = document.getElementById("upStudentId").value.trim();
-    if (!id) return showToast("Enter Student ID", "warning");
-
-    const statusBox = document.getElementById("uploadStatus");
-    statusBox.className = "alert-box info";
-    statusBox.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Fetching...';
-
-    try {
-        const data = await apiCall(`${API_BASE}/students/${encodeURIComponent(id)}`);
-        const s = data.data.student;
-        document.getElementById("upName").value = s.name;
-        document.getElementById("upSession").value = s.session || "";
-        document.getElementById("upClass").value = s.class || "";
-        statusBox.className = "alert-box success";
-        statusBox.innerHTML = `<i class="fas fa-check-circle"></i> Student found: <strong>${esc(s.name)}</strong> (${esc(s.class)})`;
-    } catch (e) {
-        statusBox.className = "alert-box error";
-        statusBox.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${esc(e.message)} — Add student first from <a href="admin-students.html" style="color:#fff;text-decoration:underline;">Student Management</a>`;
-        document.getElementById("upName").value = "";
-        document.getElementById("upSession").value = "";
-        document.getElementById("upClass").value = "";
-    }
-}
-
-document.getElementById("uploadForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-
-    const studentId = document.getElementById("upStudentId").value.trim();
-    const pdf = document.getElementById("upPdf").files[0];
-    const examSession = document.getElementById("upExamSession").value;
-    const obtainedMarks = document.getElementById("upObtainedMarks").value.trim();
-    const maxMarks = document.getElementById("upMaxMarks").value.trim();
-
-    if (!studentId || !pdf || !examSession) return showToast("Student ID, Exam Session and PDF required", "warning");
-    if (pdf.size > 10 * 1024 * 1024) return showToast("PDF under 10MB", "warning");
-
-    const session = document.getElementById("upSession").value;
-    const classVal = document.getElementById("upClass").value;
-    if (!session || !classVal) return showToast("First fetch student", "warning");
-
-    const formData = new FormData();
-    formData.append("student_id", studentId);
-    formData.append("session", session);
-    formData.append("class", classVal);
-    formData.append("exam_type", document.getElementById("upExamType").value);
-    formData.append("exam_session", examSession);
-    formData.append("obtained_marks", obtainedMarks);
-    formData.append("max_marks", maxMarks);
-    formData.append("pdf", pdf);
-
-    const btn = document.getElementById("uploadBtn");
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
-
-    try {
-        const token = localStorage.getItem("adminToken");
-        const res = await fetch(`${API_BASE}/marksheets/upload`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}` },
-            body: formData
-        });
-
-        if (res.status === 401) { showPopup("expired"); return; }
-
-        const result = await res.json();
-        if (!result.success) throw new Error(result.message);
-
-        showToast("Marksheet uploaded ✅ (Unpublished)", "success");
-        document.getElementById("uploadForm").reset();
-        document.getElementById("upName").value = "";
-        document.getElementById("upSession").value = "";
-        document.getElementById("upClass").value = "";
-        const statusBox = document.getElementById("uploadStatus");
-        statusBox.className = "alert-box info";
-        statusBox.innerHTML = '<i class="fas fa-info-circle"></i> Enter Student ID and click Fetch';
-        setDefaultExamSession();
-    } catch (err) {
-        showToast(err.message, "error");
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-upload"></i> Upload Marksheet';
-    }
-});
-
-// ============================================================
-// PUBLISH
-// ============================================================
-function selectPublishClass(c) {
-    publishClass = c;
-    document.querySelectorAll("#publishClassButtons .class-btn").forEach(b => b.classList.remove("active"));
-    document.querySelector(`#publishClassButtons .class-btn[data-class="${c}"]`).classList.add("active");
-    loadPublishableStudents(c);
-}
-
-async function loadPublishableStudents(classNum) {
-    const tbody = document.getElementById("publishTableBody");
-    tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading...</td></tr>';
-
-    try {
-        const examFilter = document.getElementById("publishExamFilter").value;
-        let url = `${API_BASE}/marksheets?limit=200&class=${classNum}`;
-        if (examFilter) url += `&exam_type=${encodeURIComponent(examFilter)}`;
-
-        const data = await apiCall(url);
-        if (!data.data || data.data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text-muted);">No marksheets found</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = data.data.map(m => `
-            <tr>
-                <td><input type="checkbox" class="publish-checkbox" data-id="${m.id}" ${m.is_published ? "disabled" : ""}></td>
-                <td>${esc(m.student_id)}</td>
-                <td>${esc(m.name)}</td>
-                <td>${esc(m.exam_type)}</td>
-                <td>
-                    <span class="badge ${m.is_published ? "badge-success" : "badge-warning"}">
-                        ${m.is_published ? "✅ Published" : "⏳ Unpublished"}
-                    </span>
-                </td>
-                <td>
-                    <button class="btn btn-xs btn-success" onclick="publishSingle(${m.id})" ${m.is_published ? "disabled" : ""}>
-                        <i class="fas fa-check"></i> Publish
-                    </button>
-                    <button class="btn btn-xs btn-danger" onclick="unpublishSingle(${m.id})" ${!m.is_published ? "disabled" : ""}>
-                        <i class="fas fa-times"></i> Unpublish
-                    </button>
-                </td>
-            </tr>
-        `).join("");
-    } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--red);">${esc(e.message)}</td></tr>`;
-    }
-}
-
-function toggleAllPublish() {
-    const checked = document.getElementById("selectAllPublish").checked;
-    document.querySelectorAll(".publish-checkbox:not(:disabled)").forEach(cb => cb.checked = checked);
-}
-
-async function publishSingle(id) {
-    const date = document.getElementById("publishDate").value;
-    if (!date) return showToast("Select declaration date", "warning");
-    try {
-        await apiCall(`${API_BASE}/marksheets/${id}/publish`, {
-            method: "POST",
-            body: JSON.stringify({ declaration_date: date })
-        });
-        showToast("Published ✅", "success");
-        loadPublishableStudents(publishClass);
-    } catch (e) { showToast(e.message, "error"); }
-}
-
-async function unpublishSingle(id) {
-    try {
-        await apiCall(`${API_BASE}/marksheets/${id}/unpublish`, { method: "POST" });
-        showToast("Unpublished", "success");
-        loadPublishableStudents(publishClass);
-    } catch (e) { showToast(e.message, "error"); }
-}
-
-async function bulkPublish() {
-    const date = document.getElementById("publishDate").value;
-    if (!date) return showToast("Select declaration date", "warning");
-
-    const selected = [...document.querySelectorAll(".publish-checkbox:checked")].map(cb => cb.dataset.id);
-    if (selected.length === 0) return showToast("Select at least one marksheet", "warning");
-
-    try {
-        const res = await apiCall(`${API_BASE}/marksheets/bulk-publish`, {
-            method: "POST",
-            body: JSON.stringify({ ids: selected, declaration_date: date })
-        });
-        showToast(res.message || "Bulk published ✅", "success");
-        document.getElementById("selectAllPublish").checked = false;
-        loadPublishableStudents(publishClass);
-    } catch (e) { showToast(e.message, "error"); }
-}
-
-// ============================================================
-// PRINT — PROFESSIONAL A4 MARKSHEET
-// ============================================================
-async function printFullMarksheet(studentId) {
-    try {
-        const data = await apiCall(`${API_BASE}/students/${encodeURIComponent(studentId)}`);
-        const s = data.data.student;
-        const marksheets = data.data.marksheets || [];
-
-        let totalObtained = 0, totalMax = 0;
-        marksheets.forEach(m => {
-            totalObtained += parseInt(m.obtained_marks) || 0;
-            totalMax += parseInt(m.max_marks) || 0;
-        });
-        const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(2) : "0.00";
-        const grade = getGrade(percentage);
-        const result = percentage >= 33 ? "PASS" : "FAIL";
-        const resultColor = result === "PASS" ? "#16a34a" : "#dc2626";
-
-        const studentPhoto = s.photo || "";
-        const printDate = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
-
-        // Marksheet rows
-        let marksheetRows = "";
-        marksheets.forEach((m, i) => {
-            marksheetRows += `
-                <tr>
-                    <td style="text-align:center;">${i + 1}</td>
-                    <td style="font-weight:600;">${esc(m.exam_type)}</td>
-                    <td style="text-align:center;">${formatMonth(m.exam_session)}</td>
-                    <td style="text-align:center;font-weight:700;color:#0d1b2a;">${esc(m.obtained_marks || "—")}</td>
-                    <td style="text-align:center;font-weight:700;color:#0d1b2a;">${esc(m.max_marks || "—")}</td>
-                    <td style="text-align:center;font-weight:700;color:#c9972b;">${calculatePercent(m.obtained_marks, m.max_marks)}</td>
-                </tr>
-            `;
-        });
-
-        const html = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Marksheet - ${esc(s.name)}</title>
-<style>
-@page { size: A4 portrait; margin: 10mm 12mm; }
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a2332; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-
-/* Watermark */
-.watermark {
-    position: fixed; inset: 0; pointer-events: none; z-index: 0;
-    display: flex; align-items: center; justify-content: center;
-}
-.watermark-text {
-    font-size: 120px; font-weight: 900; color: rgba(201,151,43,0.06);
-    letter-spacing: 20px; text-transform: uppercase;
-    transform: rotate(-35deg); user-select: none;
-    font-family: 'Georgia', serif;
-}
-.watermark-pattern {
-    position: absolute; inset: 0;
-    background-image: repeating-linear-gradient(45deg, transparent, transparent 60px, rgba(201,151,43,0.03) 60px, rgba(201,151,43,0.03) 62px);
-}
-
-.page-container { position: relative; z-index: 1; max-width: 100%; }
-
-/* Header */
-.header { text-align: center; padding-bottom: 14px; border-bottom: 3px double #c9972b; margin-bottom: 16px; position: relative; }
-.header::after {
-    content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
-    width: 60px; height: 3px; background: #c9972b; border-radius: 3px;
-}
-.school-logo { width: 70px; height: 70px; border-radius: 50%; border: 3px solid #c9972b; padding: 4px; background: #fff; margin: 0 auto 8px; display: block; }
-.school-name { font-family: 'Georgia', serif; font-size: 22px; font-weight: 900; color: #0d1b2a; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
-.school-address { font-size: 10px; color: #5a6a7e; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 4px; }
-.school-affiliation { font-size: 9px; color: #94a3b8; letter-spacing: 1px; margin-bottom: 8px; }
-.title-badge {
-    display: inline-block; background: linear-gradient(135deg, #0d1b2a, #1b3a5c); color: #fff;
-    padding: 6px 30px; border-radius: 30px; font-size: 13px; font-weight: 800;
-    letter-spacing: 3px; text-transform: uppercase; border: 2px solid #c9972b;
-    box-shadow: 0 4px 12px rgba(13,27,42,0.15);
-}
-
-/* Student Info */
-.info-table { width: 100%; border-collapse: collapse; margin: 16px 0; border: 2px solid #0d1b2a; border-radius: 8px; overflow: hidden; }
-.info-table td { padding: 9px 12px; border: 1px solid #cbd5e1; font-size: 11px; vertical-align: middle; }
-.info-table .label { background: linear-gradient(135deg, #fef8ed, #fdf2e0); font-weight: 700; color: #0d1b2a; width: 15%; text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; }
-.info-table .value { font-weight: 600; color: #1a2332; width: 35%; }
-.info-table .value.highlight { color: #c9972b; font-weight: 800; font-size: 12px; }
-
-.photo-cell { width: 90px; text-align: center; vertical-align: middle; background: #fef8ed; }
-.photo-box { width: 75px; height: 90px; border: 3px solid #c9972b; border-radius: 8px; overflow: hidden; background: #fff; margin: 0 auto; display: flex; align-items: center; justify-content: center; box-shadow: 0 3px 8px rgba(0,0,0,0.1); }
-.photo-box img { width: 100%; height: 100%; object-fit: cover; }
-.photo-placeholder { font-size: 32px; color: #cbd5e1; }
-
-/* Section Heading */
-.section-title {
-    font-size: 12px; font-weight: 800; color: #0d1b2a; text-transform: uppercase;
-    letter-spacing: 2px; margin: 18px 0 10px; padding: 8px 14px;
-    background: linear-gradient(90deg, #fef8ed, transparent);
-    border-left: 4px solid #c9972b; border-radius: 4px;
-    display: flex; align-items: center; gap: 8px;
-}
-
-/* Marks Table */
-.marks-table { width: 100%; border-collapse: collapse; margin: 8px 0; border: 2px solid #0d1b2a; border-radius: 8px; overflow: hidden; }
-.marks-table th {
-    background: linear-gradient(135deg, #0d1b2a, #1b3a5c); color: #fff; padding: 10px 12px;
-    border: 1px solid #0d1b2a; font-size: 10px; text-transform: uppercase;
-    letter-spacing: 1px; font-weight: 700; text-align: center;
-}
-.marks-table td { padding: 10px 12px; border: 1px solid #cbd5e1; font-size: 11px; }
-.marks-table tbody tr:nth-child(even) { background: #fafbfc; }
-.marks-table tbody tr:hover { background: #fef8ed; }
-.marks-table tfoot td { background: #fef8ed; font-weight: 800; padding: 12px; border-top: 2px solid #c9972b; }
-
-/* Summary Cards */
-.summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 18px 0; }
-.summary-card {
-    border: 2px solid #c9972b; border-radius: 10px; padding: 14px 10px;
-    background: linear-gradient(135deg, #fef8ed, #fdf2e0); text-align: center;
-    box-shadow: 0 3px 10px rgba(201,151,43,0.1);
-}
-.summary-card .label { font-size: 9px; text-transform: uppercase; color: #5a6a7e; font-weight: 700; letter-spacing: 1px; margin-bottom: 6px; }
-.summary-card .value { font-size: 22px; font-weight: 900; color: #0d1b2a; font-family: 'Georgia', serif; }
-.summary-card .value.gold { color: #c9972b; }
-.summary-card .value.pass { color: #16a34a; }
-.summary-card .value.fail { color: #dc2626; }
-.summary-card .sub { font-size: 9px; color: #94a3b8; margin-top: 3px; }
-
-/* Declaration */
-.declaration {
-    background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
-    border: 2px solid #0284c7; border-radius: 10px;
-    padding: 12px 18px; margin: 16px 0; font-size: 11px;
-    line-height: 1.7; color: #0c4a6e; position: relative;
-}
-.declaration::before {
-    content: '📋'; position: absolute; top: -12px; left: 18px;
-    background: #fff; padding: 0 8px; font-size: 18px;
-}
-.declaration strong { color: #075985; }
-
-/* Signatures */
-.signature-area {
-    display: flex; justify-content: space-between; align-items: flex-end;
-    margin-top: 40px; padding-top: 20px; border-top: 2px dashed #cbd5e1;
-}
-.signature-box { text-align: center; font-size: 10px; min-width: 160px; }
-.signature-line { width: 140px; border-bottom: 2px solid #0d1b2a; margin: 0 auto 6px; height: 30px; }
-.signature-name { font-weight: 800; color: #0d1b2a; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
-.signature-title { font-size: 9px; color: #64748b; letter-spacing: 0.5px; }
-
-/* Footer */
-.footer-note {
-    margin-top: 20px; padding: 10px 14px; background: #f8fafc;
-    border-radius: 6px; border-left: 4px solid #c9972b;
-    font-size: 9px; color: #64748b; line-height: 1.6;
-}
-.footer-meta {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-top: 14px; padding-top: 10px; border-top: 2px solid #c9972b;
-    font-size: 9px; color: #64748b; letter-spacing: 0.5px;
-}
-.footer-meta .print-id { font-family: 'Courier New', monospace; font-weight: 700; color: #0d1b2a; }
-.footer-meta .verified { color: #16a34a; font-weight: 700; }
-
-/* QR Box */
-.qr-box {
-    position: absolute; top: 16px; right: 16px;
-    text-align: center; padding: 6px;
-    border: 2px solid #c9972b; border-radius: 8px;
-    background: #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.08);
-}
-.qr-box .qr-label { font-size: 7px; color: #64748b; text-transform: uppercase; font-weight: 700; margin-top: 3px; letter-spacing: 0.5px; }
-
-@media print {
-    body { background: white !important; }
-    .page-container { page-break-inside: avoid; }
-    .watermark { display: flex !important; }
-}
-</style></head>
-<body>
-<div class="watermark">
-    <div class="watermark-pattern"></div>
-    <div class="watermark-text">GSSS SHILLA</div>
-</div>
-
-<div class="page-container">
-
-    <!-- HEADER -->
-    <div class="header">
-        <img src="logo(1).png" class="school-logo" onerror="this.style.display='none'">
-        <div class="school-name">Govt. Sr. Sec. School Shilla</div>
-        <div class="school-address">Shilla • Teh. Nerwa • Distt. Shimla • Himachal Pradesh — 171210</div>
-        <div class="school-affiliation">Affiliated to HPBOSE • Recognized by Govt. of Himachal Pradesh</div>
-        <div class="title-badge">📜 Official Marksheet</div>
-    </div>
-
-    <!-- STUDENT INFO -->
-    <table class="info-table">
-        <tr>
-            <td class="label">Student ID</td>
-            <td class="value highlight">${esc(s.student_id)}</td>
-            <td class="label">Admission No</td>
-            <td class="value">${esc(s.admission_number || "—")}</td>
-            <td class="photo-cell" rowspan="5">
-                <div class="photo-box">
-                    ${studentPhoto
-                        ? `<img src="${esc(studentPhoto)}" onerror="this.parentElement.innerHTML='<div class=&quot;photo-placeholder&quot;>👤</div>'">`
-                        : '<div class="photo-placeholder">👤</div>'}
-                </div>
-            </td>
-        </tr>
-        <tr>
-            <td class="label">Student Name</td>
-            <td class="value" style="font-size:13px;font-weight:800;">${esc(s.name)}</td>
-            <td class="label">Father's Name</td>
-            <td class="value">${esc(s.father_name || "—")}</td>
-        </tr>
-        <tr>
-            <td class="label">Mother's Name</td>
-            <td class="value">${esc(s.mother_name || "—")}</td>
-            <td class="label">Date of Birth</td>
-            <td class="value">${s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) : "—"}</td>
-        </tr>
-        <tr>
-            <td class="label">Class</td>
-            <td class="value highlight">${esc(s.class || "—")}${s.stream ? " · " + esc(s.stream) : ""}</td>
-            <td class="label">Section</td>
-            <td class="value">${esc(s.section || "—")}</td>
-        </tr>
-        <tr>
-            <td class="label">Roll Number</td>
-            <td class="value">${esc(s.roll_number || "—")}</td>
-            <td class="label">Academic Session</td>
-            <td class="value highlight">${esc(s.session || "—")}</td>
-        </tr>
-    </table>
-
-    <!-- MARKSHEETS -->
-    <div class="section-title">📊 Examination Performance Details</div>
-    <table class="marks-table">
-        <thead>
-            <tr>
-                <th style="width:40px;">#</th>
-                <th>Examination Type</th>
-                <th style="width:110px;">Exam Session</th>
-                <th style="width:90px;">Obtained</th>
-                <th style="width:90px;">Maximum</th>
-                <th style="width:90px;">Percentage</th>
-            </tr>
-        </thead>
-        <tbody>
-            ${marksheetRows || '<tr><td colspan="6" style="text-align:center;padding:20px;color:#94a3b8;font-style:italic;">No examination records available</td></tr>'}
-        </tbody>
-        ${marksheets.length > 0 ? `
-        <tfoot>
-            <tr>
-                <td colspan="3" style="text-align:right;">GRAND TOTAL →</td>
-                <td style="text-align:center;color:#c9972b;font-size:14px;">${totalObtained}</td>
-                <td style="text-align:center;color:#c9972b;font-size:14px;">${totalMax}</td>
-                <td style="text-align:center;color:#c9972b;font-size:14px;">${percentage}%</td>
-            </tr>
-        </tfoot>` : ""}
-    </table>
-
-    <!-- SUMMARY -->
-    <div class="summary-grid">
-        <div class="summary-card">
-            <div class="label">Total Obtained</div>
-            <div class="value gold">${totalObtained}</div>
-            <div class="sub">Out of ${totalMax}</div>
-        </div>
-        <div class="summary-card">
-            <div class="label">Overall Percentage</div>
-            <div class="value gold">${percentage}%</div>
-            <div class="sub">Aggregate</div>
-        </div>
-        <div class="summary-card">
-            <div class="label">Grade</div>
-            <div class="value">${grade}</div>
-            <div class="sub">Based on %</div>
-        </div>
-        <div class="summary-card">
-            <div class="label">Final Result</div>
-            <div class="value ${result === "PASS" ? "pass" : "fail"}">${result}</div>
-            <div class="sub">Declared</div>
-        </div>
-    </div>
-
-    <!-- DECLARATION -->
-    <div class="declaration">
-        <strong>DECLARATION:</strong> This is to certify that <strong>${esc(s.name)}</strong> 
-        (Student ID: <strong>${esc(s.student_id)}</strong>), son/daughter of 
-        <strong>${esc(s.father_name || "—")}</strong>, has appeared in the examinations mentioned above 
-        for the academic session <strong>${esc(s.session || "—")}</strong> and is declared 
-        <strong style="color:${resultColor};">${result}</strong>. 
-        This marksheet is generated by the school's official digital portal.
-    </div>
-
-    <!-- SIGNATURES -->
-    <div class="signature-area">
-        <div class="signature-box">
-            <div class="signature-line"></div>
-            <div class="signature-name">Class Teacher</div>
-            <div class="signature-title">Verified By</div>
-        </div>
-        <div class="signature-box">
-            <div class="signature-line"></div>
-            <div class="signature-name">Principal</div>
-            <div class="signature-title">Govt. Sr. Sec. School Shilla</div>
-        </div>
-    </div>
-
-    <!-- FOOTER NOTE -->
-    <div class="footer-note">
-        <strong>Note:</strong> This is a computer-generated document. Original marksheets can be collected from the school office.
-        Any discrepancy in this document should be reported to the school within 7 days.
-        This document is valid only when accompanied by the school's official seal.
-    </div>
-
-    <!-- META -->
-    <div class="footer-meta">
-        <span>📅 Print Date: <strong>${printDate}</strong></span>
-        <span>🆔 Document ID: <span class="print-id">GSSS-${esc(s.student_id)}-${Date.now().toString(36).toUpperCase()}</span></span>
-        <span class="verified">✅ Digitally Verified</span>
-    </div>
-
-</div>
-
-<script>
-window.onload = function() {
-    setTimeout(function() {
-        window.print();
-        // window.close(); // uncomment agar auto close chahiye
-    }, 800);
+const CLASS_ORDER = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+const PROMOTED_VISIBLE_MS = 60 * 60 * 1000;
+const AUTO_REVERT_INTERVAL_MS = 5 * 60 * 1000;
+
+// ==================== HELPERS ====================
+const toSnake = (s) => s.replace(/[A-Z]/g, (m) => "_" + m.toLowerCase());
+
+const BODY_FIELDS = [
+  "studentId", "admissionNumber", "admissionDate", "name", "fatherName",
+  "motherName", "dob", "aadharNumber", "apaarId", "class", "rollNumber",
+  "session", "mobileNumber", "emailId", "gender", "category", "address",
+  "status", "promotedFrom", "promotionDate", "stream", "village", "postOffice", "tehsil", "district", "state", "pincode",
+  "emailVerified"
+];
+
+const pickBody = (b) => {
+  const out = {};
+  for (const k of BODY_FIELDS) {
+    if (b[k] !== undefined && b[k] !== null && b[k] !== "") out[toSnake(k)] = b[k];
+  }
+  return out;
 };
-</script>
+
+const extractFiles = (files) => {
+  const out = {};
+  if (!files) return out;
+  for (const f of DOC_FIELDS) {
+    if (files[f] && files[f][0]) {
+      const snake = toSnake(f);
+      out[`${snake}_url`] = files[f][0].path;
+      out[`${snake}_pid`] = files[f][0].filename;
+    }
+  }
+  return out;
+};
+
+const incrementSession = (s) => {
+  const m = /^(\d{4})-(\d{2,4})$/.exec(s);
+  if (!m) return s;
+  const startYear = parseInt(m[1]) + 1;
+  const endYear = startYear + 1;
+  const endPart = m[2].length === 2 ? endYear.toString().substring(2) : String(endYear);
+  return `${startYear}-${endPart}`;
+};
+
+const nextClass = (currentClass) => {
+  const idx = CLASS_ORDER.indexOf(String(currentClass));
+  if (idx === -1 || idx === CLASS_ORDER.length - 1) return null;
+  return CLASS_ORDER[idx + 1];
+};
+
+const q = (sql, params = []) => db.query(sql, params);
+
+// ============================================================
+// ✅ AADHAAR VALIDATION
+// ============================================================
+function normalizeAadhaar(v) {
+  return String(v || "").replace(/[\s-]/g, "");
+}
+function hasValidAadhaarStart(a) {
+  return /^[2-9]\d{11}$/.test(a);
+}
+
+const d = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]];
+const p = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
+
+function validateVerhoeff(num) {
+  let c = 0;
+  const reversed = String(num).split("").reverse().map(Number);
+  for (let i = 0; i < reversed.length; i++) c = d[c][p[i % 8][reversed[i]]];
+  return c === 0;
+}
+
+// ============================================================
+// ✅ AUTO-REVERT PROMOTED
+// ============================================================
+async function autoRevertExpiredPromotions() {
+  try {
+    const result = await q(
+      `UPDATE Nstudent SET status = 'Active', promotion_date = NULL
+       WHERE status = 'Promoted' AND promotion_date IS NOT NULL
+       AND promotion_date <= (NOW() - INTERVAL 1 HOUR)`
+    );
+    return result.affectedRows || 0;
+  } catch (err) { return 0; }
+}
+
+function revertStatusIfExpired(student) {
+  if (!student) return student;
+  if (student.status === "Promoted" && student.promotion_date &&
+      new Date(student.promotion_date).getTime() + PROMOTED_VISIBLE_MS <= Date.now()) {
+    student.status = "Active";
+    student.promotion_date = null;
+  }
+  return student;
+}
+
+let _autoRevertTimer = null;
+function startAutoRevertTimer() {
+  if (_autoRevertTimer) return;
+  autoRevertExpiredPromotions();
+  _autoRevertTimer = setInterval(autoRevertExpiredPromotions, AUTO_REVERT_INTERVAL_MS);
+  if (_autoRevertTimer.unref) _autoRevertTimer.unref();
+  console.log(`⏰ Auto-revert timer started`);
+}
+startAutoRevertTimer();
+
+// ============================================================
+// ✅ OTP TABLES
+// ============================================================
+(async () => {
+  try {
+    await q(`
+      CREATE TABLE IF NOT EXISTS student_otps (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        type VARCHAR(20) NOT NULL,
+        target VARCHAR(255) NOT NULL,
+        otp VARCHAR(10) NOT NULL,
+        purpose VARCHAR(50) DEFAULT 'verify',
+        expires_at DATETIME NOT NULL,
+        attempts INT DEFAULT 0,
+        verified BOOLEAN DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_target_type (target, type),
+        INDEX idx_expires (expires_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await q(`
+      CREATE TABLE IF NOT EXISTS settings (
+        \`key\` VARCHAR(100) PRIMARY KEY,
+        \`value\` VARCHAR(500) NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
+    console.log("✅ student_otps & settings tables ready");
+  } catch (err) {
+    console.error("❌ table create error:", err.message);
+  }
+})();
+
+function generateOTP() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+async function saveOTP(type, target, otp, purpose = "verify") {
+  const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
+  await q(`DELETE FROM student_otps WHERE type = ? AND target = ? AND purpose = ?`, [type, target, purpose]);
+  await q(`INSERT INTO student_otps (type, target, otp, purpose, expires_at) VALUES (?, ?, ?, ?, ?)`, [type, target, otp, purpose, expiresAt]);
+}
+
+async function verifyOTP(type, target, otp, purpose = "verify") {
+  const rows = await q(
+    `SELECT * FROM student_otps 
+     WHERE type = ? AND target = ? AND purpose = ? AND expires_at > NOW()
+     ORDER BY id DESC LIMIT 1`,
+    [type, target, purpose]
+  );
+  if (!rows.length) return { valid: false, reason: "NO_OTP_OR_EXPIRED" };
+  const rec = rows[0];
+  if (rec.attempts >= OTP_MAX_ATTEMPTS) {
+    await q(`DELETE FROM student_otps WHERE id = ?`, [rec.id]);
+    return { valid: false, reason: "TOO_MANY_ATTEMPTS", attempts: rec.attempts };
+  }
+  if (String(rec.otp) !== String(otp).trim()) {
+    await q(`UPDATE student_otps SET attempts = attempts + 1 WHERE id = ?`, [rec.id]);
+    return { valid: false, reason: "INVALID_OTP", attempts: rec.attempts + 1 };
+  }
+  await q(`UPDATE student_otps SET verified = 1 WHERE id = ?`, [rec.id]);
+  return { valid: true };
+}
+
+// ============================================================
+// ✅ EMAIL SENDER (Brevo)
+// ============================================================
+const BREVO_API_KEY = process.env.BREVO_API_KEY;
+const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL || "noreply@gssshilla.in";
+const BREVO_SENDER_NAME = "GSSS SHILLA";
+const SCHOOL_LOGO_URL = "https://gsssshilla07.pages.dev/logo(1).png";
+const SCHOOL_WEBSITE = "https://gsssshilla07.pages.dev";
+
+async function sendEmailOTP(toEmail, otp, purpose = "verify") {
+  if (!BREVO_API_KEY) throw new Error("BREVO_API_KEY not configured");
+  const headingText = purpose === "add" ? "Student Registration Verification"
+    : purpose === "update" ? "Student Update Verification"
+      : "Email Verification";
+
+  const htmlContent = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>OTP Verification</title></head>
+<body style="margin:0; padding:0; background:#f1f5f9; font-family: Arial, sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
+<tr><td align="center">
+<table width="520" cellpadding="0" cellspacing="0" style="background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 4px 18px rgba(0,0,0,0.08);">
+<tr><td style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #0ea5e9 100%); padding: 32px 24px; text-align:center;">
+<img src="${SCHOOL_LOGO_URL}" alt="GSSS" width="80" height="80" style="border-radius:50%; background:#fff; padding:6px; margin-bottom:12px;">
+<h1 style="color:#fff; font-size:22px; margin:8px 0 2px;">GSSS SHILLA</h1>
+<p style="color:#e0e7ff; font-size:13px; margin:0;">Govt. Sr. Sec. School Shilla</p>
+</td></tr>
+<tr><td style="padding: 32px 28px;">
+<h2 style="color:#1e293b; font-size:18px; margin:0 0 8px;">${headingText}</h2>
+<p style="color:#64748b; font-size:14px; line-height:1.6; margin:0 0 20px;">
+Use the OTP below to verify your email address for student registration.
+</p>
+<table width="100%" cellpadding="0" cellspacing="0">
+<tr><td align="center" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px dashed #6366f1; border-radius: 12px; padding: 20px;">
+<p style="margin:0 0 8px; color:#6366f1; font-size:12px; font-weight:600; text-transform:uppercase;">Your OTP Code</p>
+<div style="font-size:36px; font-weight:800; letter-spacing:10px; color:#1e1b4b;">${otp}</div>
+</td></tr>
+</table>
+<p style="color:#94a3b8; font-size:12px; margin:20px 0 0; line-height:1.6;">
+⏱ Valid for <strong>5 minutes</strong>.<br>
+If you didn't request this, ignore this email.
+</p>
+</td></tr>
+<tr><td style="background:#f8fafc; padding: 16px 24px; text-align:center; border-top:1px solid #e2e8f0;">
+<p style="margin:0; color:#94a3b8; font-size:11px;">© ${new Date().getFullYear()} GSSS SHILLA</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
 </body></html>`;
 
-        const pw = window.open("", "_blank", "width=1000,height=800");
-        pw.document.write(html);
-        pw.document.close();
-    } catch (e) {
-        showToast(e.message, "error");
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json", "api-key": BREVO_API_KEY },
+    body: JSON.stringify({
+      sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+      to: [{ email: toEmail }],
+      subject: `OTP for Student Verification — GSSS SHILLA`,
+      htmlContent,
+      textContent: `Your OTP: ${otp}\nValid for 5 minutes.`
+    })
+  });
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Email send failed (${response.status}): ${errBody}`);
+  }
+  return response.json();
+}
+
+// ============================================================
+// ✅ REGISTRATION SUCCESS EMAIL
+// ============================================================
+async function sendRegistrationSuccessEmail(student, pdfBuffer) {
+  if (!BREVO_API_KEY) {
+    console.warn("BREVO_API_KEY not set, skipping welcome email");
+    return null;
+  }
+
+  const s = student;
+  const loginUrl = `${SCHOOL_WEBSITE}/student-login.html`;
+  const pdfBase64 = pdfBuffer.toString("base64");
+
+  const htmlContent = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Welcome to GSSS Shilla</title></head>
+<body style="margin:0; padding:0; background:#f1f5f9; font-family: Arial, sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 8px 40px rgba(0,0,0,0.1);">
+  <tr><td style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #0ea5e9 100%); padding: 40px 32px; text-align:center;">
+    <img src="${SCHOOL_LOGO_URL}" alt="GSSS" width="100" height="100" style="border-radius:50%; background:#fff; padding:8px; margin-bottom:16px; box-shadow:0 4px 20px rgba(0,0,0,0.15);">
+    <h1 style="color:#fff; font-size:26px; margin:0 0 4px; letter-spacing:0.5px;">GSSS SHILLA</h1>
+    <p style="color:#e0e7ff; font-size:13px; margin:0; letter-spacing:1px;">Govt. Sr. Sec. School Shilla</p>
+    <p style="color:#c7d2fe; font-size:11px; margin:6px 0 0; letter-spacing:0.5px;">Affiliated to HPBOSE · Recognized by Govt. of HP</p>
+  </td></tr>
+
+  <tr><td style="padding: 40px 36px;">
+    <h2 style="color:#1e293b; font-size:22px; margin:0 0 12px;">🎉 Welcome, ${s.name}!</h2>
+    <p style="color:#475569; font-size:15px; line-height:1.7; margin:0 0 24px;">
+      Congratulations! Your registration at <b>Govt. Sr. Sec. School Shilla</b> has been completed successfully. We're delighted to welcome you to our school family.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px solid #c7d2fe; border-radius: 14px; margin-bottom: 24px;">
+      <tr><td style="padding: 20px 24px;">
+        <p style="margin:0 0 14px; color:#4f46e5; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.2px;">📋 Your Student Details</p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
+          <tr><td style="padding: 7px 0; color:#64748b; width:40%;">Student ID:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.student_id}</td></tr>
+          <tr><td style="padding: 7px 0; color:#64748b;">Admission No:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.admission_number || "-"}</td></tr>
+          <tr><td style="padding: 7px 0; color:#64748b;">Class:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.class}${s.stream && ["11","12"].includes(String(s.class)) ? " · " + s.stream : ""}</td></tr>
+          <tr><td style="padding: 7px 0; color:#64748b;">Roll Number:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.roll_number || "-"}</td></tr>
+          <tr><td style="padding: 7px 0; color:#64748b;">Session:</td><td style="padding: 7px 0; color:#1e293b; font-weight:700;">${s.session || "-"}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1.5px solid #f59e0b; border-radius: 14px; margin-bottom: 24px;">
+      <tr><td style="padding: 20px 24px;">
+        <p style="margin:0 0 14px; color:#92400e; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.2px;">🔐 Your Login Credentials</p>
+        <p style="margin:0 0 12px; color:#78350f; font-size:13px; line-height:1.6;">
+          Use these credentials to log in to your student portal:
+        </p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
+          <tr><td style="padding: 7px 0; color:#78350f; width:40%;">APAAR ID:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800; font-family: monospace; letter-spacing: 2px;">${s.apaar_id}</td></tr>
+          <tr><td style="padding: 7px 0; color:#78350f;">Date of Birth:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800;">${s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-"}</td></tr>
+          <tr><td style="padding: 7px 0; color:#78350f;">Student ID:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800;">${s.student_id}</td></tr>
+          <tr><td style="padding: 7px 0; color:#78350f;">Class:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800;">${s.class}</td></tr>
+        </table>
+        <p style="margin:14px 0 0; color:#92400e; font-size:12px; line-height:1.5;">
+          <strong>⚠️ Important:</strong> Please keep these credentials safe and do not share them with anyone.
+        </p>
+      </td></tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+      <tr><td align="center">
+        <a href="${loginUrl}" style="display:inline-block; padding: 16px 48px; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color:#fff; text-decoration:none; border-radius:50px; font-weight:800; font-size:15px; letter-spacing:1px; box-shadow: 0 8px 24px rgba(79,70,229,0.4);">
+          🚀 Login to Student Portal
+        </a>
+      </td></tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4; border:1.5px solid #86efac; border-radius:14px; margin-bottom: 24px;">
+      <tr><td style="padding: 16px 20px;">
+        <p style="margin:0; color:#166534; font-size:13px; line-height:1.6;">
+          📎 <b>Attachment:</b> Your <b>Provisional Registration Form</b> is attached with this email. Please download and save it for your records.
+        </p>
+      </td></tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e2e8f0; padding-top:20px;">
+      <tr><td>
+        <p style="margin:0 0 8px; color:#64748b; font-size:12px; line-height:1.6;">
+          <b style="color:#1e293b;">Need help?</b> Contact the school office:
+        </p>
+        <p style="margin:0; color:#64748b; font-size:12px; line-height:1.7;">
+          📞 +91 9805444375<br>
+          📧 info@gssshilla.in<br>
+          🌐 ${SCHOOL_WEBSITE}
+        </p>
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <tr><td style="background:#f8fafc; padding: 24px; text-align:center; border-top:1px solid #e2e8f0;">
+    <p style="margin:0 0 6px; color:#94a3b8; font-size:11px; letter-spacing:0.5px;">
+      This is an automated email from GSSS Shilla Student Management System
+    </p>
+    <p style="margin:0; color:#94a3b8; font-size:11px;">
+      © ${new Date().getFullYear()} Govt. Sr. Sec. School Shilla · All rights reserved
+    </p>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body></html>`;
+
+  const payload = {
+    sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+    to: [{ email: s.email_id }],
+    subject: `🎓 Welcome to GSSS Shilla, ${s.name}! Your Registration is Complete`,
+    htmlContent,
+    textContent: `Welcome ${s.name}! Your registration at GSSS Shilla is complete.\n\nStudent ID: ${s.student_id}\nAPAAR ID: ${s.apaar_id}\nDOB: ${s.dob}\nClass: ${s.class}\n\nLogin: ${loginUrl}`,
+    attachment: [{
+      name: `Registration-${s.student_id}.pdf`,
+      content: pdfBase64
+    }]
+  };
+
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json", "api-key": BREVO_API_KEY },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Welcome email failed (${response.status}): ${errBody}`);
+  }
+  return response.json();
+}
+
+// ============================================================
+// ✅ WELCOME PDF GENERATOR
+// ============================================================
+function fetchImageBuffer(url) {
+  return new Promise((resolve) => {
+    if (!url) return resolve(null);
+    try { new URL(url); } catch { return resolve(null); }
+    const client = url.startsWith("https") ? https : http;
+    const req = client.get(url, (resp) => {
+      if ([301, 302, 307, 308].includes(resp.statusCode) && resp.headers.location) {
+        resp.resume();
+        return resolve(fetchImageBuffer(resp.headers.location));
+      }
+      if (resp.statusCode !== 200) { resp.resume(); return resolve(null); }
+      const ct = resp.headers["content-type"] || "";
+      if (!ct.startsWith("image/")) { resp.resume(); return resolve(null); }
+      const chunks = [];
+      resp.on("data", c => chunks.push(c));
+      resp.on("end", () => resolve(Buffer.concat(chunks)));
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(10000, () => { req.destroy(); resolve(null); });
+  });
+}
+
+async function generateWelcomePDF(student) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const s = student;
+      const [logoBuf, photoBuf, sigBuf] = await Promise.all([
+        fetchImageBuffer(SCHOOL_LOGO_URL),
+        fetchImageBuffer(s.student_photo_url),
+        fetchImageBuffer(s.signature_url)
+      ]);
+
+      const doc = new PDFDocument({ size: "A4", margins: { top: 40, bottom: 40, left: 45, right: 45 } });
+      const chunks = [];
+      doc.on("data", c => chunks.push(c));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
+      const ML = 45;
+      const MR = 45;
+      const contentW = pageW - ML - MR;
+
+      // Watermark
+      doc.save();
+      doc.opacity(0.04);
+      doc.fontSize(80).fillColor("#c9972b").font("Helvetica-Bold");
+      doc.translate(pageW / 2, pageH / 2);
+      doc.rotate(-30, { origin: [0, 0] });
+      doc.text("GSSS SHILLA", -300, -40, { width: 600, align: "center" });
+      doc.restore();
+
+      if (logoBuf) {
+        doc.save();
+        doc.opacity(0.05);
+        doc.image(logoBuf, (pageW - 350) / 2, (pageH - 350) / 2, { width: 350, height: 350 });
+        doc.restore();
+      }
+
+      // Header
+      let y = 40;
+      if (logoBuf) {
+        try {
+          doc.save();
+          doc.circle(ML + 30, y + 30, 32).fill("#ffffff");
+          doc.circle(ML + 30, y + 30, 31).lineWidth(1.5).strokeColor("#c9972b").stroke();
+          doc.restore();
+          doc.image(logoBuf, ML + 3, y + 3, { fit: [54, 54], align: "center", valign: "center" });
+        } catch (e) {}
+      }
+
+      doc.font("Helvetica-Bold").fontSize(19).fillColor("#0d1b2a")
+         .text("GOVT. SR. SEC. SCHOOL SHILLA", ML + 70, y + 4, { width: contentW - 70, align: "center" });
+      doc.font("Helvetica").fontSize(9).fillColor("#5a6a7e")
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", ML + 70, y + 28, { width: contentW - 70, align: "center" });
+      doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
+         .text("Affiliated to HPBOSE · Recognized by Govt. of Himachal Pradesh", ML + 70, y + 42, { width: contentW - 70, align: "center" });
+
+      y += 70;
+      doc.moveTo(ML, y).lineTo(pageW - MR, y).lineWidth(3).strokeColor("#c9972b").stroke();
+      doc.moveTo(ML, y + 3).lineTo(pageW - MR, y + 3).lineWidth(0.5).strokeColor("#0d1b2a").stroke();
+
+      // Title
+      y += 20;
+      const titleText = "PROVISIONAL REGISTRATION FORM";
+      doc.font("Helvetica-Bold").fontSize(13);
+      const titleW = doc.widthOfString(titleText) + 60;
+      const titleX = (pageW - titleW) / 2;
+      doc.roundedRect(titleX, y, titleW, 26, 13).fill("#0d1b2a");
+      doc.roundedRect(titleX, y, titleW, 26, 13).lineWidth(1.5).strokeColor("#c9972b").stroke();
+      doc.font("Helvetica-Bold").fontSize(13).fillColor("#ffffff")
+         .text(titleText, titleX, y + 7, { width: titleW, align: "center", characterSpacing: 2 });
+
+      y += 40;
+
+      // Photo box
+      const photoBoxW = 90, photoBoxH = 105;
+      const photoBoxX = pageW - MR - photoBoxW;
+      const photoBoxY = y;
+      if (photoBuf) {
+        try {
+          doc.rect(photoBoxX - 2, photoBoxY - 2, photoBoxW + 4, photoBoxH + 4).fillAndStroke("#ffffff", "#c9972b");
+          doc.image(photoBuf, photoBoxX, photoBoxY, { fit: [photoBoxW, photoBoxH], align: "center", valign: "center" });
+        } catch (e) {}
+      } else {
+        doc.rect(photoBoxX, photoBoxY, photoBoxW, photoBoxH).fillAndStroke("#f8fafc", "#c9972b");
+        doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
+           .text("STUDENT PHOTO", photoBoxX, photoBoxY + photoBoxH / 2 - 4, { width: photoBoxW, align: "center" });
+      }
+
+      const infoW = contentW - photoBoxW - 15;
+      const drawRowNarrow = (label, value) => {
+        const rowH = 22;
+        doc.rect(ML, y, 140, rowH).fillColor("#fef8ed").fill();
+        doc.rect(ML, y, 140, rowH).lineWidth(0.5).strokeColor("#c9972b").stroke();
+        doc.rect(ML + 140, y, infoW - 140, rowH).lineWidth(0.5).strokeColor("#94a3b8").stroke();
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0d1b2a")
+           .text(label, ML + 8, y + 7, { width: 125 });
+        doc.font("Helvetica").fontSize(10).fillColor("#1a2332")
+           .text(String(value || "—"), ML + 148, y + 7, { width: infoW - 156, lineBreak: false });
+        y += rowH;
+      };
+
+      drawRowNarrow("Student ID", s.student_id);
+      drawRowNarrow("Admission No", s.admission_number);
+      drawRowNarrow("Full Name", s.name);
+      drawRowNarrow("Father's Name", s.father_name);
+      drawRowNarrow("Class", s.class + (s.stream && ["11","12"].includes(String(s.class)) ? " · " + s.stream : ""));
+
+      const afterInfoY = y;
+      y = photoBoxY + photoBoxH + 8;
+      if (y < afterInfoY) y = afterInfoY;
+
+      y += 8;
+      const sectionTitle = (text) => {
+        doc.font("Helvetica-Bold").fontSize(12).fillColor("#0d1b2a").text(text, ML, y);
+        doc.moveTo(ML, y + 16).lineTo(ML + 30, y + 16).lineWidth(2).strokeColor("#c9972b").stroke();
+        y += 22;
+      };
+
+      const drawFullRow = (label, value) => {
+        const rowH = 20;
+        doc.rect(ML, y, 160, rowH).fillColor("#fef8ed").fill();
+        doc.rect(ML, y, 160, rowH).lineWidth(0.4).strokeColor("#c9972b").stroke();
+        doc.rect(ML + 160, y, contentW - 160, rowH).lineWidth(0.4).strokeColor("#94a3b8").stroke();
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0d1b2a").text(label, ML + 6, y + 6, { width: 148 });
+        doc.font("Helvetica").fontSize(10).fillColor("#1a2332").text(String(value || "—"), ML + 168, y + 6, { width: contentW - 176, lineBreak: false });
+        y += rowH;
+      };
+
+      sectionTitle("Personal Details");
+      drawFullRow("Mother's Name", s.mother_name);
+      drawFullRow("Date of Birth", s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) : "—");
+      drawFullRow("Gender", s.gender);
+      drawFullRow("Category", s.category);
+      drawFullRow("Aadhaar Number", s.aadhar_number ? s.aadhar_number.replace(/(\d{4})(\d{4})(\d{4})/, "$1 $2 $3") : "—");
+      drawFullRow("APAAR ID", s.apaar_id);
+
+      y += 8;
+      sectionTitle("Academic Details");
+      drawFullRow("Class", s.class);
+      if (s.stream) drawFullRow("Stream", s.stream);
+      drawFullRow("Roll Number", s.roll_number);
+      drawFullRow("Session", s.session);
+      drawFullRow("Admission Date", s.admission_date ? new Date(s.admission_date).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) : "—");
+
+      y += 8;
+      sectionTitle("Contact & Address");
+      drawFullRow("Mobile Number", s.mobile_number);
+      drawFullRow("Email ID", s.email_id);
+      drawFullRow("Village / Town", s.village);
+      drawFullRow("Post Office", s.post_office);
+      drawFullRow("Tehsil", s.tehsil);
+      drawFullRow("District", s.district);
+      drawFullRow("State", s.state);
+      drawFullRow("Pincode", s.pincode);
+
+      // Login credentials box
+      y += 12;
+      const credBoxH = 95;
+      if (y + credBoxH < pageH - 150) {
+        doc.roundedRect(ML, y, contentW, credBoxH, 8).fillColor("#fef3c7").fill();
+        doc.roundedRect(ML, y, contentW, credBoxH, 8).lineWidth(1.5).strokeColor("#f59e0b").stroke();
+
+        doc.font("Helvetica-Bold").fontSize(11).fillColor("#92400e")
+           .text("LOGIN CREDENTIALS — KEEP SAFE", ML + 14, y + 12);
+        doc.font("Helvetica").fontSize(9.5).fillColor("#78350f")
+           .text("Use these details to login to your student portal:", ML + 14, y + 30);
+
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f")
+           .text("APAAR ID:", ML + 14, y + 50);
+        doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b")
+           .text(s.apaar_id || "—", ML + 90, y + 50);
+
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f")
+           .text("Date of Birth:", ML + 14, y + 68);
+        doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b")
+           .text(s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—", ML + 90, y + 68);
+
+        doc.font("Helvetica").fontSize(8).fillColor("#92400e")
+           .text(`Portal: ${SCHOOL_WEBSITE}/student-login.html`, ML + 14, y + 82);
+        y += credBoxH + 12;
+      }
+
+      // Signature
+      if (y < pageH - 130) {
+        const sigW = 180;
+        const sigX = pageW - MR - sigW;
+        if (sigBuf) {
+          try {
+            doc.image(sigBuf, sigX + 40, y - 10, { fit: [100, 45], align: "center" });
+          } catch (e) {}
+        }
+        const lineY = y + 40;
+        doc.moveTo(sigX + 20, lineY).lineTo(sigX + sigW - 20, lineY).lineWidth(0.7).strokeColor("#64748b").stroke();
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
+           .text("Principal", sigX, lineY + 6, { width: sigW, align: "center" });
+        doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
+           .text("Govt. Sr. Sec. School Shilla", sigX, lineY + 20, { width: sigW, align: "center" });
+      }
+
+      doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+         .text(`Generated: ${new Date().toLocaleString("en-IN")} · GSSS Shilla Official Document`, ML, pageH - 40, {
+           width: contentW, align: "center", characterSpacing: 0.5
+         });
+      doc.moveTo(ML, pageH - 46).lineTo(pageW - MR, pageH - 46).lineWidth(0.5).strokeColor("#cbd5e1").stroke();
+
+      doc.end();
+    } catch (err) {
+      reject(err);
     }
-}
-
-function printSingleMarksheet(id) {
-    // Same function reuse — full marksheet print
-    const sid = document.getElementById("studentModal").dataset.studentId;
-    if (sid) printFullMarksheet(sid);
-}
-
-function calculatePercent(obtained, max) {
-    const o = parseInt(obtained) || 0;
-    const m = parseInt(max) || 0;
-    if (m === 0) return "—";
-    return ((o / m) * 100).toFixed(2) + "%";
-}
-
-function getGrade(percentage) {
-    const p = parseFloat(percentage) || 0;
-    if (p >= 90) return "A+";
-    if (p >= 80) return "A";
-    if (p >= 70) return "B+";
-    if (p >= 60) return "B";
-    if (p >= 50) return "C";
-    if (p >= 40) return "D";
-    if (p >= 33) return "E";
-    return "F";
+  });
 }
 
 // ============================================================
-// REFRESH
+// ✅ FILE VALIDATION
 // ============================================================
-function refreshAll() {
-    const activeTab = document.querySelector(".tab-content.active").id;
-    if (activeTab === "tab-classwise") loadStudents(currentClass);
-    if (activeTab === "tab-publish") loadPublishableStudents(publishClass);
-    if (activeTab === "tab-search") {
-        const sid = document.getElementById("searchStudentId").value.trim();
-        if (sid) searchStudent();
+function validateUploadedFiles(req, res, next) {
+  try {
+    if (!req.files) return next();
+    const errors = [];
+    for (const field of IMAGE_ONLY_FIELDS) {
+      const fileArr = req.files[field];
+      if (!fileArr || !fileArr[0]) continue;
+      const file = fileArr[0];
+      if (!IMAGE_MIME_TYPES.includes(file.mimetype || "")) {
+        errors.push({ field, message: `${field} must be an image (JPG, PNG or WEBP)` });
+        continue;
+      }
+      if (file.size > IMAGE_MAX_BYTES) errors.push({ field, message: `${field} must not exceed 3 MB` });
     }
-    showToast("Refreshed ✅", "info");
-}
-
-function setDefaultExamSession() {
-    const now = new Date();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const year = now.getFullYear();
-    const el = document.getElementById("upExamSession");
-    if (el) el.value = `${year}-${month}`;
-}
-
-function setDefaultPublishDate() {
-    const el = document.getElementById("publishDate");
-    if (el) el.value = new Date().toISOString().split("T")[0];
-}
-
-// ============================================================
-// INIT
-// ============================================================
-window.addEventListener("DOMContentLoaded", async () => {
-    setDefaultExamSession();
-    setDefaultPublishDate();
-
-    const ok = await checkAuth();
-    if (ok) {
-        loadStudents(currentClass);
-        loadPublishableStudents(publishClass);
+    for (const field of PDF_ONLY_FIELDS) {
+      const fileArr = req.files[field];
+      if (!fileArr || !fileArr[0]) continue;
+      const file = fileArr[0];
+      if (!PDF_MIME_TYPES.includes(file.mimetype || "")) {
+        errors.push({ field, message: `${field} must be a PDF file` });
+        continue;
+      }
+      if (file.size > PDF_MAX_BYTES) errors.push({ field, message: `${field} must not exceed 2 MB` });
     }
+    if (errors.length) return res.status(400).json({ success: false, message: "File validation failed", errors });
+    next();
+  } catch (err) {
+    res.status(500).json({ success: false, message: "File validation error" });
+  }
+}
+
+// ==================== VALIDATION RULES ====================
+const rules = () => [
+  body("studentId").trim().notEmpty().withMessage("Student ID required"),
+  body("admissionNumber").trim().notEmpty().withMessage("Admission Number required"),
+  body("admissionDate").isISO8601().withMessage("Valid admission date required"),
+  body("name").trim().notEmpty().withMessage("Name required"),
+  body("fatherName").trim().notEmpty().withMessage("Father name required"),
+  body("motherName").trim().notEmpty().withMessage("Mother name required"),
+  body("dob").isISO8601().withMessage("Valid DOB required"),
+  body("aadharNumber").custom((v) => {
+    const a = normalizeAadhaar(v);
+    if (!/^\d{12}$/.test(a)) throw new Error("Aadhaar must be 12 digits");
+    if (!hasValidAadhaarStart(a)) throw new Error("Aadhaar cannot start with 0 or 1");
+    if (!validateVerhoeff(a)) throw new Error("Invalid Aadhaar (checksum failed)");
+    return true;
+  }),
+  body("apaarId").custom((v) => {
+    const a = String(v || "").replace(/\s/g, "");
+    if (!/^\d{12}$/.test(a)) throw new Error("APAAR ID must be exactly 12 digits");
+    return true;
+  }),
+  body("class").notEmpty().withMessage("Class required"),
+  body("rollNumber").notEmpty().withMessage("Roll number required"),
+  body("session").matches(/^\d{4}-\d{2,4}$/).withMessage("Session format YYYY-YY"),
+  body("mobileNumber").matches(/^[6-9]\d{9}$/).withMessage("Invalid mobile number"),
+  body("emailId").isEmail().withMessage("Invalid email"),
+  body("gender").isIn(["Male", "Female", "Other"]).withMessage("Gender required"),
+  body("category").isIn(["General", "SC", "ST", "OBC", "EWS", "Other"]).withMessage("Category required"),
+  body("address").trim().notEmpty().withMessage("Address required"),
+  body("pincode").matches(/^\d{6}$/).withMessage("Pincode must be 6 digits"),
+  body("village").trim().notEmpty().withMessage("Village required"),
+  body("postOffice").trim().notEmpty().withMessage("Post Office required"),
+  body("tehsil").trim().notEmpty().withMessage("Tehsil required"),
+  body("district").trim().notEmpty().withMessage("District required"),
+  body("state").trim().notEmpty().withMessage("State required")
+];
+
+const validate = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false, message: "Validation failed",
+      errors: errors.array().map((e) => ({ field: e.path, message: e.msg }))
+    });
+  }
+  next();
+};
+
+const destroyAsset = async (publicId, url) => {
+  if (!publicId) return;
+  const resourceType = (url || "").includes("/raw/") ? "raw" : "image";
+  try { await cloudinary.uploader.destroy(publicId, { resource_type: resourceType }); } catch (e) {}
+};
+
+// ============================================================
+// ✅ OTP ROUTES
+// ============================================================
+router.post("/send-email-otp", async (req, res) => {
+  try {
+    const { email, purpose = "verify", excludeStudentId } = req.body;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: "Valid email required" });
+    }
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const existing = await q(
+      `SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? ${excludeStudentId ? "AND id != ?" : ""}`,
+      excludeStudentId ? [normalizedEmail, excludeStudentId] : [normalizedEmail]
+    );
+    if (existing.length >= EMAIL_MAX_STUDENTS) {
+      return res.status(409).json({
+        success: false,
+        message: `This email is already registered with student: ${existing[0].name} (${existing[0].student_id}).`,
+        code: "EMAIL_ALREADY_REGISTERED",
+        existingStudent: existing[0]
+      });
+    }
+
+    const otp = generateOTP();
+    await saveOTP("email", normalizedEmail, otp, purpose);
+    console.log(`📧 Email OTP for ${normalizedEmail}: ${otp}`);
+
+    try { await sendEmailOTP(normalizedEmail, otp, purpose); }
+    catch (err) {
+      console.error("Email send error:", err.message);
+      return res.status(500).json({ success: false, message: "OTP generated but email failed. Check config." });
+    }
+    res.json({ success: true, message: "OTP sent to your email ✅" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
-</script>
-</body>
-</html>
+
+router.post("/verify-email-otp", async (req, res) => {
+  try {
+    const { email, otp, purpose } = req.body;
+    if (!email || !otp) return res.status(400).json({ success: false, message: "Email and OTP required" });
+    const normalizedEmail = email.toLowerCase().trim();
+    const result = await verifyOTP("email", normalizedEmail, otp, purpose || "verify");
+
+    if (!result.valid) {
+      const attemptsLeft = result.attempts ? (OTP_MAX_ATTEMPTS - result.attempts) : OTP_MAX_ATTEMPTS;
+      const messages = {
+        NO_OTP_OR_EXPIRED: "OTP expired or not found. Please request a new one.",
+        INVALID_OTP: `Invalid OTP. ${attemptsLeft} attempts left.`,
+        TOO_MANY_ATTEMPTS: "Too many wrong attempts. Please request a new OTP."
+      };
+      return res.status(400).json({ success: false, message: messages[result.reason] || "Verification failed", code: result.reason });
+    }
+    res.json({ success: true, message: "Email verified ✅", verified: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ CHECK MOBILE
+// ============================================================
+router.post("/check-mobile", async (req, res) => {
+  try {
+    const { mobile, excludeStudentId } = req.body;
+    if (!mobile || !/^[6-9]\d{9}$/.test(mobile)) {
+      return res.status(400).json({ success: false, message: "Valid 10-digit mobile required" });
+    }
+    const rows = await q(
+      `SELECT id, student_id, admission_number, name, father_name, class, session, status
+       FROM Nstudent WHERE mobile_number = ? ${excludeStudentId ? "AND id != ?" : ""} ORDER BY id ASC`,
+      excludeStudentId ? [mobile, excludeStudentId] : [mobile]
+    );
+    const limit = MOBILE_MAX_STUDENTS;
+    const used = rows.length;
+    const remaining = Math.max(0, limit - used);
+
+    res.json({
+      success: true, mobile, used, limit, remaining, canUse: used < limit,
+      students: rows.map(r => ({
+        id: r.id, studentId: r.student_id, admissionNumber: r.admission_number,
+        name: r.name, fatherName: r.father_name, class: r.class, session: r.session, status: r.status
+      })),
+      message: used === 0 ? "Mobile number available ✅"
+        : used >= limit ? `Mobile already used by ${limit} students. Cannot add more.`
+        : `Mobile used by ${used} student(s). ${remaining} slot(s) remaining.`
+    });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ CHECK APAAR
+// ============================================================
+router.post("/check-apaar", async (req, res) => {
+  try {
+    const { apaarId, excludeStudentId } = req.body;
+    if (!apaarId) return res.status(400).json({ success: false, message: "APAAR ID required" });
+    const cleaned = String(apaarId).replace(/\s/g, "");
+    if (!/^\d{12}$/.test(cleaned)) {
+      return res.status(400).json({ success: false, available: false, message: "APAAR ID must be exactly 12 digits" });
+    }
+    const rows = await q(
+      `SELECT id, student_id, admission_number, name, father_name, class
+       FROM Nstudent WHERE apaar_id = ? ${excludeStudentId ? "AND id != ?" : ""} LIMIT 5`,
+      excludeStudentId ? [cleaned, excludeStudentId] : [cleaned]
+    );
+    if (rows.length > 0) {
+      const r = rows[0];
+      return res.json({
+        success: true, available: false, taken: true,
+        existingStudent: {
+          id: r.id, studentId: r.student_id, admissionNumber: r.admission_number,
+          name: r.name, fatherName: r.father_name, class: r.class
+        },
+        message: `APAAR ID already registered with ${r.name} (${r.student_id})`
+      });
+    }
+    res.json({ success: true, available: true, taken: false, message: "APAAR ID available ✅" });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ VERIFY AADHAAR
+// ============================================================
+router.post("/verify-aadhaar", async (req, res) => {
+  try {
+    const { aadharNumber, name, fatherName, dob, excludeStudentId } = req.body;
+    if (!aadharNumber) return res.status(400).json({ success: false, verified: false, message: "Aadhaar required" });
+    const aadhaar12 = normalizeAadhaar(aadharNumber);
+
+    if (!/^\d{12}$/.test(aadhaar12)) return res.status(400).json({ success: false, verified: false, code: "INVALID_LENGTH", message: "Aadhaar must be exactly 12 digits" });
+    if (!hasValidAadhaarStart(aadhaar12)) return res.status(400).json({ success: false, verified: false, code: "INVALID_START", message: "Aadhaar cannot start with 0 or 1" });
+    if (!validateVerhoeff(aadhaar12)) return res.status(400).json({ success: false, verified: false, code: "CHECKSUM_FAILED", message: "Invalid Aadhaar (checksum failed)" });
+    if (/^(\d)\1{11}$/.test(aadhaar12)) return res.status(400).json({ success: false, verified: false, code: "ALL_SAME_DIGITS", message: "Aadhaar cannot have all identical digits" });
+
+    const existingRows = await q(
+      `SELECT id, name, father_name, dob, student_id, admission_number, class, mobile_number
+       FROM Nstudent WHERE aadhar_number = ? ${excludeStudentId ? "AND id != ?" : ""} LIMIT 5`,
+      excludeStudentId ? [aadhaar12, excludeStudentId] : [aadhaar12]
+    );
+
+    let nameMatch = null;
+    if (name && name.trim() && existingRows.length > 0) {
+      const rec = existingRows[0];
+      nameMatch = {
+        against: "existing_record", studentId: rec.student_id,
+        nameMatches: (rec.name || "").toLowerCase() === name.trim().toLowerCase(),
+        fatherMatches: fatherName ? (rec.father_name || "").toLowerCase() === fatherName.trim().toLowerCase() : null,
+        dobMatches: dob ? new Date(rec.dob).toISOString().slice(0, 10) === dob.slice(0, 10) : null
+      };
+    }
+
+    res.json({
+      success: true, verified: true,
+      aadhaar: { formatted: aadhaar12.replace(/(\d{4})(\d{4})(\d{4})/, "$1 $2 $3"), last4: aadhaar12.slice(-4), valid: true },
+      alreadyExists: existingRows.length > 0,
+      existingRecord: existingRows[0] || null,
+      existingStudents: existingRows.map(r => ({ id: r.id, studentId: r.student_id, name: r.name, class: r.class })),
+      nameMatch,
+      message: existingRows.length > 0 ? `Aadhaar valid but already registered with ${existingRows[0].name}` : "Aadhaar verified ✅"
+    });
+  } catch (err) { res.status(500).json({ success: false, verified: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ PDF PROXY — Cloudinary /raw/ PDF view fix
+// ⚠️ IMPORTANT: Ye route /:id se PEHLE hona chahiye
+// ============================================================
+router.get("/proxy-pdf", async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ success: false, message: "URL required" });
+    if (!url.includes("res.cloudinary.com")) return res.status(400).json({ success: false, message: "Only Cloudinary URLs allowed" });
+
+    const client = url.startsWith("https") ? https : http;
+    client.get(url, (remoteRes) => {
+      if ([301, 302, 307, 308].includes(remoteRes.statusCode) && remoteRes.headers.location) {
+        remoteRes.resume();
+        return res.redirect(remoteRes.headers.location);
+      }
+      if (remoteRes.statusCode !== 200) {
+        remoteRes.resume();
+        return res.status(remoteRes.statusCode).json({
+          success: false,
+          message: `Cloudinary returned ${remoteRes.statusCode}`
+        });
+      }
+
+      let contentType = remoteRes.headers["content-type"] || "";
+      const urlLower = url.toLowerCase();
+      if (urlLower.endsWith(".pdf") || contentType.includes("pdf")) {
+        contentType = "application/pdf";
+      } else if (!contentType) {
+        contentType = "application/octet-stream";
+      }
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", "inline");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      remoteRes.pipe(res);
+    }).on("error", (err) => {
+      console.error("❌ Proxy PDF error:", err.message);
+      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+    });
+  } catch (err) {
+    console.error("❌ Proxy catch error:", err.message);
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ GET ALL
+// ============================================================
+router.get("/", async (req, res) => {
+  try {
+    await autoRevertExpiredPromotions();
+    const { class: cls, session, gender, category, status, search, sortBy = "created_at", order = "desc", page = 1, limit = 20 } = req.query;
+    const allowedSort = ["created_at", "name", "class", "roll_number", "admission_date", "admission_number"];
+    const sortCol = allowedSort.includes(sortBy) ? sortBy : "created_at";
+    const sortDir = order.toLowerCase() === "asc" ? "ASC" : "DESC";
+
+    const where = [];
+    const params = [];
+    if (cls)      { where.push("class = ?"); params.push(cls); }
+    if (session)  { where.push("session = ?"); params.push(session); }
+    if (gender)   { where.push("gender = ?"); params.push(gender); }
+    if (category) { where.push("category = ?"); params.push(category); }
+    if (status)   { where.push("status = ?"); params.push(status); }
+    if (search) {
+      where.push("(name LIKE ? OR admission_number LIKE ? OR student_id LIKE ? OR father_name LIKE ? OR mobile_number LIKE ?)");
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const offset = (Number(page) - 1) * Number(limit);
+
+    const rows = await q(
+      `SELECT * FROM Nstudent ${whereSql} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`,
+      [...params, Number(limit), offset]
+    );
+    const countRows = await q(`SELECT COUNT(*) AS total FROM Nstudent ${whereSql}`, params);
+    const total = countRows[0]?.total || 0;
+    const cleaned = rows.map(revertStatusIfExpired);
+
+    res.json({ success: true, data: cleaned, pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) } });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ SESSION
+// ============================================================
+router.get("/current-session", async (req, res) => {
+  try {
+    const rows = await q("SELECT `value` FROM settings WHERE `key` = 'current_session'");
+    res.json({ success: true, session: rows[0]?.value || null });
+  } catch (err) { res.json({ success: true, session: null }); }
+});
+
+router.post("/current-session", async (req, res) => {
+  try {
+    const { session } = req.body;
+    if (!session || !/^\d{4}-\d{2,4}$/.test(session)) {
+      return res.status(400).json({ success: false, message: "Invalid session format" });
+    }
+    await q("INSERT INTO settings (`key`, `value`) VALUES ('current_session', ?) ON DUPLICATE KEY UPDATE `value` = ?", [session, session]);
+    res.json({ success: true, message: "Session saved ✅", session });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ GROUP BY CLASS
+// ============================================================
+router.get("/by-class", async (req, res) => {
+  try {
+    await autoRevertExpiredPromotions();
+    const { session } = req.query;
+    const where = session ? "WHERE session = ?" : "";
+    const params = session ? [session] : [];
+    const rows = await q(
+      `SELECT class, COUNT(*) AS count FROM Nstudent ${where}
+       GROUP BY class
+       ORDER BY FIELD(class,'Nursery','LKG','UKG','1','2','3','4','5','6','7','8','9','10','11','12')`,
+      params
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ PROMOTE
+// ============================================================
+router.post("/promote", async (req, res) => {
+  try {
+    const { studentIds, toClass } = req.body;
+    if (!Array.isArray(studentIds) || !studentIds.length || !toClass) {
+      return res.status(400).json({ success: false, message: "studentIds[] and toClass required" });
+    }
+    const updatedCount = await db.transaction(async (conn) => {
+      const ph = studentIds.map(() => "?").join(",");
+      const [rows] = await conn.query(`SELECT id, class, session FROM Nstudent WHERE id IN (${ph})`, studentIds);
+      for (const s of rows) {
+        await conn.query(
+          `UPDATE Nstudent SET promoted_from = ?, class = ?, session = ?, status = 'Promoted', promotion_date = NOW() WHERE id = ?`,
+          [s.class, toClass, incrementSession(s.session), s.id]
+        );
+      }
+      return rows.length;
+    });
+    res.json({ success: true, message: `${updatedCount} students promoted ✅` });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+router.post("/promote-session", async (req, res) => {
+  try {
+    const { fromSession, toSession } = req.body;
+    if (!fromSession || !toSession) return res.status(400).json({ success: false, message: "fromSession and toSession required" });
+
+    const result = await db.transaction(async (conn) => {
+      const [rows] = await conn.query(`SELECT id, class FROM Nstudent WHERE session = ? AND status = 'Active'`, [fromSession]);
+      let promoted = 0, skipped = 0;
+      for (const s of rows) {
+        const nxt = nextClass(s.class);
+        if (!nxt) { skipped++; continue; }
+        await conn.query(
+          `UPDATE Nstudent SET promoted_from = ?, class = ?, session = ?, status = 'Promoted', promotion_date = NOW() WHERE id = ?`,
+          [s.class, nxt, toSession, s.id]
+        );
+        promoted++;
+      }
+      await conn.query("INSERT INTO settings (`key`, `value`) VALUES ('current_session', ?) ON DUPLICATE KEY UPDATE `value` = ?", [toSession, toSession]);
+      return { promoted, skipped };
+    });
+
+    res.json({ success: true, message: `${result.promoted} promoted ✅`, count: result.promoted, skipped: result.skipped });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ SEARCH
+// ============================================================
+router.get("/search/:query", async (req, res) => {
+  try {
+    await autoRevertExpiredPromotions();
+    const sq = req.params.query;
+    const { limit = 20 } = req.query;
+    const rows = await q(
+      `SELECT * FROM Nstudent WHERE name LIKE ? OR admission_number LIKE ? OR student_id LIKE ? OR father_name LIKE ? ORDER BY id DESC LIMIT ?`,
+      [`%${sq}%`, `%${sq}%`, `%${sq}%`, `%${sq}%`, parseInt(limit)]
+    );
+    res.json({ success: true, data: rows.map(revertStatusIfExpired) });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ ADD STUDENT
+// ============================================================
+router.post(
+  "/add",
+  studentUploadFields,
+  validateUploadedFiles,
+  rules(),
+  validate,
+  async (req, res) => {
+    try {
+      const category = req.body.category;
+      const email = String(req.body.emailId || "").toLowerCase().trim();
+      const mobile = String(req.body.mobileNumber || "").trim();
+      const emailVerified = String(req.body.emailVerified) === "true";
+
+      if (!emailVerified) {
+        return res.status(400).json({ success: false, message: "Email must be OTP-verified before adding student.", code: "EMAIL_NOT_VERIFIED" });
+      }
+
+      const emailVerifiedRec = await q(
+        `SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`,
+        [email]
+      );
+      if (!emailVerifiedRec.length) {
+        return res.status(400).json({ success: false, message: "Email verification expired. Please verify again.", code: "OTP_EXPIRED" });
+      }
+
+      const emailDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ?`, [email]);
+      if (emailDup.length >= EMAIL_MAX_STUDENTS) {
+        return res.status(409).json({ success: false, message: `Email already registered with ${emailDup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
+      }
+      const mobileDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ?`, [mobile]);
+      if (mobileDup.length >= MOBILE_MAX_STUDENTS) {
+        return res.status(409).json({ success: false, message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED" });
+      }
+
+      const apaarVal = String(req.body.apaarId || "").replace(/\s/g, "");
+      if (apaarVal) {
+        const apaarDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ?`, [apaarVal]);
+        if (apaarDup.length > 0) {
+          return res.status(409).json({ success: false, message: `APAAR ID already registered with ${apaarDup[0].name}`, code: "APAAR_ALREADY_REGISTERED" });
+        }
+      }
+
+      const requiredDocs = getRequiredDocs(category);
+      const missing = [];
+      for (const docName of requiredDocs) {
+        if (!req.files || !req.files[docName] || !req.files[docName][0]) {
+          missing.push(docName.replace(/([A-Z])/g, " $1").trim());
+        }
+      }
+      if (missing.length) {
+        return res.status(400).json({ success: false, message: `Missing required documents: ${missing.join(", ")}`, category, requiredDocuments: requiredDocs });
+      }
+
+      const files = req.files ? { ...req.files } : {};
+      if (!CASTE_REQUIRED_CATEGORIES.includes(category) && files.casteCertificate) {
+        const df = files.casteCertificate[0];
+        if (df?.filename) try { await cloudinary.uploader.destroy(df.filename); } catch (e) {}
+        delete files.casteCertificate;
+      }
+
+      const bodyData = { ...req.body };
+      if (bodyData.aadharNumber) bodyData.aadharNumber = normalizeAadhaar(bodyData.aadharNumber);
+      if (bodyData.apaarId) bodyData.apaarId = String(bodyData.apaarId).replace(/\s/g, "");
+      delete bodyData.emailVerified;
+
+      const data = { ...pickBody(bodyData), ...extractFiles(files) };
+      if (!data.status) data.status = "Active";
+      data.email_verified = 1;
+
+      const cols = Object.keys(data);
+      const vals = Object.values(data);
+      const ph = cols.map(() => "?").join(",");
+
+      let result;
+      try {
+        result = await q(`INSERT INTO Nstudent (${cols.join(",")}) VALUES (${ph})`, vals);
+      } catch (insertErr) {
+        if (insertErr.message && insertErr.message.includes("Unknown column")) {
+          delete data.email_verified;
+          const c2 = Object.keys(data);
+          const v2 = Object.values(data);
+          const p2 = c2.map(() => "?").join(",");
+          result = await q(`INSERT INTO Nstudent (${c2.join(",")}) VALUES (${p2})`, v2);
+        } else throw insertErr;
+      }
+
+      const savedStudent = (await q("SELECT * FROM Nstudent WHERE id = ?", [result.insertId]))[0];
+
+      (async () => {
+        try {
+          console.log(`📧 Generating welcome PDF for ${savedStudent.name}...`);
+          const pdfBuffer = await generateWelcomePDF(savedStudent);
+          console.log(`📧 Sending welcome email to ${savedStudent.email_id}...`);
+          await sendRegistrationSuccessEmail(savedStudent, pdfBuffer);
+          console.log(`✅ Welcome email sent to ${savedStudent.email_id}`);
+        } catch (emailErr) {
+          console.error("❌ Welcome email error:", emailErr.message);
+        }
+      })();
+
+      res.status(201).json({
+        success: true,
+        message: "Student added successfully ✅ Registration email is being sent...",
+        data: savedStudent,
+        student: savedStudent
+      });
+    } catch (err) {
+      console.error("❌ Add Student Error:", err);
+      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ============================================================
+// ✅ GET SINGLE
+// ============================================================
+router.get("/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
+    const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
+    if (!rows.length) return res.status(404).json({ success: false, message: "Not found" });
+    const student = revertStatusIfExpired(rows[0]);
+    res.json({ success: true, data: student, student });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ UPDATE
+// ============================================================
+router.put(
+  "/:id",
+  studentUploadFields,
+  validateUploadedFiles,
+  async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
+
+      const existingRows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
+      if (!existingRows.length) return res.status(404).json({ success: false, message: "Not found" });
+      const existing = existingRows[0];
+
+      const newEmail = String(req.body.emailId || existing.email_id || "").toLowerCase().trim();
+      const newMobile = String(req.body.mobileNumber || existing.mobile_number || "").trim();
+      const newApaar = String(req.body.apaarId || existing.apaar_id || "").replace(/\s/g, "");
+
+      const emailChanged = newEmail !== (existing.email_id || "").toLowerCase().trim();
+      const mobileChanged = newMobile !== (existing.mobile_number || "").trim();
+      const apaarChanged = newApaar !== (existing.apaar_id || "").replace(/\s/g, "").trim();
+
+      if (emailChanged) {
+        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? AND id != ?`, [newEmail, id]);
+        if (dup.length >= EMAIL_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Email already registered with ${dup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
+        const v = await q(`SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`, [newEmail]);
+        if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified", code: "EMAIL_NOT_VERIFIED" });
+      }
+      if (mobileChanged) {
+        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? AND id != ?`, [newMobile, id]);
+        if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile limit reached`, code: "MOBILE_LIMIT_REACHED" });
+      }
+      if (apaarChanged && newApaar) {
+        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ? AND id != ?`, [newApaar, id]);
+        if (dup.length > 0) return res.status(409).json({ success: false, message: `APAAR ID already registered`, code: "APAAR_ALREADY_REGISTERED" });
+      }
+
+      const finalCategory = req.body.category || existing.category;
+      const needsCaste = CASTE_REQUIRED_CATEGORIES.includes(finalCategory);
+      const hasNewCaste = req.files?.casteCertificate?.[0];
+      const hasOldCaste = existing.caste_certificate_url;
+      if (needsCaste && !hasNewCaste && !hasOldCaste) {
+        return res.status(400).json({ success: false, message: `Caste Certificate required for ${finalCategory}` });
+      }
+
+      if (req.body.aadharNumber !== undefined) {
+        const a = normalizeAadhaar(req.body.aadharNumber);
+        if (!/^\d{12}$/.test(a) || !hasValidAadhaarStart(a) || !validateVerhoeff(a)) {
+          return res.status(400).json({ success: false, message: "Invalid Aadhaar number" });
+        }
+        req.body.aadharNumber = a;
+      }
+      if (req.body.apaarId !== undefined) {
+        const pa = String(req.body.apaarId).replace(/\s/g, "");
+        if (!/^\d{12}$/.test(pa)) return res.status(400).json({ success: false, message: "APAAR must be 12 digits" });
+        req.body.apaarId = pa;
+      }
+
+      const newFiles = extractFiles(req.files);
+      if (!needsCaste && newFiles.caste_certificate_url) {
+        const dp = newFiles.caste_certificate_pid;
+        if (dp) try { await cloudinary.uploader.destroy(dp); } catch (e) {}
+        delete newFiles.caste_certificate_url;
+        delete newFiles.caste_certificate_pid;
+      }
+      for (const f of DOC_FIELDS) {
+        const snake = toSnake(f);
+        const newPid = newFiles[`${snake}_pid`];
+        const oldPid = existing[`${snake}_pid`];
+        if (newPid && oldPid) await destroyAsset(oldPid, existing[`${snake}_url`]);
+      }
+
+      const cleanBody = { ...req.body };
+      delete cleanBody.emailVerified;
+
+      const data = { ...pickBody(cleanBody), ...newFiles };
+      const cols = Object.keys(data);
+      if (!cols.length) return res.json({ success: true, message: "No changes", data: existing });
+
+      const setSql = cols.map(c => `${c} = ?`).join(", ");
+      await q(`UPDATE Nstudent SET ${setSql} WHERE id = ?`, [...Object.values(data), id]);
+
+      const updated = (await q("SELECT * FROM Nstudent WHERE id = ?", [id]))[0];
+      res.json({ success: true, message: "Student updated ✅", data: revertStatusIfExpired(updated), student: revertStatusIfExpired(updated) });
+    } catch (err) {
+      console.error("❌ Update error:", err);
+      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Duplicate entry" });
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// ============================================================
+// ✅ DELETE
+// ============================================================
+router.delete("/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
+    const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
+    if (!rows.length) return res.status(404).json({ success: false, message: "Not found" });
+    const s = rows[0];
+    for (const f of DOC_FIELDS) {
+      const snake = toSnake(f);
+      if (s[`${snake}_pid`]) await destroyAsset(s[`${snake}_pid`], s[`${snake}_url`]);
+    }
+    await q("DELETE FROM Nstudent WHERE id = ?", [id]);
+    res.json({ success: true, message: "Deleted ✅" });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ============================================================
+// ✅ STUDENT PDF (full admission record)
+// ============================================================
+router.get("/:id/pdf", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
+    const rows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
+    if (!rows.length) return res.status(404).json({ success: false, message: "Not found" });
+    const s = revertStatusIfExpired(rows[0]);
+
+    const doc = new PDFDocument({ size: "A4", margin: 40 });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${s.admission_number || "student"}.pdf"`);
+    doc.pipe(res);
+
+    doc.rect(0, 0, doc.page.width, 80).fill("#1e3a8a");
+    doc.fillColor("#ffffff").fontSize(22).font("Helvetica-Bold").text("STUDENT ADMISSION RECORD", 40, 25, { align: "center" });
+    doc.fontSize(10).font("Helvetica").text("Official Document", 40, 55, { align: "center" });
+    doc.fillColor("#000000");
+
+    const photoBuf = await fetchImageBuffer(s.student_photo_url);
+    const px = doc.page.width - 150, py = 110;
+    if (photoBuf) { try { doc.image(photoBuf, px, py, { width: 100, height: 120 }); } catch (e) {} }
+    else { doc.rect(px, py, 100, 120).stroke(); doc.fontSize(9).fillColor("#666").text("No Photo", px + 25, py + 55); }
+
+    doc.fontSize(14).font("Helvetica-Bold").fillColor("#1e3a8a").text("Personal Details", 40, 110);
+    doc.moveTo(40, 130).lineTo(400, 130).stroke("#1e3a8a");
+    doc.y = 145;
+    const row = (label, value) => {
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#1e3a8a").text(`${label}: `, { continued: true });
+      doc.font("Helvetica").fillColor("#000").text(String(value ?? "-"));
+    };
+    row("Student ID", s.student_id);
+    row("Admission Number", s.admission_number);
+    row("Admission Date", s.admission_date);
+    row("Full Name", s.name);
+    row("Father Name", s.father_name);
+    row("Mother Name", s.mother_name);
+    row("Date of Birth", s.dob);
+    row("Gender", s.gender);
+    row("Category", s.category);
+    row("Aadhar Number", s.aadhar_number);
+    row("APAAR ID", s.apaar_id);
+    row("Mobile", s.mobile_number);
+    row("Email", s.email_id);
+
+    doc.moveDown(1.5);
+    doc.fontSize(14).font("Helvetica-Bold").fillColor("#1e3a8a").text("Academic Details");
+    doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke("#1e3a8a");
+    doc.moveDown(0.6);
+    row("Class", s.class);
+    row("Roll Number", s.roll_number);
+    row("Session", s.session);
+    row("Status", s.status);
+
+    doc.moveDown(1.5);
+    doc.fontSize(14).font("Helvetica-Bold").fillColor("#1e3a8a").text("Address");
+    doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke("#1e3a8a");
+    doc.moveDown(0.6);
+    doc.font("Helvetica").fontSize(10).fillColor("#000").text(s.address || "-");
+
+    doc.fontSize(8).fillColor("#666").text(`Generated on ${new Date().toLocaleString("en-IN")}`, 40, doc.page.height - 40, { align: "center" });
+    doc.end();
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ STUDENT LOGIN VERIFY
+// ============================================================
+router.post("/verify-login", async (req, res) => {
+  try {
+    const { class: cls, studentId, apaarId, dob } = req.body;
+    if (!cls || !studentId || !apaarId || !dob) return res.status(400).json({ success: false, message: "All fields required" });
+    if (!/^\d{12}$/.test(apaarId)) return res.status(400).json({ success: false, message: "APAAR ID must be 12 digits" });
+
+    const rows = await q(
+      `SELECT * FROM Nstudent WHERE class = ? AND student_id = ? AND apaar_id = ? AND DATE(dob) = DATE(?) LIMIT 1`,
+      [cls, studentId, apaarId, dob]
+    );
+    if (!rows.length) return res.status(401).json({ success: false, message: "Invalid credentials" });
+
+    const s = revertStatusIfExpired(rows[0]);
+    const token = Buffer.from(`${s.id}-${Date.now()}`).toString("base64");
+    const safeStudent = { ...s };
+    for (const k of Object.keys(safeStudent)) if (k.endsWith("_pid")) delete safeStudent[k];
+
+    res.json({ success: true, message: "Login successful ✅", student: safeStudent, token });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+module.exports = router;
