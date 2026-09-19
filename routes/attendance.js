@@ -147,12 +147,18 @@ function authAdmin(req, res, next) {
       return res.status(401).json({ success: false, message: "No token provided" });
     }
     const decoded = jwt.verify(h.replace("Bearer ", ""), JWT_SECRET);
-    if (decoded.role !== "admin") {
+
+    // ✅ Multiple admin roles accept karo
+    const adminRoles = ["admin", "super admin", "superadmin", "super_admin", "super-admin"];
+    const userRole = String(decoded.role || "").toLowerCase().trim();
+
+    if (!adminRoles.includes(userRole)) {
       return res.status(403).json({
         success: false,
         message: `Admin only. Your role: ${decoded.role || "unknown"}`
       });
     }
+
     req.admin = decoded;
     next();
   } catch (err) {
