@@ -675,6 +675,551 @@ router.get("/teacher/student/:studentCode/qr", authTeacher, async (req, res) => 
   }
 });
 
+
+// ═══════════════════════════════════════════════════════════════
+// REGISTER-STYLE MONTHLY REPORT (Har din ki column)
+// GET /api/attendance/teacher/register-report?class=&month=&year=
+// ═══════════════════════════════════════════════════════════════
+router.get("/teacher/register-report", authTeacher, async (req, res) => {
+  try {
+    const { class: cls, month, year, assignmentId, studentIds } = req.query;
+
+    if (!cls || !month || !year) {
+      return res.status(400).json({ success: false, message: "class, month, year required" });
+    }
+
+    const assignCheck = await q(
+      `SELECT id FROM assignments WHERE teacher_id = ? AND class = ? AND is_active = 1 LIMIT 1`,
+      [req.teacher.id, cls]
+    );
+    if (!assignCheck.length) {
+      return res.status(403).json({ success: false, message: "You don't teach this class" });
+    }
+
+    const monthPadded = String(month).padStart(2, "0");
+    const prefix = `${year}-${monthPadded}`;
+    const daysInMonth = new Date(Number(year), Number(month), 0).getDate();
+
+    // Fetch students
+    let students;
+    if (studentIds) {
+      const ids = String(studentIds).split(",").map(v => v.trim()).filter(Boolean);
+      if (!ids.length) return res.status(400).json({ success: false, message: "No student IDs" });
+      const ph = ids.map(() => "?").join(",");
+      students = await q(
+        `SELECT id, student_id, name, roll_number, father_name, section
+         FROM Nstudent WHERE student_id IN (${ph}) AND class = ?
+         ORDER BY CAST(roll_number AS UNSIGNED), name ASC`,
+        [...ids, cls]
+      );
+    } else {
+      students = await q(
+        `SELECT id, student_id, name, roll_number, father_name, section
+         FROM Nstudent WHERE class = ? AND status = 'Active'
+         ORDER BY CAST(roll_number AS UNSIGNED), name ASC`,
+        [cls]
+      );
+    }
+
+    // Fetch all attendance records for that month
+    let sql = `SELECT student_id, date_str, period, status, subject_name
+               FROM attendance
+               WHERE class = ? AND date_str LIKE ? AND teacher_id = ?`;
+    const params = [cls, `${prefix}%`, req.teacher.id];
+
+    if (assignmentId) {
+      const a = await q(`SELECT subject_id, period FROM assignments WHERE id = ? AND teacher_id = ?`, [assignmentId, req.teacher.id]);
+      if (a.length) {
+        sql += ` AND subject_id = ? AND period = ?`;
+        params.push(a[0].subject_id, a[0].period);
+      }
+    }
+
+    const records = await q(sql, params);
+
+    // Group by student → date → status
+    const grid = {}; // grid[student_id][dateStr] = 'P' | 'A' | 'L'
+    const datesFound = new Set();
+
+    records.forEach(r => {
+      const sid = r.student_id;
+      const d = r.date_str;
+      datesFound.add(d);
+      if (!grid[sid]) grid[sid] = {};
+      // Priority: P > L > A (agar ek din me multiple period hain to sabse jyada count)
+      if (!grid[sid][d]) {
+        grid[sid][d] = r.status === 'present' ? 'P' : r.status === 'late' ? 'L' : 'A';
+      } else {
+        // Agar already mark hai, aur naya P aaya to P
+        const cur = grid[sid][d];
+        if (r.status === 'present') grid[sid][d] = 'P';
+        else if (r.status === 'late' && cur === 'A') grid[sid][d] = 'L';
+      }
+    });
+
+    // Sorted list of dates that have attendance in this month
+    const sortedDates = Array.from(datesFound).sort();
+
+    // Build per-student summary
+    const studentsWithStats = students.map(s => {
+      const dates = grid[s.id] || {};
+      let present = 0, absent = 0, late = 0;
+      Object.values(dates).forEach(v => {
+        if (v === 'P') present++;
+        else if (v === 'A') absent++;
+        else if (v === 'L') late++;
+      });
+      const total = present + absent + late;
+      return {
+        ...s,
+        dates,
+        present, absent, late, total,
+        percentage: total ? Math.round((present / total) * 100) : 0
+      };
+    });
+
+    res.json({
+      success: true,
+      class: cls,
+      month: Number(month),
+      monthName: monthName(Number(month)),
+      year: Number(year),
+      daysInMonth,
+      dates: sortedDates,
+      students: studentsWithStats,
+      count: studentsWithStats.length
+    });
+  } catch (err) {
+    console.error("Register report error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// REGISTER REPORT — EXCEL (Har din ki column)
+// GET /api/attendance/teacher/register-excel?class=&month=&year=
+// ═══════════════════════════════════════════════════════════════
+router.get("/teacher/register-excel", authTeacher, async (req, res) => {
+  try {
+    const { class: cls, month, year, assignmentId, studentIds } = req.query;
+    if (!cls || !month || !year) {
+      return res.status(400).json({ success: false, message: "class, month, year required" });
+    }
+
+    const monthPadded = String(month).padStart(2, "0");
+    const prefix = `${year}-${monthPadded}`;
+    const monthLabel = monthName(Number(month));
+    const daysInMonth = new Date(Number(year), Number(month), 0).getDate();
+
+    let students;
+    if (studentIds) {
+      const ids = String(studentIds).split(",").map(v => v.trim()).filter(Boolean);
+      if (!ids.length) return res.status(400).json({ success: false, message: "No students" });
+      const ph = ids.map(() => "?").join(",");
+      students = await q(
+        `SELECT id, student_id, name, roll_number, father_name
+         FROM Nstudent WHERE student_id IN (${ph}) AND class = ?
+         ORDER BY CAST(roll_number AS UNSIGNED), name ASC`,
+        [...ids, cls]
+      );
+    } else {
+      students = await q(
+        `SELECT id, student_id, name, roll_number, father_name
+         FROM Nstudent WHERE class = ? AND status = 'Active'
+         ORDER BY CAST(roll_number AS UNSIGNED), name ASC`,
+        [cls]
+      );
+    }
+
+    let sql = `SELECT student_id, date_str, status FROM attendance
+               WHERE class = ? AND date_str LIKE ? AND teacher_id = ?`;
+    const params = [cls, `${prefix}%`, req.teacher.id];
+    if (assignmentId) {
+      const a = await q(`SELECT subject_id, period FROM assignments WHERE id = ? AND teacher_id = ?`, [assignmentId, req.teacher.id]);
+      if (a.length) {
+        sql += ` AND subject_id = ? AND period = ?`;
+        params.push(a[0].subject_id, a[0].period);
+      }
+    }
+    const records = await q(sql, params);
+
+    const grid = {};
+    const datesSet = new Set();
+    records.forEach(r => {
+      datesSet.add(r.date_str);
+      if (!grid[r.student_id]) grid[r.student_id] = {};
+      if (!grid[r.student_id][r.date_str]) {
+        grid[r.student_id][r.date_str] = r.status === 'present' ? 'P' : r.status === 'late' ? 'L' : 'A';
+      } else {
+        const cur = grid[r.student_id][r.date_str];
+        if (r.status === 'present') grid[r.student_id][r.date_str] = 'P';
+        else if (r.status === 'late' && cur === 'A') grid[r.student_id][r.date_str] = 'L';
+      }
+    });
+
+    const sortedDates = Array.from(datesSet).sort();
+
+    // Create Excel
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "GSSS Shilla";
+    const sheet = workbook.addWorksheet(`Class ${cls}`);
+
+    // Title rows
+    sheet.mergeCells(1, 1, 1, 5 + sortedDates.length);
+    const t1 = sheet.getCell("A1");
+    t1.value = `${SCHOOL.name}`;
+    t1.font = { bold: true, size: 14, color: { argb: "FF0B1740" } };
+    t1.alignment = { horizontal: "center", vertical: "middle" };
+    sheet.getRow(1).height = 28;
+
+    sheet.mergeCells(2, 1, 2, 5 + sortedDates.length);
+    const t2 = sheet.getCell("A2");
+    t2.value = `Monthly Attendance Register — Class ${cls} — ${monthLabel} ${year}`;
+    t2.font = { bold: true, size: 11, color: { argb: "FFC9972B" } };
+    t2.alignment = { horizontal: "center", vertical: "middle" };
+    sheet.getRow(2).height = 22;
+
+    // Header row (row 3): S.No, Roll, ID, Name, Father, [Day 1, Day 2, ...], Present, Absent, %, Total
+    const headerCells = ["S.No", "Roll", "Student ID", "Name", "Father"];
+    sortedDates.forEach(d => {
+      const day = Number(d.slice(-2));
+      headerCells.push(String(day));
+    });
+    headerCells.push("P", "A", "L", "Total", "%");
+
+    const headerRow = sheet.addRow(headerCells);
+    headerRow.eachCell(cell => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0B1740" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.border = {
+        top: { style: "thin" }, left: { style: "thin" },
+        bottom: { style: "thin" }, right: { style: "thin" }
+      };
+    });
+    headerRow.height = 24;
+
+    // Data rows
+    students.forEach((s, idx) => {
+      const dates = grid[s.id] || {};
+      let present = 0, absent = 0, late = 0;
+      const rowData = [idx + 1, s.roll_number || "-", s.student_id, s.name, s.father_name || "-"];
+
+      sortedDates.forEach(d => {
+        const v = dates[d] || "";
+        rowData.push(v);
+        if (v === 'P') present++;
+        else if (v === 'A') absent++;
+        else if (v === 'L') late++;
+      });
+
+      const total = present + absent + late;
+      const pct = total ? Math.round((present / total) * 100) : 0;
+      rowData.push(present, absent, late, total, pct + "%");
+
+      const row = sheet.addRow(rowData);
+
+      row.eachCell((cell, colNum) => {
+        cell.alignment = { horizontal: colNum >= 6 ? "center" : "left", vertical: "middle" };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFE2E8F0" } },
+          left: { style: "thin", color: { argb: "FFE2E8F0" } },
+          bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+          right: { style: "thin", color: { argb: "FFE2E8F0" } }
+        };
+
+        // Color the P/A/L cells
+        const cellValue = String(cell.value || "");
+        if (cellValue === "P") {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
+          cell.font = { bold: true, color: { argb: "FF15803D" } };
+        } else if (cellValue === "A") {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+          cell.font = { bold: true, color: { argb: "FFDC2626" } };
+        } else if (cellValue === "L") {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+          cell.font = { bold: true, color: { argb: "FFD97706" } };
+        }
+      });
+
+      // Last cell percentage
+      const lastCell = row.getCell(rowData.length);
+      const pctNum = parseInt(String(lastCell.value));
+      lastCell.font = {
+        bold: true,
+        color: { argb: pctNum >= 75 ? "FF15803D" : pctNum >= 50 ? "FFD97706" : "FFDC2626" }
+      };
+    });
+
+    // Column widths
+    const widths = [{ width: 6 }, { width: 8 }, { width: 14 }, { width: 25 }, { width: 22 }];
+    sortedDates.forEach(() => widths.push({ width: 4 }));
+    widths.push({ width: 8 }, { width: 8 }, { width: 6 }, { width: 8 }, { width: 8 });
+    sheet.columns = widths;
+
+    // Freeze header
+    sheet.views = [{ state: "frozen", xSplit: 5, ySplit: 3 }];
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="Register_Class${cls}_${monthLabel}_${year}.xlsx"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("Register Excel error:", err);
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// REGISTER REPORT — PDF (Har din ki column)
+// GET /api/attendance/teacher/register-pdf?class=&month=&year=
+// ═══════════════════════════════════════════════════════════════
+router.get("/teacher/register-pdf", authTeacher, async (req, res) => {
+  try {
+    const { class: cls, month, year, assignmentId, studentIds } = req.query;
+    if (!cls || !month || !year) {
+      return res.status(400).json({ success: false, message: "class, month, year required" });
+    }
+
+    const monthPadded = String(month).padStart(2, "0");
+    const prefix = `${year}-${monthPadded}`;
+    const monthLabel = monthName(Number(month));
+
+    let students;
+    if (studentIds) {
+      const ids = String(studentIds).split(",").map(v => v.trim()).filter(Boolean);
+      if (!ids.length) return res.status(400).json({ success: false, message: "No students" });
+      const ph = ids.map(() => "?").join(",");
+      students = await q(
+        `SELECT id, student_id, name, roll_number, father_name
+         FROM Nstudent WHERE student_id IN (${ph}) AND class = ?
+         ORDER BY CAST(roll_number AS UNSIGNED), name ASC`,
+        [...ids, cls]
+      );
+    } else {
+      students = await q(
+        `SELECT id, student_id, name, roll_number, father_name
+         FROM Nstudent WHERE class = ? AND status = 'Active'
+         ORDER BY CAST(roll_number AS UNSIGNED), name ASC`,
+        [cls]
+      );
+    }
+
+    let sql = `SELECT student_id, date_str, status FROM attendance
+               WHERE class = ? AND date_str LIKE ? AND teacher_id = ?`;
+    const params = [cls, `${prefix}%`, req.teacher.id];
+    if (assignmentId) {
+      const a = await q(`SELECT subject_id, period FROM assignments WHERE id = ? AND teacher_id = ?`, [assignmentId, req.teacher.id]);
+      if (a.length) {
+        sql += ` AND subject_id = ? AND period = ?`;
+        params.push(a[0].subject_id, a[0].period);
+      }
+    }
+    const records = await q(sql, params);
+
+    const grid = {};
+    const datesSet = new Set();
+    records.forEach(r => {
+      datesSet.add(r.date_str);
+      if (!grid[r.student_id]) grid[r.student_id] = {};
+      if (!grid[r.student_id][r.date_str]) {
+        grid[r.student_id][r.date_str] = r.status === 'present' ? 'P' : r.status === 'late' ? 'L' : 'A';
+      } else {
+        const cur = grid[r.student_id][r.date_str];
+        if (r.status === 'present') grid[r.student_id][r.date_str] = 'P';
+        else if (r.status === 'late' && cur === 'A') grid[r.student_id][r.date_str] = 'L';
+      }
+    });
+
+    const sortedDates = Array.from(datesSet).sort();
+
+    // PDF
+    const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 30 });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="Register_Class${cls}_${monthLabel}_${year}.pdf"`);
+    doc.pipe(res);
+
+    const logoBuf = await fetchImageBuffer(SCHOOL.logoUrl);
+
+    const pageWidth = doc.page.width;
+    const pageHeight = doc.page.height;
+    const leftMargin = 30;
+    const rightMargin = 30;
+    const contentWidth = pageWidth - leftMargin - rightMargin;
+
+    let y = 30;
+
+    // Header
+    if (logoBuf) {
+      try {
+        doc.circle(leftMargin + 25, y + 25, 28).fill("#ffffff");
+        doc.circle(leftMargin + 25, y + 25, 26).lineWidth(1).strokeColor("#c9972b").stroke();
+        doc.image(logoBuf, leftMargin + 4, y + 4, { fit: [42, 42], align: "center", valign: "center" });
+      } catch (e) {}
+    }
+
+    doc.font("Helvetica-Bold").fontSize(15).fillColor("#0B1740")
+      .text(SCHOOL.name, leftMargin + 60, y + 2, { width: contentWidth - 60 });
+    doc.font("Helvetica").fontSize(9).fillColor("#5a6a7e")
+      .text(SCHOOL.address, leftMargin + 60, y + 22, { width: contentWidth - 60 });
+    doc.font("Helvetica").fontSize(8).fillColor("#94a3b8")
+      .text(`Helpline: ${SCHOOL.helpline}`, leftMargin + 60, y + 35, { width: contentWidth - 60 });
+
+    y += 60;
+
+    doc.moveTo(leftMargin, y).lineTo(pageWidth - rightMargin, y).lineWidth(2).strokeColor("#c9972b").stroke();
+    y += 15;
+
+    doc.font("Helvetica-Bold").fontSize(13).fillColor("#0B1740")
+      .text(`MONTHLY ATTENDANCE REGISTER — CLASS ${cls}`, leftMargin, y, { width: contentWidth, align: "center" });
+    y += 20;
+    doc.font("Helvetica").fontSize(10).fillColor("#c9972b")
+      .text(`${monthLabel} ${year}`, leftMargin, y, { width: contentWidth, align: "center" });
+    y += 25;
+
+    // Table columns: S.No, Roll, Name, Father, [dates...], P, A, %
+    const fixedCols = [
+      { key: "sno", label: "S.No", width: 28 },
+      { key: "roll", label: "Roll", width: 34 },
+      { key: "name", label: "Name", width: 130 },
+      { key: "father", label: "Father", width: 110 }
+    ];
+
+    const dayColWidth = Math.min(20, Math.max(14, Math.floor((contentWidth - 28 - 34 - 130 - 110 - 80) / Math.max(sortedDates.length, 1))));
+    const summaryCols = [
+      { key: "p", label: "P", width: 22 },
+      { key: "a", label: "A", width: 22 },
+      { key: "l", label: "L", width: 20 },
+      { key: "pct", label: "%", width: 30 }
+    ];
+
+    const tableStartX = leftMargin;
+    const headerHeight = 26;
+    const rowHeight = 20;
+
+    // Draw header
+    let cx = tableStartX;
+    doc.rect(tableStartX, y, contentWidth, headerHeight).fill("#0B1740");
+
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff");
+    fixedCols.forEach(c => {
+      doc.text(c.label, cx + 2, y + 8, { width: c.width - 4, align: c.key === "name" || c.key === "father" ? "left" : "center" });
+      cx += c.width;
+    });
+
+    // Day headers
+    sortedDates.forEach(d => {
+      const day = Number(d.slice(-2));
+      doc.text(String(day), cx + 1, y + 8, { width: dayColWidth - 2, align: "center" });
+      cx += dayColWidth;
+    });
+
+    // Summary headers
+    summaryCols.forEach(c => {
+      doc.text(c.label, cx + 1, y + 8, { width: c.width - 2, align: "center" });
+      cx += c.width;
+    });
+
+    y += headerHeight;
+
+    // Rows
+    const bottomLimit = pageHeight - 40;
+    let rowIdx = 0;
+
+    for (const s of students) {
+      if (y + rowHeight > bottomLimit) {
+        doc.addPage({ size: "A4", layout: "landscape", margin: 30 });
+        y = 40;
+        // Redraw header
+        let hx = tableStartX;
+        doc.rect(tableStartX, y, contentWidth, headerHeight).fill("#0B1740");
+        doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff");
+        fixedCols.forEach(c => {
+          doc.text(c.label, hx + 2, y + 8, { width: c.width - 4, align: c.key === "name" || c.key === "father" ? "left" : "center" });
+          hx += c.width;
+        });
+        sortedDates.forEach(d => {
+          const day = Number(d.slice(-2));
+          doc.text(String(day), hx + 1, y + 8, { width: dayColWidth - 2, align: "center" });
+          hx += dayColWidth;
+        });
+        summaryCols.forEach(c => {
+          doc.text(c.label, hx + 1, y + 8, { width: c.width - 2, align: "center" });
+          hx += c.width;
+        });
+        y += headerHeight;
+      }
+
+      // Zebra row
+      if (rowIdx % 2 === 0) doc.rect(tableStartX, y, contentWidth, rowHeight).fill("#f8fafc");
+      else doc.rect(tableStartX, y, contentWidth, rowHeight).fill("#ffffff");
+      doc.rect(tableStartX, y, contentWidth, rowHeight).lineWidth(0.2).stroke("#e2e8f0");
+
+      let rx = tableStartX;
+      let present = 0, absent = 0, late = 0;
+      const dates = grid[s.id] || {};
+
+      // Fixed cells
+      doc.font("Helvetica").fontSize(7.5).fillColor("#0B1740")
+        .text(String(rowIdx + 1), rx + 2, y + 6, { width: fixedCols[0].width - 4, align: "center" });
+      rx += fixedCols[0].width;
+      doc.text(String(s.roll_number || "-"), rx + 2, y + 6, { width: fixedCols[1].width - 4, align: "center" });
+      rx += fixedCols[1].width;
+      doc.text(String(s.name || "").slice(0, 22), rx + 2, y + 6, { width: fixedCols[2].width - 4, align: "left", lineBreak: false });
+      rx += fixedCols[2].width;
+      doc.text(String(s.father_name || "-").slice(0, 20), rx + 2, y + 6, { width: fixedCols[3].width - 4, align: "left", lineBreak: false });
+      rx += fixedCols[3].width;
+
+      // Day cells
+      sortedDates.forEach(d => {
+        const v = dates[d] || "";
+        if (v === "P") {
+          doc.rect(rx + 1, y + 3, dayColWidth - 2, rowHeight - 6).fill("#DCFCE7");
+          doc.font("Helvetica-Bold").fontSize(7).fillColor("#15803D")
+            .text("P", rx + 1, y + 6, { width: dayColWidth - 2, align: "center" });
+          present++;
+        } else if (v === "A") {
+          doc.rect(rx + 1, y + 3, dayColWidth - 2, rowHeight - 6).fill("#FEE2E2");
+          doc.font("Helvetica-Bold").fontSize(7).fillColor("#DC2626")
+            .text("A", rx + 1, y + 6, { width: dayColWidth - 2, align: "center" });
+          absent++;
+        } else if (v === "L") {
+          doc.rect(rx + 1, y + 3, dayColWidth - 2, rowHeight - 6).fill("#FEF3C7");
+          doc.font("Helvetica-Bold").fontSize(7).fillColor("#D97706")
+            .text("L", rx + 1, y + 6, { width: dayColWidth - 2, align: "center" });
+          late++;
+        }
+        rx += dayColWidth;
+      });
+
+      // Summary cells
+      const total = present + absent + late;
+      const pct = total ? Math.round((present / total) * 100) : 0;
+      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#15803D")
+        .text(String(present), rx + 1, y + 6, { width: summaryCols[0].width - 2, align: "center" });
+      rx += summaryCols[0].width;
+      doc.fillColor("#DC2626").text(String(absent), rx + 1, y + 6, { width: summaryCols[1].width - 2, align: "center" });
+      rx += summaryCols[1].width;
+      doc.fillColor("#D97706").text(String(late), rx + 1, y + 6, { width: summaryCols[2].width - 2, align: "center" });
+      rx += summaryCols[2].width;
+      doc.fillColor(pct >= 75 ? "#15803D" : pct >= 50 ? "#D97706" : "#DC2626")
+        .text(pct + "%", rx + 1, y + 6, { width: summaryCols[3].width - 2, align: "center" });
+
+      y += rowHeight;
+      rowIdx++;
+    }
+
+    doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+      .text(`Generated: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} · GSSS Shilla Official Register`,
+        leftMargin, pageHeight - 20, { width: contentWidth, align: "center" });
+
+    doc.end();
+  } catch (err) {
+    console.error("Register PDF error:", err);
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
 // ═══════════════════════════════════════════════════════════════
 // SCAN / LIVE / MANUAL / FINALIZE
 // ═══════════════════════════════════════════════════════════════
