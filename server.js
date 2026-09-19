@@ -102,6 +102,10 @@ const checkSession = (req, res, next) => {
 // 🟢 PART 1: ALL PUBLIC ROUTES (NO AUTH REQUIRED)
 // ============================================================
 // ============================================================
+const attendanceRoutes = require("./routes/attendance");
+app.use("/api/attendance", attendanceRoutes);
+
+
 const resultRoutes = require('./routes/resultRoutes');
 
     const bonafideRoutes = require("./routes/bonafideRoutes");
@@ -112,7 +116,7 @@ const quizRoutes = require("./routes/quizRoutes");
 const documentRoutes = require('./routes/documentRoutes');
 
 // server.js me add karo
-const attendanceRoutes = require("./routes/attendance");
+
 
 
 
@@ -129,7 +133,7 @@ app.use('/api/results', resultRoutes); // Public routes
 app.use("/api/students", studentRoutes);
 app.use("/api/quiz", quizRoutes);
 app.use('/api/documents', documentRoutes);
-app.use("/api/attendance", attendanceRoutes);
+
 
 // 1. Home route
 app.get("/", (req, res) => {
