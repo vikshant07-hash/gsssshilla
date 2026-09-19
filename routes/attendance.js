@@ -1,7 +1,6 @@
 // routes/attendance.js
 // ═══════════════════════════════════════════════════════════════
-// COMPLETE ATTENDANCE SYSTEM - Single File
-// Auth + Teachers + Subjects + Assignments + QR + Attendance + Reports
+// COMPLETE ATTENDANCE SYSTEM — Single File
 // ═══════════════════════════════════════════════════════════════
 
 const express = require("express");
@@ -12,18 +11,91 @@ const jwt = require("jsonwebtoken");
 const QRCode = require("qrcode");
 
 const db = require("../config/db");
-const { generateQRToken, verifyQRToken, generateQRImage } = require("../utils/qrGenerator");
+
+const q = (sql, params = []) => db.query(sql, params);
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
 const JWT_SECRET = process.env.JWT_SECRET || "gsss-shilla-jwt-secret-2026";
+const QR_SECRET = process.env.QR_SECRET || "gsss-shilla-qr-secret-2026";
 const ABSENT_AUTO_DELETE_DAYS = 5;
 
-const q = (sql, params = []) => db.query(sql, params);
+// ✅ Aapke ID card QR ka format
+const VERIFY_PREFIX = "https://gsssshilla07.pages.dev/verify/";
 
 // ═══════════════════════════════════════════════════════════════
-// HELPERS
+// QR TOKEN FUNCTIONS (inline — koi external file nahi)
+// ═══════════════════════════════════════════════════════════════
+
+// Generate QR token (agar kabhi naya banana pade)
+function generateQRToken(studentCode) {
+  return `${VERIFY_PREFIX}${encodeURIComponent(studentCode)}`;
+}
+
+// ✅ MAIN: Verify — aapke ID card QR ko parse karo
+function verifyQRToken(token) {
+  if (!token || typeof token !== "string") return null;
+  const clean = token.trim();
+
+  // ─── Format 1: URL format (aapka ID card QR) ────────────
+  // https://gsssshilla07.pages.dev/verify/STU001
+  if (clean.includes("/verify/")) {
+    try {
+      const url = new URL(clean);
+      const parts = url.pathname.split("/").filter(Boolean);
+      const idx = parts.indexOf("verify");
+      if (idx !== -1 && parts[idx + 1]) {
+        return { studentCode: decodeURIComponent(parts[idx + 1]) };
+      }
+    } catch (e) {
+      // fallback
+    }
+    const m = clean.match(/\/verify\/([^\/\?#]+)/);
+    if (m && m[1]) return { studentCode: decodeURIComponent(m[1]) };
+    return null;
+  }
+
+  // ─── Format 2: Plain student_id ──────────────────────────
+  // STU001, STU-2026-001
+  if (/^[A-Z0-9_\-]+$/i.test(clean) && clean.length >= 2 && clean.length <= 50) {
+    return { studentCode: clean };
+  }
+
+  // ─── Format 3: Signed format GSSS:xxx:yyy:zzz ───────────
+  if (clean.startsWith("GSSS:")) {
+    const parts = clean.split(":");
+    if (parts.length !== 4) return null;
+    const [, studentCode, random, hmac] = parts;
+    if (!studentCode || !random || !hmac) return null;
+    const expected = crypto
+      .createHmac("sha256", QR_SECRET)
+      .update(`${studentCode}:${random}`)
+      .digest("hex")
+      .slice(0, 16);
+    if (hmac.length !== expected.length) return null;
+    let match = true;
+    for (let i = 0; i < hmac.length; i++) {
+      if (hmac[i] !== expected[i]) match = false;
+    }
+    if (!match) return null;
+    return { studentCode };
+  }
+
+  return null;
+}
+
+async function generateQRImage(token) {
+  return QRCode.toDataURL(token, {
+    errorCorrectionLevel: "H",
+    width: 300,
+    margin: 1,
+    color: { dark: "#1a2332", light: "#ffffff" }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TIME HELPERS
 // ═══════════════════════════════════════════════════════════════
 function todayDay() {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date().getDay()];
@@ -49,7 +121,7 @@ function nowHM() {
 
 function hmToMin(hm) {
   if (!hm) return 0;
-  const [h, m] = hm.split(":").map(Number);
+  const [h, m] = String(hm).split(":").map(Number);
   return h * 60 + m;
 }
 
@@ -65,13 +137,8 @@ function isLateArrival(lateAfter) {
   return hmToMin(nowHM()) > hmToMin(lateAfter);
 }
 
-function esc(s) {
-  if (s === null || s === undefined) return "";
-  return String(s);
-}
-
 // ═══════════════════════════════════════════════════════════════
-// MIDDLEWARE - JWT AUTH
+// AUTH MIDDLEWARE
 // ═══════════════════════════════════════════════════════════════
 function authAdmin(req, res, next) {
   try {
@@ -120,7 +187,7 @@ function authTeacher(req, res, next) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// AUTO-DELETE ABSENT STUDENTS (5 din consecutive)
+// AUTO-DELETE ABSENT (5 din consecutive)
 // ═══════════════════════════════════════════════════════════════
 async function autoDeleteAbsentStudents() {
   try {
@@ -160,9 +227,23 @@ async function autoDeleteAbsentStudents() {
   }
 }
 
-// Timer: every 6 hours
 setInterval(autoDeleteAbsentStudents, 6 * 60 * 60 * 1000);
 setTimeout(autoDeleteAbsentStudents, 30000);
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER
+// ═══════════════════════════════════════════════════════════════
+function formatStudent(s) {
+  return {
+    id: s.id,
+    student_id: s.student_id,
+    name: s.name,
+    roll_number: s.roll_number,
+    class: s.class,
+    section: s.section,
+    photo_url: s.student_photo_url
+  };
+}
 
 // ═══════════════════════════════════════════════════════════════
 // ══════════════ TEACHER AUTH ══════════════════════════════════
@@ -191,12 +272,7 @@ router.post("/teacher/login", async (req, res) => {
     }
 
     const token = jwt.sign(
-      {
-        id: teacher.id,
-        role: "teacher",
-        name: teacher.name,
-        email: teacher.email
-      },
+      { id: teacher.id, role: "teacher", name: teacher.name, email: teacher.email },
       JWT_SECRET,
       { expiresIn: "12h" }
     );
@@ -254,15 +330,11 @@ router.get("/teacher/my-periods", authTeacher, async (req, res) => {
            WHERE teacher_id = ? AND class = ? AND period = ? AND date_str = ?`,
           [req.teacher.id, a.class, a.period, dateStr]
         );
-
         const total = await q(
-          `SELECT COUNT(*) AS cnt FROM Nstudent
-           WHERE class = ? AND status = 'Active'`,
+          `SELECT COUNT(*) AS cnt FROM Nstudent WHERE class = ? AND status = 'Active'`,
           [a.class]
         );
-
         const inWindow = isWithinWindow(a.start_time, a.end_time);
-
         return {
           ...a,
           markedCount: marked[0]?.cnt || 0,
@@ -342,11 +414,11 @@ router.post("/scan", authTeacher, async (req, res) => {
     }
     const assignment = assignRows[0];
 
-    // 4. Time window check
+    // 4. Time window
     if (!isWithinWindow(assignment.start_time, assignment.end_time)) {
       return res.status(400).json({
         success: false,
-        message: `⏰ Attendance window band. Window: ${assignment.start_time}-${assignment.end_time}. Abhi: ${nowHM()}`,
+        message: `⏰ Window band. Window: ${assignment.start_time}-${assignment.end_time}. Abhi: ${nowHM()}`,
         code: "OUTSIDE_WINDOW",
         window: { start: assignment.start_time, end: assignment.end_time },
         currentTime: nowHM()
@@ -406,7 +478,7 @@ router.post("/scan", authTeacher, async (req, res) => {
       ]
     );
 
-    // 10. Reset absence counter
+    // 10. Reset absence
     await q(
       `INSERT INTO student_absence_tracker (student_id, consecutive_absent_days, last_absent_date)
        VALUES (?, 0, NULL)
@@ -632,7 +704,7 @@ router.post("/finalize", authTeacher, async (req, res) => {
           [s.id, ABSENT_AUTO_DELETE_DAYS, ABSENT_AUTO_DELETE_DAYS]
         );
       } catch (e) {
-        // duplicate ignore
+        // ignore duplicate
       }
     }
 
@@ -650,7 +722,7 @@ router.post("/finalize", authTeacher, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ ADMIN - TEACHERS ══════════════════════════════
+// ══════════════ ADMIN — TEACHERS ══════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/attendance/admin/teachers
@@ -807,7 +879,7 @@ router.patch("/admin/teachers/:id/toggle", authAdmin, async (req, res) => {
   }
 });
 
-// DELETE /api/attendance/admin/teachers/:id (soft delete)
+// DELETE /api/attendance/admin/teachers/:id
 router.delete("/admin/teachers/:id", authAdmin, async (req, res) => {
   try {
     await q(`UPDATE teachers SET is_active = 0 WHERE id = ?`, [req.params.id]);
@@ -834,7 +906,7 @@ router.patch("/admin/teachers/:id/password", authAdmin, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ ADMIN - ASSIGNMENTS ═══════════════════════════
+// ══════════════ ADMIN — ASSIGNMENTS ═══════════════════════════
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/attendance/admin/teachers/:id/assign
@@ -937,7 +1009,7 @@ router.put("/admin/assignments/:id", authAdmin, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ ADMIN - SUBJECTS ══════════════════════════════
+// ══════════════ ADMIN — SUBJECTS ══════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/attendance/admin/subjects
@@ -1004,23 +1076,8 @@ router.get("/qr/student/:studentCode", async (req, res) => {
     }
     const student = studentRows[0];
 
-    let qrRows = await q(
-      `SELECT * FROM student_qr WHERE student_id = ? AND is_active = 1 LIMIT 1`,
-      [student.id]
-    );
-
-    let token;
-    if (qrRows.length) {
-      token = qrRows[0].qr_token;
-    } else {
-      token = generateQRToken(student.student_id);
-      await q(
-        `INSERT INTO student_qr (student_id, student_code, qr_token, qr_secret, is_active)
-         VALUES (?, ?, ?, ?, 1)`,
-        [student.id, student.student_id, token, crypto.randomBytes(16).toString("hex")]
-      );
-    }
-
+    // ✅ Aapke ID card ke format me QR generate karo
+    const token = generateQRToken(student.student_id);
     const qrImage = await generateQRImage(token);
 
     res.json({
@@ -1035,43 +1092,6 @@ router.get("/qr/student/:studentCode", async (req, res) => {
     });
   } catch (err) {
     console.error("QR error:", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// POST /api/attendance/qr/generate-class/:class
-router.post("/qr/generate-class/:class", authAdmin, async (req, res) => {
-  try {
-    const { class: cls } = req.params;
-    const students = await q(
-      `SELECT id, student_id, name FROM Nstudent WHERE class = ? AND status = 'Active'`,
-      [cls]
-    );
-
-    let generated = 0, existing = 0;
-    for (const s of students) {
-      const ex = await q(
-        `SELECT id FROM student_qr WHERE student_id = ? AND is_active = 1`,
-        [s.id]
-      );
-      if (ex.length) { existing++; continue; }
-
-      const token = generateQRToken(s.student_id);
-      await q(
-        `INSERT INTO student_qr (student_id, student_code, qr_token, qr_secret, is_active)
-         VALUES (?, ?, ?, ?, 1)`,
-        [s.id, s.student_id, token, crypto.randomBytes(16).toString("hex")]
-      );
-      generated++;
-    }
-
-    res.json({
-      success: true,
-      message: `✅ ${generated} new, ${existing} existing`,
-      total: students.length,
-      generated, existing
-    });
-  } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -1243,20 +1263,5 @@ router.post("/admin/recover-student/:id", authAdmin, async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
-// ═══════════════════════════════════════════════════════════════
-// HELPER
-// ═══════════════════════════════════════════════════════════════
-function formatStudent(s) {
-  return {
-    id: s.id,
-    student_id: s.student_id,
-    name: s.name,
-    roll_number: s.roll_number,
-    class: s.class,
-    section: s.section,
-    photo_url: s.student_photo_url
-  };
-}
 
 module.exports = router;
