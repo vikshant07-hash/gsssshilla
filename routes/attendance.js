@@ -1668,4 +1668,107 @@ router.post("/admin/recover-student/:id", authAdmin, async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════
+// HISTORY VIEW
+// ══════════════════════════════════════════════════════════════
+async function openHistory(assignment) {
+  const date = prompt(
+    "Enter date (YYYY-MM-DD) to view attendance.\nLeave blank for today:",
+    new Date().toISOString().slice(0, 10)
+  );
+  if (!date) return;
+
+  try {
+    const res = await fetch(
+      `${API}/teacher/attendance/${assignment.id}?date=${date}`,
+      { headers: authHeaders() }
+    );
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message);
+
+    showHistoryModal(assignment, data);
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+  }
+}
+
+function showHistoryModal(assignment, data) {
+  const modal = document.getElementById('historyModal');
+  const body = document.getElementById('historyBody');
+
+  document.getElementById('historyTitle').textContent =
+    `${assignment.subject_name} · Period ${assignment.period} · Class ${assignment.class}`;
+
+  const dt = new Date(data.date).toLocaleDateString('en-IN', {
+    weekday: 'long', day: '2-digit', month: 'short', year: 'numeric'
+  });
+
+  body.innerHTML = `
+    <div style="padding:8px 0 16px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; align-items:center;">
+      <div>
+        <div style="font-size:16px; font-weight:800; color:#1a2332;">${dt}</div>
+        <div style="font-size:12px; color:#5a6a7e; margin-top:2px;">
+          ${assignment.start_time} - ${assignment.end_time}
+        </div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <div style="background:#ecfdf5; padding:8px 14px; border-radius:10px; text-align:center;">
+          <div style="font-size:18px; font-weight:800; color:#10b981;">${data.stats.present}</div>
+          <div style="font-size:10px; color:#5a6a7e; text-transform:uppercase; font-weight:700;">Present</div>
+        </div>
+        <div style="background:#fef2f2; padding:8px 14px; border-radius:10px; text-align:center;">
+          <div style="font-size:18px; font-weight:800; color:#ef4444;">${data.stats.absent}</div>
+          <div style="font-size:10px; color:#5a6a7e; text-transform:uppercase; font-weight:700;">Absent</div>
+        </div>
+        <div style="background:#eef4ff; padding:8px 14px; border-radius:10px; text-align:center;">
+          <div style="font-size:18px; font-weight:800; color:#4a8af4;">${data.stats.percentage}%</div>
+          <div style="font-size:10px; color:#5a6a7e; text-transform:uppercase; font-weight:700;">Rate</div>
+        </div>
+      </div>
+    </div>
+
+    ${data.present.length ? `
+      <div style="font-size:11px; font-weight:800; color:#5a6a7e; text-transform:uppercase; letter-spacing:0.5px; margin:16px 0 8px;">
+        ✅ Present (${data.present.length})
+      </div>
+      ${data.present.map(p => `
+        <div style="display:flex; gap:12px; padding:10px 12px; background:#ecfdf5; border-radius:10px; margin-bottom:6px; align-items:center;">
+          <div style="width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg,#10b981,#34d399); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:14px;">
+            ${esc(p.student_name?.charAt(0) || '?')}
+          </div>
+          <div style="flex:1;">
+            <div style="font-weight:700; font-size:13px;">${esc(p.student_name)}</div>
+            <div style="font-size:11px; color:#5a6a7e;">Roll ${esc(p.roll_number || '—')} · ${p.marked_time}</div>
+          </div>
+          <div style="font-size:11px; font-weight:700; color:#10b981; text-transform:uppercase; padding:4px 8px; background:#fff; border-radius:20px;">
+            ${p.status}
+          </div>
+        </div>
+      `).join('')}
+    ` : ''}
+
+    ${data.absent.length ? `
+      <div style="font-size:11px; font-weight:800; color:#5a6a7e; text-transform:uppercase; letter-spacing:0.5px; margin:16px 0 8px;">
+        ❌ Absent (${data.absent.length})
+      </div>
+      ${data.absent.map(a => `
+        <div style="display:flex; gap:12px; padding:10px 12px; background:#fef2f2; border-radius:10px; margin-bottom:6px; align-items:center;">
+          <div style="width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg,#ef4444,#f87171); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:14px;">
+            ${esc(a.name?.charAt(0) || '?')}
+          </div>
+          <div style="flex:1;">
+            <div style="font-weight:700; font-size:13px;">${esc(a.name)}</div>
+            <div style="font-size:11px; color:#5a6a7e;">Roll ${esc(a.roll_number || '—')} · ID ${esc(a.student_id)}</div>
+          </div>
+          <div style="font-size:11px; font-weight:700; color:#ef4444; text-transform:uppercase; padding:4px 8px; background:#fff; border-radius:20px;">
+            Absent
+          </div>
+        </div>
+      `).join('')}
+    ` : ''}
+  `;
+
+  modal.classList.add('active');
+}
+
 module.exports = router;
