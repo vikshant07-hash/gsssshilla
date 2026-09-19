@@ -1,51 +1,34 @@
 // routes/attendance.js
+// ═══════════════════════════════════════════════════════════════
+// COMPLETE ATTENDANCE SYSTEM - Single File
+// Auth + Teachers + Subjects + Assignments + QR + Attendance + Reports
+// ═══════════════════════════════════════════════════════════════
+
 const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const QRCode = require("qrcode");
-const PDFDocument = require("pdfkit");
 
 const db = require("../config/db");
+const { generateQRToken, verifyQRToken, generateQRImage } = require("../utils/qrGenerator");
 
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
 // CONFIG
-// ============================================================
-const QR_SECRET = process.env.QR_SECRET || "gsss-shilla-qr-secret-2026";
+// ═══════════════════════════════════════════════════════════════
 const JWT_SECRET = process.env.JWT_SECRET || "gsss-shilla-jwt-secret-2026";
-const ABSENT_AUTO_DELETE_DAYS = 5; // 5 din consecutive absent → delete
+const ABSENT_AUTO_DELETE_DAYS = 5;
 
 const q = (sql, params = []) => db.query(sql, params);
 
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
 // HELPERS
-// ============================================================
-
-// ✅ Time compare: "10:00" <= current <= "10:45"
-function isWithinWindow(startTime, endTime, now = new Date()) {
-  const [sh, sm] = startTime.split(":").map(Number);
-  const [eh, em] = endTime.split(":").map(Number);
-  const curMin = now.getHours() * 60 + now.getMinutes();
-  const startMin = sh * 60 + sm;
-  const endMin = eh * 60 + em;
-  return curMin >= startMin && curMin <= endMin;
-}
-
-// ✅ Late check
-function isLateArrival(lateAfter, now = new Date()) {
-  if (!lateAfter) return false;
-  const [lh, lm] = lateAfter.split(":").map(Number);
-  const curMin = now.getHours() * 60 + now.getMinutes();
-  return curMin > lh * 60 + lm;
-}
-
-// ✅ Today's day: "Mon"
+// ═══════════════════════════════════════════════════════════════
 function todayDay() {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date().getDay()];
 }
 
-// ✅ Date string: "2026-01-15"
 function todayDateStr() {
   const d = new Date();
   const y = d.getFullYear();
@@ -54,74 +37,95 @@ function todayDateStr() {
   return `${y}-${m}-${day}`;
 }
 
-// ✅ Time string: "10:23:45"
 function nowTimeStr() {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
 }
 
-// ✅ QR token generate (HMAC signed - forge proof)
-function generateQRToken(studentCode) {
-  const random = crypto.randomBytes(8).toString("hex");
-  const payload = `${studentCode}:${random}`;
-  const hmac = crypto.createHmac("sha256", QR_SECRET)
-    .update(payload).digest("hex").slice(0, 16);
-  return `GSSS:${payload}:${hmac}`;
+function nowHM() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-// ✅ QR verify
-function verifyQRToken(token) {
-  if (!token || !token.startsWith("GSSS:")) return null;
-  const parts = token.split(":");
-  if (parts.length !== 4) return null;
-  const [, studentCode, random, hmac] = parts;
-  const expected = crypto.createHmac("sha256", QR_SECRET)
-    .update(`${studentCode}:${random}`).digest("hex").slice(0, 16);
-  if (hmac !== expected) return null;
-  return { studentCode };
+function hmToMin(hm) {
+  if (!hm) return 0;
+  const [h, m] = hm.split(":").map(Number);
+  return h * 60 + m;
 }
 
-// ============================================================
-// MIDDLEWARE - AUTH
-// ============================================================
+function isWithinWindow(startTime, endTime) {
+  const cur = hmToMin(nowHM());
+  const s = hmToMin(startTime);
+  const e = hmToMin(endTime);
+  return cur >= s && cur <= e;
+}
+
+function isLateArrival(lateAfter) {
+  if (!lateAfter) return false;
+  return hmToMin(nowHM()) > hmToMin(lateAfter);
+}
+
+function esc(s) {
+  if (s === null || s === undefined) return "";
+  return String(s);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MIDDLEWARE - JWT AUTH
+// ═══════════════════════════════════════════════════════════════
 function authAdmin(req, res, next) {
-  const token = req.headers.authorization?.replace("Bearer ", "");
-  if (!token) return res.status(401).json({ success: false, message: "No token" });
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const h = req.headers.authorization;
+    if (!h || !h.startsWith("Bearer ")) {
+      return res.status(401).json({ success: false, message: "No token provided" });
+    }
+    const decoded = jwt.verify(h.replace("Bearer ", ""), JWT_SECRET);
     if (decoded.role !== "admin") {
-      return res.status(403).json({ success: false, message: "Admin only" });
+      return res.status(403).json({
+        success: false,
+        message: `Admin only. Your role: ${decoded.role || "unknown"}`
+      });
     }
     req.admin = decoded;
     next();
-  } catch (e) {
-    res.status(401).json({ success: false, message: "Invalid/expired token" });
+  } catch (err) {
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({ success: false, message: "Token expired" });
+    }
+    return res.status(401).json({ success: false, message: "Invalid token" });
   }
 }
 
 function authTeacher(req, res, next) {
-  const token = req.headers.authorization?.replace("Bearer ", "");
-  if (!token) return res.status(401).json({ success: false, message: "No token" });
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const h = req.headers.authorization;
+    if (!h || !h.startsWith("Bearer ")) {
+      return res.status(401).json({ success: false, message: "No token provided" });
+    }
+    const decoded = jwt.verify(h.replace("Bearer ", ""), JWT_SECRET);
     if (decoded.role !== "teacher") {
-      return res.status(403).json({ success: false, message: "Teacher only" });
+      return res.status(403).json({
+        success: false,
+        message: `Teacher only. Your role: ${decoded.role || "unknown"}`
+      });
     }
     req.teacher = decoded;
     next();
-  } catch (e) {
-    res.status(401).json({ success: false, message: "Invalid/expired token" });
+  } catch (err) {
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({ success: false, message: "Token expired" });
+    }
+    return res.status(401).json({ success: false, message: "Invalid token" });
   }
 }
 
-// ============================================================
-// AUTO-DELETE ABSENT STUDENTS (5 din rule)
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// AUTO-DELETE ABSENT STUDENTS (5 din consecutive)
+// ═══════════════════════════════════════════════════════════════
 async function autoDeleteAbsentStudents() {
   try {
-    // Jin students ne 5+ din consecutive absent hai
     const flagged = await q(
-      `SELECT sat.student_id, sat.consecutive_absent_days, n.name, n.student_id AS code, n.class
+      `SELECT sat.student_id, sat.consecutive_absent_days, n.name, n.student_id AS code
        FROM student_absence_tracker sat
        JOIN Nstudent n ON n.id = sat.student_id
        WHERE sat.consecutive_absent_days >= ?
@@ -130,44 +134,41 @@ async function autoDeleteAbsentStudents() {
       [ABSENT_AUTO_DELETE_DAYS]
     );
 
-    let deletedCount = 0;
+    let count = 0;
     for (const s of flagged) {
-      // Mark student as deleted (soft delete)
-      await q(
-        `UPDATE Nstudent SET status = 'Auto-Deleted',
-         promoted_from = COALESCE(promoted_from, ''),
-         promotion_date = NOW()
-         WHERE id = ?`,
-        [s.student_id]
-      );
-
-      await q(
-        `UPDATE student_absence_tracker 
-         SET auto_deleted = 1, deleted_at = NOW(), is_flagged = 1, flagged_at = NOW()
-         WHERE student_id = ?`,
-        [s.student_id]
-      );
-
-      console.log(`🗑️ Auto-deleted: ${s.name} (${s.code}) - ${s.consecutive_absent_days} days absent`);
-      deletedCount++;
+      try {
+        await q(
+          `UPDATE Nstudent SET status = 'Auto-Deleted', promotion_date = NOW() WHERE id = ?`,
+          [s.student_id]
+        );
+        await q(
+          `UPDATE student_absence_tracker 
+           SET auto_deleted = 1, deleted_at = NOW(), is_flagged = 1, flagged_at = NOW()
+           WHERE student_id = ?`,
+          [s.student_id]
+        );
+        console.log(`🗑️ Auto-deleted: ${s.name} (${s.code}) - ${s.consecutive_absent_days} days`);
+        count++;
+      } catch (e) {
+        console.error("Auto-delete row error:", e.message);
+      }
     }
-
-    return deletedCount;
+    return count;
   } catch (err) {
     console.error("Auto-delete error:", err.message);
     return 0;
   }
 }
 
-// Timer - every 6 hours
+// Timer: every 6 hours
 setInterval(autoDeleteAbsentStudents, 6 * 60 * 60 * 1000);
-setTimeout(autoDeleteAbsentStudents, 30 * 1000); // startup pe bhi
+setTimeout(autoDeleteAbsentStudents, 30000);
 
-// ============================================================
-// ═══════════════ TEACHER AUTH ROUTES ════════════════════════
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
+// ══════════════ TEACHER AUTH ══════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 
-// 1. TEACHER LOGIN
+// POST /api/attendance/teacher/login
 router.post("/teacher/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -176,7 +177,7 @@ router.post("/teacher/login", async (req, res) => {
     }
 
     const rows = await q(
-      "SELECT * FROM teachers WHERE email = ? AND is_active = 1",
+      "SELECT * FROM teachers WHERE email = ? AND is_active = 1 LIMIT 1",
       [email.toLowerCase().trim()]
     );
     if (!rows.length) {
@@ -185,15 +186,21 @@ router.post("/teacher/login", async (req, res) => {
 
     const teacher = rows[0];
     const ok = await bcrypt.compare(password, teacher.password);
-    if (!ok) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!ok) {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
 
     const token = jwt.sign(
-      { id: teacher.id, role: "teacher", name: teacher.name, email: teacher.email },
+      {
+        id: teacher.id,
+        role: "teacher",
+        name: teacher.name,
+        email: teacher.email
+      },
       JWT_SECRET,
       { expiresIn: "12h" }
     );
 
-    // Aaj ke assignments
     const day = todayDay();
     const assignments = await q(
       `SELECT a.*, s.name AS subject_name, s.code AS subject_code
@@ -219,11 +226,12 @@ router.post("/teacher/login", async (req, res) => {
       todayAssignments: assignments
     });
   } catch (err) {
+    console.error("Teacher login error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 2. TEACHER - AJ KE ASSIGNMENTS
+// GET /api/attendance/teacher/my-periods
 router.get("/teacher/my-periods", authTeacher, async (req, res) => {
   try {
     const day = todayDay();
@@ -239,32 +247,31 @@ router.get("/teacher/my-periods", authTeacher, async (req, res) => {
       [req.teacher.id, `%${day}%`]
     );
 
-    // Har assignment ke liye aaj ka attendance count
-    const enriched = await Promise.all(assignments.map(async (a) => {
-      const marked = await q(
-        `SELECT COUNT(*) AS cnt FROM attendance
-         WHERE teacher_id = ? AND class = ? AND period = ? AND date_str = ?`,
-        [req.teacher.id, a.class, a.period, dateStr]
-      );
+    const enriched = await Promise.all(
+      assignments.map(async (a) => {
+        const marked = await q(
+          `SELECT COUNT(*) AS cnt FROM attendance
+           WHERE teacher_id = ? AND class = ? AND period = ? AND date_str = ?`,
+          [req.teacher.id, a.class, a.period, dateStr]
+        );
 
-      const total = await q(
-        `SELECT COUNT(*) AS cnt FROM Nstudent
-         WHERE class = ? AND status = 'Active'`,
-        [a.class]
-      );
+        const total = await q(
+          `SELECT COUNT(*) AS cnt FROM Nstudent
+           WHERE class = ? AND status = 'Active'`,
+          [a.class]
+        );
 
-      const now = new Date();
-      const inWindow = isWithinWindow(a.start_time, a.end_time, now);
+        const inWindow = isWithinWindow(a.start_time, a.end_time);
 
-      return {
-        ...a,
-        markedCount: marked[0]?.cnt || 0,
-        totalStudents: total[0]?.cnt || 0,
-        isLive: inWindow,
-        canScan: inWindow,
-        currentTime: nowTimeStr()
-      };
-    }));
+        return {
+          ...a,
+          markedCount: marked[0]?.cnt || 0,
+          totalStudents: total[0]?.cnt || 0,
+          isLive: inWindow,
+          canScan: inWindow
+        };
+      })
+    );
 
     res.json({
       success: true,
@@ -274,25 +281,29 @@ router.get("/teacher/my-periods", authTeacher, async (req, res) => {
       data: enriched
     });
   } catch (err) {
+    console.error("My-periods error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ============================================================
-// ═══════════════ ATTENDANCE SCAN (CORE) ═════════════════════
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
+// ══════════════ ATTENDANCE SCAN ═══════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 
-// 3. SCAN QR → MARK ATTENDANCE
+// POST /api/attendance/scan
 router.post("/scan", authTeacher, async (req, res) => {
   try {
     const { qrToken, class: cls, subjectId, period } = req.body;
 
     if (!qrToken || !cls || !subjectId || !period) {
-      return res.status(400).json({ success: false, message: "qrToken, class, subjectId, period required" });
+      return res.status(400).json({
+        success: false,
+        message: "qrToken, class, subjectId, period required"
+      });
     }
 
-    // ── STEP 1: QR verify ───────────────────────────
-    const verified = verifyQRToken(qrToken);
+    // 1. Verify QR
+    const verified = verifyQRToken(String(qrToken).trim());
     if (!verified) {
       return res.status(400).json({
         success: false,
@@ -301,27 +312,26 @@ router.post("/scan", authTeacher, async (req, res) => {
       });
     }
 
-    // ── STEP 2: Student find from Nstudent ──────────
+    // 2. Find student
     const studentRows = await q(
-      `SELECT * FROM Nstudent 
-       WHERE student_id = ? AND status = 'Active' LIMIT 1`,
+      `SELECT * FROM Nstudent WHERE student_id = ? AND status = 'Active' LIMIT 1`,
       [verified.studentCode]
     );
     if (!studentRows.length) {
       return res.status(404).json({
         success: false,
-        message: "❌ Student Nstudent table me nahi mila ya inactive hai",
+        message: "❌ Student not found or inactive",
         code: "STUDENT_NOT_FOUND"
       });
     }
     const student = studentRows[0];
 
-    // ── STEP 3: Assignment verify (teacher assigned hai?) ──
+    // 3. Check teacher assignment
     const assignRows = await q(
       `SELECT * FROM assignments 
        WHERE teacher_id = ? AND class = ? AND subject_id = ? 
          AND period = ? AND is_active = 1 LIMIT 1`,
-      [req.teacher.id, cls, subjectId, period]
+      [req.teacher.id, cls, subjectId, Number(period)]
     );
     if (!assignRows.length) {
       return res.status(403).json({
@@ -332,19 +342,18 @@ router.post("/scan", authTeacher, async (req, res) => {
     }
     const assignment = assignRows[0];
 
-    // ── STEP 4: TIME WINDOW check ───────────────────
-    const now = new Date();
-    if (!isWithinWindow(assignment.start_time, assignment.end_time, now)) {
+    // 4. Time window check
+    if (!isWithinWindow(assignment.start_time, assignment.end_time)) {
       return res.status(400).json({
         success: false,
-        message: `⏰ Attendance time window nahi hai. Window: ${assignment.start_time} - ${assignment.end_time}. Abhi: ${nowTimeStr()}`,
+        message: `⏰ Attendance window band. Window: ${assignment.start_time}-${assignment.end_time}. Abhi: ${nowHM()}`,
         code: "OUTSIDE_WINDOW",
         window: { start: assignment.start_time, end: assignment.end_time },
-        currentTime: nowTimeStr()
+        currentTime: nowHM()
       });
     }
 
-    // ── STEP 5: Student class match ─────────────────
+    // 5. Class match
     if (String(student.class) !== String(cls)) {
       return res.status(400).json({
         success: false,
@@ -353,33 +362,32 @@ router.post("/scan", authTeacher, async (req, res) => {
       });
     }
 
-    // ── STEP 6: Duplicate check ─────────────────────
+    // 6. Duplicate check
     const dateStr = todayDateStr();
     const existing = await q(
-      `SELECT * FROM attendance 
-       WHERE student_id = ? AND date_str = ? AND period = ? LIMIT 1`,
-      [student.id, dateStr, period]
+      `SELECT * FROM attendance WHERE student_id = ? AND date_str = ? AND period = ? LIMIT 1`,
+      [student.id, dateStr, Number(period)]
     );
     if (existing.length) {
       return res.json({
         success: true,
         alreadyMarked: true,
-        message: `⚠️ ${student.name} ki attendance already marked hai (${existing[0].marked_time})`,
+        message: `⚠️ ${student.name} ki attendance already marked (${existing[0].marked_time})`,
         student: formatStudent(student),
         attendance: existing[0]
       });
     }
 
-    // ── STEP 7: Late check ──────────────────────────
-    const late = assignment.late_after ? isLateArrival(assignment.late_after, now) : false;
+    // 7. Late check
+    const late = isLateArrival(assignment.late_after);
     const status = late ? "late" : "present";
     const timeStr = nowTimeStr();
 
-    // ── STEP 8: Subject name ────────────────────────
+    // 8. Subject name
     const subRows = await q(`SELECT name FROM subjects WHERE id = ?`, [subjectId]);
     const subjectName = subRows[0]?.name || "";
 
-    // ── STEP 9: Insert attendance ───────────────────
+    // 9. Insert
     const result = await q(
       `INSERT INTO attendance 
         (student_id, student_code, student_name, roll_number, class, section,
@@ -388,17 +396,17 @@ router.post("/scan", authTeacher, async (req, res) => {
          window_start, window_end, status, is_late, method, device_info)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, NOW(), ?, ?, ?, ?, ?, 'qr', ?)`,
       [
-        student.id, student.student_id, student.name, student.roll_number,
+        student.id, student.student_id, student.name, student.roll_number || null,
         cls, student.section || null,
         subjectId, subjectName, req.teacher.id, req.teacher.name,
-        period, dateStr, timeStr,
+        Number(period), dateStr, timeStr,
         assignment.start_time, assignment.end_time,
         status, late ? 1 : 0,
         (req.headers["user-agent"] || "").slice(0, 250)
       ]
     );
 
-    // ── STEP 10: Absence tracker reset ──────────────
+    // 10. Reset absence counter
     await q(
       `INSERT INTO student_absence_tracker (student_id, consecutive_absent_days, last_absent_date)
        VALUES (?, 0, NULL)
@@ -415,10 +423,10 @@ router.post("/scan", authTeacher, async (req, res) => {
       student: formatStudent(student),
       attendance: {
         id: result.insertId,
-        period,
+        period: Number(period),
         class: cls,
         subject: subjectName,
-        markedAt: now.toISOString(),
+        markedAt: new Date().toISOString(),
         markedTime: timeStr
       }
     });
@@ -428,7 +436,7 @@ router.post("/scan", authTeacher, async (req, res) => {
   }
 });
 
-// 4. LIVE ATTENDANCE (aaj ka scan hua list)
+// GET /api/attendance/live/:class/:subjectId/:period
 router.get("/live/:class/:subjectId/:period", authTeacher, async (req, res) => {
   try {
     const { class: cls, subjectId, period } = req.params;
@@ -439,10 +447,9 @@ router.get("/live/:class/:subjectId/:period", authTeacher, async (req, res) => {
        WHERE teacher_id = ? AND class = ? AND subject_id = ? 
          AND period = ? AND date_str = ?
        ORDER BY marked_at ASC`,
-      [req.teacher.id, cls, subjectId, period, dateStr]
+      [req.teacher.id, cls, subjectId, Number(period), dateStr]
     );
 
-    // Class ke saare active students
     const allStudents = await q(
       `SELECT id, student_id, name, roll_number, section, student_photo_url
        FROM Nstudent WHERE class = ? AND status = 'Active'
@@ -450,7 +457,6 @@ router.get("/live/:class/:subjectId/:period", authTeacher, async (req, res) => {
       [cls]
     );
 
-    // Absent list
     const presentIds = records.map(r => r.student_id);
     const absentStudents = allStudents.filter(s => !presentIds.includes(s.id));
 
@@ -460,8 +466,11 @@ router.get("/live/:class/:subjectId/:period", authTeacher, async (req, res) => {
       currentTime: nowTimeStr(),
       data: records,
       absent: absentStudents.map(s => ({
-        id: s.id, student_id: s.student_id, name: s.name,
-        roll_number: s.roll_number, section: s.section,
+        id: s.id,
+        student_id: s.student_id,
+        name: s.name,
+        roll_number: s.roll_number,
+        section: s.section,
         photo_url: s.student_photo_url
       })),
       stats: {
@@ -474,31 +483,35 @@ router.get("/live/:class/:subjectId/:period", authTeacher, async (req, res) => {
       }
     });
   } catch (err) {
+    console.error("Live error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 5. MANUAL MARK (QR fail)
+// POST /api/attendance/manual
 router.post("/manual", authTeacher, async (req, res) => {
   try {
     const { studentId, class: cls, subjectId, period, status = "present" } = req.body;
+
+    if (!studentId || !cls || !subjectId || !period) {
+      return res.status(400).json({ success: false, message: "Missing fields" });
+    }
 
     const assignRows = await q(
       `SELECT * FROM assignments 
        WHERE teacher_id = ? AND class = ? AND subject_id = ? 
          AND period = ? AND is_active = 1 LIMIT 1`,
-      [req.teacher.id, cls, subjectId, period]
+      [req.teacher.id, cls, subjectId, Number(period)]
     );
     if (!assignRows.length) {
-      return res.status(403).json({ success: false, message: "Not assigned to this class/period" });
+      return res.status(403).json({ success: false, message: "Not assigned" });
     }
     const assignment = assignRows[0];
 
-    const now = new Date();
-    if (!isWithinWindow(assignment.start_time, assignment.end_time, now)) {
+    if (!isWithinWindow(assignment.start_time, assignment.end_time)) {
       return res.status(400).json({
         success: false,
-        message: `⏰ Window bahar. Window: ${assignment.start_time} - ${assignment.end_time}`
+        message: `⏰ Window band. Window: ${assignment.start_time}-${assignment.end_time}`
       });
     }
 
@@ -507,26 +520,27 @@ router.post("/manual", authTeacher, async (req, res) => {
       [studentId, cls]
     );
     if (!studentRows.length) {
-      return res.status(404).json({ success: false, message: "Student not found in this class" });
+      return res.status(404).json({ success: false, message: "Student not found in class" });
     }
     const student = studentRows[0];
+
     const dateStr = todayDateStr();
     const timeStr = nowTimeStr();
     const subRows = await q(`SELECT name FROM subjects WHERE id = ?`, [subjectId]);
 
-    const result = await q(
+    await q(
       `INSERT INTO attendance
         (student_id, student_code, student_name, roll_number, class, section,
          subject_id, subject_name, teacher_id, teacher_name,
          period, date, date_str, marked_at, marked_time,
          window_start, window_end, status, is_late, method)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, NOW(), ?, ?, ?, ?, 0, 'manual')
-       ON DUPLICATE KEY UPDATE status = VALUES(status), method = 'manual'`,
+       ON DUPLICATE KEY UPDATE status = VALUES(status), method = 'manual', marked_time = VALUES(marked_time)`,
       [
-        student.id, student.student_id, student.name, student.roll_number,
+        student.id, student.student_id, student.name, student.roll_number || null,
         cls, student.section || null,
         subjectId, subRows[0]?.name || "", req.teacher.id, req.teacher.name,
-        period, dateStr, timeStr,
+        Number(period), dateStr, timeStr,
         assignment.start_time, assignment.end_time, status
       ]
     );
@@ -541,15 +555,16 @@ router.post("/manual", authTeacher, async (req, res) => {
 
     res.json({
       success: true,
-      message: `✅ ${student.name} manually marked ${status}`,
+      message: `✅ ${student.name} marked ${status} (manual)`,
       student: formatStudent(student)
     });
   } catch (err) {
+    console.error("Manual error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 6. FINALIZE (absent mark karo jo scan nahi hue)
+// POST /api/attendance/finalize
 router.post("/finalize", authTeacher, async (req, res) => {
   try {
     const { class: cls, subjectId, period } = req.body;
@@ -558,7 +573,7 @@ router.post("/finalize", authTeacher, async (req, res) => {
       `SELECT * FROM assignments 
        WHERE teacher_id = ? AND class = ? AND subject_id = ? 
          AND period = ? AND is_active = 1 LIMIT 1`,
-      [req.teacher.id, cls, subjectId, period]
+      [req.teacher.id, cls, subjectId, Number(period)]
     );
     if (!assignRows.length) {
       return res.status(403).json({ success: false, message: "Not assigned" });
@@ -568,24 +583,19 @@ router.post("/finalize", authTeacher, async (req, res) => {
     const dateStr = todayDateStr();
     const timeStr = nowTimeStr();
 
-    // Aaj class ke saare students
     const allStudents = await q(
       `SELECT id, student_id, name, roll_number, section
        FROM Nstudent WHERE class = ? AND status = 'Active'`,
       [cls]
     );
 
-    // Jo scan ho chuke
     const marked = await q(
-      `SELECT student_id FROM attendance
-       WHERE class = ? AND period = ? AND date_str = ?`,
-      [cls, period, dateStr]
+      `SELECT student_id FROM attendance WHERE class = ? AND period = ? AND date_str = ?`,
+      [cls, Number(period), dateStr]
     );
     const markedIds = marked.map(m => m.student_id);
 
-    // Absent students
     const absentStudents = allStudents.filter(s => !markedIds.includes(s.id));
-
     const subRows = await q(`SELECT name FROM subjects WHERE id = ?`, [subjectId]);
     const subjectName = subRows[0]?.name || "";
 
@@ -600,16 +610,15 @@ router.post("/finalize", authTeacher, async (req, res) => {
              window_start, window_end, status, method)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, NOW(), ?, ?, ?, 'absent', 'auto-absent')`,
           [
-            s.id, s.student_id, s.name, s.roll_number,
+            s.id, s.student_id, s.name, s.roll_number || null,
             cls, s.section || null,
             subjectId, subjectName, req.teacher.id, req.teacher.name,
-            period, dateStr, timeStr,
+            Number(period), dateStr, timeStr,
             assignment.start_time, assignment.end_time
           ]
         );
         inserted++;
 
-        // ✅ Absence tracker increment
         await q(
           `INSERT INTO student_absence_tracker 
             (student_id, consecutive_absent_days, last_absent_date, total_absent_days)
@@ -623,33 +632,37 @@ router.post("/finalize", authTeacher, async (req, res) => {
           [s.id, ABSENT_AUTO_DELETE_DAYS, ABSENT_AUTO_DELETE_DAYS]
         );
       } catch (e) {
-        // Duplicate ignore
+        // duplicate ignore
       }
     }
 
     res.json({
       success: true,
-      message: `✅ Attendance finalized. ${inserted} students marked absent`,
+      message: `✅ Finalized. ${inserted} absent marked`,
       absentCount: inserted,
       date: dateStr,
       time: timeStr
     });
   } catch (err) {
+    console.error("Finalize error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ============================================================
-// ═══════════════ ADMIN - TEACHER MANAGEMENT ═════════════════
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
+// ══════════════ ADMIN - TEACHERS ══════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 
-// 7. CREATE TEACHER (Admin)
+// POST /api/attendance/admin/teachers
 router.post("/admin/teachers", authAdmin, async (req, res) => {
   try {
     const { teacher_id, name, email, phone, password, photo_url, photo_pid } = req.body;
 
     if (!teacher_id || !name || !email || !password) {
-      return res.status(400).json({ success: false, message: "teacher_id, name, email, password required" });
+      return res.status(400).json({
+        success: false,
+        message: "teacher_id, name, email, password required"
+      });
     }
     if (password.length < 6) {
       return res.status(400).json({ success: false, message: "Password min 6 chars" });
@@ -660,17 +673,28 @@ router.post("/admin/teachers", authAdmin, async (req, res) => {
       [email.toLowerCase().trim(), teacher_id]
     );
     if (dup.length) {
-      return res.status(400).json({ success: false, message: "Email or Teacher ID already exists" });
+      return res.status(400).json({
+        success: false,
+        message: "Email or Teacher ID already exists"
+      });
     }
 
     const hashed = await bcrypt.hash(password, 10);
     const result = await q(
       `INSERT INTO teachers (teacher_id, name, email, phone, password, photo_url, photo_pid, is_active)
        VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-      [teacher_id, name, email.toLowerCase().trim(), phone || null, hashed, photo_url || null, photo_pid || null]
+      [
+        teacher_id, name, email.toLowerCase().trim(),
+        phone || null, hashed,
+        photo_url || null, photo_pid || null
+      ]
     );
 
-    const teacher = (await q(`SELECT id, teacher_id, name, email, phone, photo_url, is_active, created_at FROM teachers WHERE id = ?`, [result.insertId]))[0];
+    const teacher = (await q(
+      `SELECT id, teacher_id, name, email, phone, photo_url, is_active, created_at
+       FROM teachers WHERE id = ?`,
+      [result.insertId]
+    ))[0];
 
     res.status(201).json({
       success: true,
@@ -678,11 +702,12 @@ router.post("/admin/teachers", authAdmin, async (req, res) => {
       data: teacher
     });
   } catch (err) {
+    console.error("Create teacher error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 8. LIST ALL TEACHERS
+// GET /api/attendance/admin/teachers
 router.get("/admin/teachers", authAdmin, async (req, res) => {
   try {
     const teachers = await q(
@@ -690,26 +715,28 @@ router.get("/admin/teachers", authAdmin, async (req, res) => {
        FROM teachers ORDER BY name ASC`
     );
 
-    // Har teacher ke assignments
-    const withAssignments = await Promise.all(teachers.map(async (t) => {
-      const assignments = await q(
-        `SELECT a.*, s.name AS subject_name, s.code AS subject_code
-         FROM assignments a
-         JOIN subjects s ON s.id = a.subject_id
-         WHERE a.teacher_id = ? AND a.is_active = 1
-         ORDER BY a.class, a.period`,
-        [t.id]
-      );
-      return { ...t, assignments };
-    }));
+    const withAssignments = await Promise.all(
+      teachers.map(async (t) => {
+        const assignments = await q(
+          `SELECT a.*, s.name AS subject_name, s.code AS subject_code
+           FROM assignments a
+           JOIN subjects s ON s.id = a.subject_id
+           WHERE a.teacher_id = ? AND a.is_active = 1
+           ORDER BY a.class, a.period`,
+          [t.id]
+        );
+        return { ...t, assignments };
+      })
+    );
 
     res.json({ success: true, data: withAssignments });
   } catch (err) {
+    console.error("List teachers error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 9. GET SINGLE TEACHER
+// GET /api/attendance/admin/teachers/:id
 router.get("/admin/teachers/:id", authAdmin, async (req, res) => {
   try {
     const rows = await q(
@@ -732,40 +759,55 @@ router.get("/admin/teachers/:id", authAdmin, async (req, res) => {
   }
 });
 
-// 10. UPDATE TEACHER
+// PUT /api/attendance/admin/teachers/:id
 router.put("/admin/teachers/:id", authAdmin, async (req, res) => {
   try {
     const { name, email, phone, photo_url, photo_pid } = req.body;
+
     await q(
-      `UPDATE teachers SET 
+      `UPDATE teachers SET
         name = COALESCE(?, name),
         email = COALESCE(?, email),
         phone = COALESCE(?, phone),
         photo_url = COALESCE(?, photo_url),
         photo_pid = COALESCE(?, photo_pid)
        WHERE id = ?`,
-      [name || null, email?.toLowerCase().trim() || null, phone || null, photo_url || null, photo_pid || null, req.params.id]
+      [
+        name || null,
+        email ? email.toLowerCase().trim() : null,
+        phone || null,
+        photo_url || null,
+        photo_pid || null,
+        req.params.id
+      ]
     );
+
     res.json({ success: true, message: "✅ Teacher updated" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 11. TOGGLE TEACHER ACTIVE
+// PATCH /api/attendance/admin/teachers/:id/toggle
 router.patch("/admin/teachers/:id/toggle", authAdmin, async (req, res) => {
   try {
     const rows = await q(`SELECT is_active FROM teachers WHERE id = ?`, [req.params.id]);
     if (!rows.length) return res.status(404).json({ success: false, message: "Not found" });
+
     const newStatus = rows[0].is_active ? 0 : 1;
     await q(`UPDATE teachers SET is_active = ? WHERE id = ?`, [newStatus, req.params.id]);
-    res.json({ success: true, is_active: newStatus, message: newStatus ? "✅ Enabled" : "⚠️ Disabled" });
+
+    res.json({
+      success: true,
+      is_active: newStatus,
+      message: newStatus ? "✅ Enabled" : "⚠️ Disabled"
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 12. DELETE TEACHER (soft)
+// DELETE /api/attendance/admin/teachers/:id (soft delete)
 router.delete("/admin/teachers/:id", authAdmin, async (req, res) => {
   try {
     await q(`UPDATE teachers SET is_active = 0 WHERE id = ?`, [req.params.id]);
@@ -776,7 +818,7 @@ router.delete("/admin/teachers/:id", authAdmin, async (req, res) => {
   }
 });
 
-// 13. RESET PASSWORD
+// PATCH /api/attendance/admin/teachers/:id/password
 router.patch("/admin/teachers/:id/password", authAdmin, async (req, res) => {
   try {
     const { password } = req.body;
@@ -791,17 +833,14 @@ router.patch("/admin/teachers/:id/password", authAdmin, async (req, res) => {
   }
 });
 
-// ============================================================
-// ═══════════════ ADMIN - ASSIGNMENTS ════════════════════════
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
+// ══════════════ ADMIN - ASSIGNMENTS ═══════════════════════════
+// ═══════════════════════════════════════════════════════════════
 
-// 14. ASSIGN SUBJECT/CLASS/PERIOD/TIME TO TEACHER
+// POST /api/attendance/admin/teachers/:id/assign
 router.post("/admin/teachers/:id/assign", authAdmin, async (req, res) => {
   try {
-    const {
-      subjectId, class: cls, section,
-      period, days, startTime, endTime, lateAfter
-    } = req.body;
+    const { subjectId, class: cls, section, period, days, startTime, endTime, lateAfter } = req.body;
 
     if (!subjectId || !cls || !period || !startTime || !endTime) {
       return res.status(400).json({
@@ -810,28 +849,24 @@ router.post("/admin/teachers/:id/assign", authAdmin, async (req, res) => {
       });
     }
 
-    // Time format validate
     const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
     if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
-      return res.status(400).json({ success: false, message: "Time format HH:MM required" });
+      return res.status(400).json({ success: false, message: "Time format HH:MM" });
     }
     if (startTime >= endTime) {
       return res.status(400).json({ success: false, message: "startTime < endTime hona chahiye" });
     }
 
-    // Teacher exists?
     const t = await q(`SELECT id, name FROM teachers WHERE id = ?`, [req.params.id]);
     if (!t.length) return res.status(404).json({ success: false, message: "Teacher not found" });
 
-    // Subject exists?
     const sub = await q(`SELECT id, name FROM subjects WHERE id = ?`, [subjectId]);
     if (!sub.length) return res.status(404).json({ success: false, message: "Subject not found" });
 
-    // Duplicate check
     const dup = await q(
       `SELECT id FROM assignments 
        WHERE teacher_id = ? AND subject_id = ? AND class = ? AND period = ? AND is_active = 1`,
-      [req.params.id, subjectId, cls, period]
+      [req.params.id, subjectId, cls, Number(period)]
     );
     if (dup.length) {
       return res.status(400).json({ success: false, message: "This assignment already exists" });
@@ -846,30 +881,32 @@ router.post("/admin/teachers/:id/assign", authAdmin, async (req, res) => {
         (teacher_id, subject_id, class, section, period, days, start_time, end_time, late_after, is_active)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
-        req.params.id, subjectId, cls, section || null,
-        period, daysStr, startTime, endTime, lateAfter || null
+        req.params.id, subjectId, cls,
+        section || null, Number(period),
+        daysStr, startTime, endTime, lateAfter || null
       ]
     );
 
     res.status(201).json({
       success: true,
-      message: `✅ Assigned: Class ${cls} - ${sub[0].name} - Period ${period} (${startTime}-${endTime})`,
+      message: `✅ Assigned: Class ${cls} - ${sub[0].name} - P${period} (${startTime}-${endTime})`,
       data: {
         id: result.insertId,
-        teacher_id: req.params.id,
+        teacher_id: Number(req.params.id),
         teacher_name: t[0].name,
-        subject_id: subjectId,
+        subject_id: Number(subjectId),
         subject_name: sub[0].name,
-        class: cls, section, period, days: daysStr,
+        class: cls, section, period: Number(period), days: daysStr,
         start_time: startTime, end_time: endTime, late_after: lateAfter
       }
     });
   } catch (err) {
+    console.error("Assign error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 15. REMOVE ASSIGNMENT
+// DELETE /api/attendance/admin/assignments/:id
 router.delete("/admin/assignments/:id", authAdmin, async (req, res) => {
   try {
     await q(`UPDATE assignments SET is_active = 0 WHERE id = ?`, [req.params.id]);
@@ -879,7 +916,7 @@ router.delete("/admin/assignments/:id", authAdmin, async (req, res) => {
   }
 });
 
-// 16. UPDATE ASSIGNMENT (time change etc.)
+// PUT /api/attendance/admin/assignments/:id
 router.put("/admin/assignments/:id", authAdmin, async (req, res) => {
   try {
     const { startTime, endTime, lateAfter, days, period } = req.body;
@@ -899,11 +936,11 @@ router.put("/admin/assignments/:id", authAdmin, async (req, res) => {
   }
 });
 
-// ============================================================
-// ═══════════════ ADMIN - SUBJECTS ═══════════════════════════
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
+// ══════════════ ADMIN - SUBJECTS ══════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 
-// 17. CREATE SUBJECT
+// POST /api/attendance/admin/subjects
 router.post("/admin/subjects", authAdmin, async (req, res) => {
   try {
     const { code, name, class: cls, stream } = req.body;
@@ -923,7 +960,7 @@ router.post("/admin/subjects", authAdmin, async (req, res) => {
   }
 });
 
-// 18. LIST SUBJECTS (class-wise)
+// GET /api/attendance/admin/subjects
 router.get("/admin/subjects", authAdmin, async (req, res) => {
   try {
     const { class: cls } = req.query;
@@ -938,7 +975,7 @@ router.get("/admin/subjects", authAdmin, async (req, res) => {
   }
 });
 
-// 19. DELETE SUBJECT
+// DELETE /api/attendance/admin/subjects/:id
 router.delete("/admin/subjects/:id", authAdmin, async (req, res) => {
   try {
     await q(`UPDATE subjects SET is_active = 0 WHERE id = ?`, [req.params.id]);
@@ -948,11 +985,11 @@ router.delete("/admin/subjects/:id", authAdmin, async (req, res) => {
   }
 });
 
-// ============================================================
-// ═══════════════ QR GENERATION FOR STUDENTS ═════════════════
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
+// ══════════════ QR GENERATION ═════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 
-// 20. GENERATE / GET QR FOR STUDENT
+// GET /api/attendance/qr/student/:studentCode
 router.get("/qr/student/:studentCode", async (req, res) => {
   try {
     const { studentCode } = req.params;
@@ -967,7 +1004,6 @@ router.get("/qr/student/:studentCode", async (req, res) => {
     }
     const student = studentRows[0];
 
-    // Check existing QR
     let qrRows = await q(
       `SELECT * FROM student_qr WHERE student_id = ? AND is_active = 1 LIMIT 1`,
       [student.id]
@@ -977,7 +1013,6 @@ router.get("/qr/student/:studentCode", async (req, res) => {
     if (qrRows.length) {
       token = qrRows[0].qr_token;
     } else {
-      // Generate new
       token = generateQRToken(student.student_id);
       await q(
         `INSERT INTO student_qr (student_id, student_code, qr_token, qr_secret, is_active)
@@ -986,13 +1021,7 @@ router.get("/qr/student/:studentCode", async (req, res) => {
       );
     }
 
-    // QR image as data URL
-    const qrDataUrl = await QRCode.toDataURL(token, {
-      errorCorrectionLevel: "H",
-      width: 300,
-      margin: 1,
-      color: { dark: "#1a2332", light: "#ffffff" }
-    });
+    const qrImage = await generateQRImage(token);
 
     res.json({
       success: true,
@@ -1001,21 +1030,21 @@ router.get("/qr/student/:studentCode", async (req, res) => {
         student_name: student.name,
         class: student.class,
         qr_token: token,
-        qr_image: qrDataUrl
+        qr_image: qrImage
       }
     });
   } catch (err) {
+    console.error("QR error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 21. BULK GENERATE QR FOR CLASS
+// POST /api/attendance/qr/generate-class/:class
 router.post("/qr/generate-class/:class", authAdmin, async (req, res) => {
   try {
     const { class: cls } = req.params;
     const students = await q(
-      `SELECT id, student_id, name FROM Nstudent 
-       WHERE class = ? AND status = 'Active'`,
+      `SELECT id, student_id, name FROM Nstudent WHERE class = ? AND status = 'Active'`,
       [cls]
     );
 
@@ -1038,7 +1067,7 @@ router.post("/qr/generate-class/:class", authAdmin, async (req, res) => {
 
     res.json({
       success: true,
-      message: `✅ ${generated} new QR generated, ${existing} already existed`,
+      message: `✅ ${generated} new, ${existing} existing`,
       total: students.length,
       generated, existing
     });
@@ -1047,11 +1076,11 @@ router.post("/qr/generate-class/:class", authAdmin, async (req, res) => {
   }
 });
 
-// ============================================================
-// ═══════════════ REPORTS ════════════════════════════════════
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
+// ══════════════ REPORTS ═══════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 
-// 22. STUDENT ATTENDANCE REPORT
+// GET /api/attendance/reports/student/:studentCode
 router.get("/reports/student/:studentCode", authAdmin, async (req, res) => {
   try {
     const { from, to } = req.query;
@@ -1061,18 +1090,19 @@ router.get("/reports/student/:studentCode", authAdmin, async (req, res) => {
       `SELECT id, name, class, roll_number FROM Nstudent WHERE student_id = ?`,
       [studentCode]
     );
-    if (!studentRows.length) return res.status(404).json({ success: false, message: "Student not found" });
+    if (!studentRows.length) {
+      return res.status(404).json({ success: false, message: "Student not found" });
+    }
     const student = studentRows[0];
 
     let sql = `SELECT * FROM attendance WHERE student_code = ?`;
     const params = [studentCode];
-
     if (from) { sql += ` AND date >= ?`; params.push(from); }
     if (to) { sql += ` AND date <= ?`; params.push(to); }
-
     sql += ` ORDER BY date DESC, period DESC`;
 
     const records = await q(sql, params);
+
     const total = records.length;
     const present = records.filter(r => r.status === "present").length;
     const absent = records.filter(r => r.status === "absent").length;
@@ -1092,7 +1122,7 @@ router.get("/reports/student/:studentCode", authAdmin, async (req, res) => {
   }
 });
 
-// 23. CLASS ATTENDANCE REPORT
+// GET /api/attendance/reports/class/:class
 router.get("/reports/class/:class", authAdmin, async (req, res) => {
   try {
     const { date, period, subjectId } = req.query;
@@ -1101,7 +1131,7 @@ router.get("/reports/class/:class", authAdmin, async (req, res) => {
     let sql = `SELECT * FROM attendance WHERE class = ?`;
     const params = [cls];
     if (date) { sql += ` AND date_str = ?`; params.push(date); }
-    if (period) { sql += ` AND period = ?`; params.push(period); }
+    if (period) { sql += ` AND period = ?`; params.push(Number(period)); }
     if (subjectId) { sql += ` AND subject_id = ?`; params.push(subjectId); }
     sql += ` ORDER BY date DESC, period ASC`;
 
@@ -1112,7 +1142,7 @@ router.get("/reports/class/:class", authAdmin, async (req, res) => {
   }
 });
 
-// 24. ATTENDANCE STATS (dashboard)
+// GET /api/attendance/reports/stats
 router.get("/reports/stats", authAdmin, async (req, res) => {
   try {
     const dateStr = todayDateStr();
@@ -1136,8 +1166,6 @@ router.get("/reports/stats", authAdmin, async (req, res) => {
     const autoDeleted = await q(
       `SELECT COUNT(*) AS cnt FROM student_absence_tracker WHERE auto_deleted = 1`
     );
-
-    // Class-wise today
     const classWise = await q(
       `SELECT class, COUNT(DISTINCT student_id) AS present
        FROM attendance WHERE date_str = ? AND status IN ('present','late')
@@ -1162,7 +1190,7 @@ router.get("/reports/stats", authAdmin, async (req, res) => {
   }
 });
 
-// 25. AT-RISK STUDENTS (5 din absent)
+// GET /api/attendance/reports/at-risk
 router.get("/reports/at-risk", authAdmin, async (req, res) => {
   try {
     const rows = await q(
@@ -1186,7 +1214,7 @@ router.get("/reports/at-risk", authAdmin, async (req, res) => {
   }
 });
 
-// 26. MANUAL AUTO-DELETE TRIGGER (admin button)
+// POST /api/attendance/admin/run-auto-delete
 router.post("/admin/run-auto-delete", authAdmin, async (req, res) => {
   try {
     const count = await autoDeleteAbsentStudents();
@@ -1200,7 +1228,7 @@ router.post("/admin/run-auto-delete", authAdmin, async (req, res) => {
   }
 });
 
-// 27. RECOVER AUTO-DELETED STUDENT
+// POST /api/attendance/admin/recover-student/:id
 router.post("/admin/recover-student/:id", authAdmin, async (req, res) => {
   try {
     await q(`UPDATE Nstudent SET status = 'Active', promotion_date = NULL WHERE id = ?`, [req.params.id]);
@@ -1216,9 +1244,9 @@ router.post("/admin/recover-student/:id", authAdmin, async (req, res) => {
   }
 });
 
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
 // HELPER
-// ============================================================
+// ═══════════════════════════════════════════════════════════════
 function formatStudent(s) {
   return {
     id: s.id,
