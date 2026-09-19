@@ -86,12 +86,25 @@ async function generateQRImage(token) {
 // ═══════════════════════════════════════════════════════════════
 // TIME HELPERS
 // ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// TIME HELPERS — IST (Asia/Kolkata)
+// ═══════════════════════════════════════════════════════════════
+
+function getISTDate() {
+  const now = new Date();
+  // Convert server time to IST by using Asia/Kolkata locale
+  const istString = now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+  return new Date(istString);
+}
+
 function todayDay() {
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date().getDay()];
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return days[getISTDate().getDay()];
 }
 
 function todayDateStr() {
-  const d = new Date();
+  const d = getISTDate();
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -99,31 +112,14 @@ function todayDateStr() {
 }
 
 function nowTimeStr() {
-  const d = new Date();
+  const d = getISTDate();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
 }
 
 function nowHM() {
-  const d = new Date();
+  const d = getISTDate();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
-
-function hmToMin(hm) {
-  if (!hm) return 0;
-  const [h, m] = String(hm).split(":").map(Number);
-  return h * 60 + m;
-}
-
-function isWithinWindow(startTime, endTime) {
-  const cur = hmToMin(nowHM());
-  return cur >= hmToMin(startTime) && cur <= hmToMin(endTime);
-}
-
-function isLateArrival(lateAfter) {
-  if (!lateAfter) return false;
-  return hmToMin(nowHM()) > hmToMin(lateAfter);
-}
-
 // ═══════════════════════════════════════════════════════════════
 // AUTH MIDDLEWARE
 // ═══════════════════════════════════════════════════════════════
