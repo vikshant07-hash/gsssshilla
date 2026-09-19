@@ -20,26 +20,20 @@ const q = (sql, params = []) => db.query(sql, params);
 const JWT_SECRET = process.env.JWT_SECRET || "gsss-shilla-jwt-secret-2026";
 const QR_SECRET = process.env.QR_SECRET || "gsss-shilla-qr-secret-2026";
 const ABSENT_AUTO_DELETE_DAYS = 5;
-
-// ✅ Aapke ID card QR ka format
 const VERIFY_PREFIX = "https://gsssshilla07.pages.dev/verify/";
 
 // ═══════════════════════════════════════════════════════════════
-// QR TOKEN FUNCTIONS (inline — koi external file nahi)
+// QR TOKEN FUNCTIONS (inline)
 // ═══════════════════════════════════════════════════════════════
-
-// Generate QR token (agar kabhi naya banana pade)
 function generateQRToken(studentCode) {
   return `${VERIFY_PREFIX}${encodeURIComponent(studentCode)}`;
 }
 
-// ✅ MAIN: Verify — aapke ID card QR ko parse karo
 function verifyQRToken(token) {
   if (!token || typeof token !== "string") return null;
   const clean = token.trim();
 
-  // ─── Format 1: URL format (aapka ID card QR) ────────────
-  // https://gsssshilla07.pages.dev/verify/STU001
+  // Format 1: URL format (aapka ID card QR)
   if (clean.includes("/verify/")) {
     try {
       const url = new URL(clean);
@@ -48,21 +42,18 @@ function verifyQRToken(token) {
       if (idx !== -1 && parts[idx + 1]) {
         return { studentCode: decodeURIComponent(parts[idx + 1]) };
       }
-    } catch (e) {
-      // fallback
-    }
+    } catch (e) {}
     const m = clean.match(/\/verify\/([^\/\?#]+)/);
     if (m && m[1]) return { studentCode: decodeURIComponent(m[1]) };
     return null;
   }
 
-  // ─── Format 2: Plain student_id ──────────────────────────
-  // STU001, STU-2026-001
+  // Format 2: Plain student_id
   if (/^[A-Z0-9_\-]+$/i.test(clean) && clean.length >= 2 && clean.length <= 50) {
     return { studentCode: clean };
   }
 
-  // ─── Format 3: Signed format GSSS:xxx:yyy:zzz ───────────
+  // Format 3: Signed GSSS:xxx:yyy:zzz
   if (clean.startsWith("GSSS:")) {
     const parts = clean.split(":");
     if (parts.length !== 4) return null;
@@ -127,9 +118,7 @@ function hmToMin(hm) {
 
 function isWithinWindow(startTime, endTime) {
   const cur = hmToMin(nowHM());
-  const s = hmToMin(startTime);
-  const e = hmToMin(endTime);
-  return cur >= s && cur <= e;
+  return cur >= hmToMin(startTime) && cur <= hmToMin(endTime);
 }
 
 function isLateArrival(lateAfter) {
@@ -148,17 +137,15 @@ function authAdmin(req, res, next) {
     }
     const decoded = jwt.verify(h.replace("Bearer ", ""), JWT_SECRET);
 
-    // ✅ Multiple admin roles accept karo
+    // ✅ Multiple admin roles accept
     const adminRoles = ["admin", "super admin", "superadmin", "super_admin", "super-admin"];
     const userRole = String(decoded.role || "").toLowerCase().trim();
-
     if (!adminRoles.includes(userRole)) {
       return res.status(403).json({
         success: false,
         message: `Admin only. Your role: ${decoded.role || "unknown"}`
       });
     }
-
     req.admin = decoded;
     next();
   } catch (err) {
@@ -193,7 +180,7 @@ function authTeacher(req, res, next) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// AUTO-DELETE ABSENT (5 din consecutive)
+// AUTO-DELETE ABSENT (5 din)
 // ═══════════════════════════════════════════════════════════════
 async function autoDeleteAbsentStudents() {
   try {
@@ -220,7 +207,7 @@ async function autoDeleteAbsentStudents() {
            WHERE student_id = ?`,
           [s.student_id]
         );
-        console.log(`🗑️ Auto-deleted: ${s.name} (${s.code}) - ${s.consecutive_absent_days} days`);
+        console.log(`🗑️ Auto-deleted: ${s.name} (${s.code})`);
         count++;
       } catch (e) {
         console.error("Auto-delete row error:", e.message);
@@ -365,7 +352,136 @@ router.get("/teacher/my-periods", authTeacher, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ ATTENDANCE SCAN ═══════════════════════════════
+// TEACHER — MY CLASSES + STUDENTS
+// ═══════════════════════════════════════════════════════════════
+
+// GET /api/attendance/teacher/my-classes
+router.get("/teacher/my-classes", authTeacher, async (req, res) => {
+  try {
+    const classes = await q(
+      `SELECT DISTINCT a.class, a.section,
+        (SELECT COUNT(*) FROM Nstudent n WHERE n.class = a.class AND n.status = 'Active') AS student_count
+       FROM assignments a
+       WHERE a.teacher_id = ? AND a.is_active = 1
+       ORDER BY a.class ASC`,
+      [req.teacher.id]
+    );
+
+    res.json({ success: true, data: classes, count: classes.length });
+  } catch (err) {
+    console.error("My classes error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/attendance/teacher/class/:class/students
+router.get("/teacher/class/:class/students", authTeacher, async (req, res) => {
+  try {
+    const cls = req.params.class;
+
+    // Verify teacher assigned to this class
+    const assign = await q(
+      `SELECT id FROM assignments 
+       WHERE teacher_id = ? AND class = ? AND is_active = 1 LIMIT 1`,
+      [req.teacher.id, cls]
+    );
+    if (!assign.length) {
+      return res.status(403).json({
+        success: false,
+        message: `You are not assigned to Class ${cls}`
+      });
+    }
+
+    const students = await q(
+      `SELECT id, student_id, name, father_name, mother_name, roll_number,
+              class, section, student_photo_url, mobile_number
+       FROM Nstudent 
+       WHERE class = ? AND status = 'Active'
+       ORDER BY CAST(roll_number AS UNSIGNED), name ASC`,
+      [cls]
+    );
+
+    // Aaj ka attendance
+    const dateStr = todayDateStr();
+    const todayAtt = await q(
+      `SELECT student_id, status, marked_time 
+       FROM attendance 
+       WHERE class = ? AND date_str = ?`,
+      [cls, dateStr]
+    );
+
+    const attMap = {};
+    todayAtt.forEach(a => { attMap[a.student_id] = a; });
+
+    const enriched = students.map(s => ({
+      ...s,
+      today_status: attMap[s.id]?.status || "not-marked",
+      today_time: attMap[s.id]?.marked_time || null
+    }));
+
+    res.json({
+      success: true,
+      class: cls,
+      date: dateStr,
+      data: enriched,
+      count: enriched.length
+    });
+  } catch (err) {
+    console.error("Class students error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/attendance/teacher/student/:studentCode/qr
+router.get("/teacher/student/:studentCode/qr", authTeacher, async (req, res) => {
+  try {
+    const { studentCode } = req.params;
+
+    const studentRows = await q(
+      `SELECT id, student_id, name, class, roll_number FROM Nstudent 
+       WHERE student_id = ? AND status = 'Active' LIMIT 1`,
+      [studentCode]
+    );
+    if (!studentRows.length) {
+      return res.status(404).json({ success: false, message: "Student not found" });
+    }
+    const student = studentRows[0];
+
+    // Teacher teaches this class?
+    const assign = await q(
+      `SELECT id FROM assignments 
+       WHERE teacher_id = ? AND class = ? AND is_active = 1 LIMIT 1`,
+      [req.teacher.id, student.class]
+    );
+    if (!assign.length) {
+      return res.status(403).json({
+        success: false,
+        message: "You don't teach this student's class"
+      });
+    }
+
+    const token = generateQRToken(student.student_id);
+    const qrImage = await generateQRImage(token);
+
+    res.json({
+      success: true,
+      data: {
+        student_id: student.student_id,
+        student_name: student.name,
+        class: student.class,
+        roll_number: student.roll_number,
+        qr_token: token,
+        qr_image: qrImage
+      }
+    });
+  } catch (err) {
+    console.error("Student QR error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ATTENDANCE SCAN
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/attendance/scan
@@ -380,7 +496,6 @@ router.post("/scan", authTeacher, async (req, res) => {
       });
     }
 
-    // 1. Verify QR
     const verified = verifyQRToken(String(qrToken).trim());
     if (!verified) {
       return res.status(400).json({
@@ -390,7 +505,6 @@ router.post("/scan", authTeacher, async (req, res) => {
       });
     }
 
-    // 2. Find student
     const studentRows = await q(
       `SELECT * FROM Nstudent WHERE student_id = ? AND status = 'Active' LIMIT 1`,
       [verified.studentCode]
@@ -404,7 +518,6 @@ router.post("/scan", authTeacher, async (req, res) => {
     }
     const student = studentRows[0];
 
-    // 3. Check teacher assignment
     const assignRows = await q(
       `SELECT * FROM assignments 
        WHERE teacher_id = ? AND class = ? AND subject_id = ? 
@@ -420,7 +533,6 @@ router.post("/scan", authTeacher, async (req, res) => {
     }
     const assignment = assignRows[0];
 
-    // 4. Time window
     if (!isWithinWindow(assignment.start_time, assignment.end_time)) {
       return res.status(400).json({
         success: false,
@@ -431,7 +543,6 @@ router.post("/scan", authTeacher, async (req, res) => {
       });
     }
 
-    // 5. Class match
     if (String(student.class) !== String(cls)) {
       return res.status(400).json({
         success: false,
@@ -440,7 +551,6 @@ router.post("/scan", authTeacher, async (req, res) => {
       });
     }
 
-    // 6. Duplicate check
     const dateStr = todayDateStr();
     const existing = await q(
       `SELECT * FROM attendance WHERE student_id = ? AND date_str = ? AND period = ? LIMIT 1`,
@@ -456,16 +566,13 @@ router.post("/scan", authTeacher, async (req, res) => {
       });
     }
 
-    // 7. Late check
     const late = isLateArrival(assignment.late_after);
     const status = late ? "late" : "present";
     const timeStr = nowTimeStr();
 
-    // 8. Subject name
     const subRows = await q(`SELECT name FROM subjects WHERE id = ?`, [subjectId]);
     const subjectName = subRows[0]?.name || "";
 
-    // 9. Insert
     const result = await q(
       `INSERT INTO attendance 
         (student_id, student_code, student_name, roll_number, class, section,
@@ -484,7 +591,6 @@ router.post("/scan", authTeacher, async (req, res) => {
       ]
     );
 
-    // 10. Reset absence
     await q(
       `INSERT INTO student_absence_tracker (student_id, consecutive_absent_days, last_absent_date)
        VALUES (?, 0, NULL)
@@ -709,9 +815,7 @@ router.post("/finalize", authTeacher, async (req, res) => {
              flagged_at = IF(consecutive_absent_days + 1 >= ?, NOW(), flagged_at)`,
           [s.id, ABSENT_AUTO_DELETE_DAYS, ABSENT_AUTO_DELETE_DAYS]
         );
-      } catch (e) {
-        // ignore duplicate
-      }
+      } catch (e) {}
     }
 
     res.json({
@@ -728,7 +832,7 @@ router.post("/finalize", authTeacher, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ ADMIN — TEACHERS ══════════════════════════════
+// ADMIN — TEACHERS
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/attendance/admin/teachers
@@ -912,7 +1016,7 @@ router.patch("/admin/teachers/:id/password", authAdmin, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ ADMIN — ASSIGNMENTS ═══════════════════════════
+// ADMIN — ASSIGNMENTS
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/attendance/admin/teachers/:id/assign
@@ -932,7 +1036,7 @@ router.post("/admin/teachers/:id/assign", authAdmin, async (req, res) => {
       return res.status(400).json({ success: false, message: "Time format HH:MM" });
     }
     if (startTime >= endTime) {
-      return res.status(400).json({ success: false, message: "startTime < endTime hona chahiye" });
+      return res.status(400).json({ success: false, message: "startTime < endTime" });
     }
 
     const t = await q(`SELECT id, name FROM teachers WHERE id = ?`, [req.params.id]);
@@ -1015,7 +1119,7 @@ router.put("/admin/assignments/:id", authAdmin, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ ADMIN — SUBJECTS ══════════════════════════════
+// ADMIN — SUBJECTS
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/attendance/admin/subjects
@@ -1064,7 +1168,7 @@ router.delete("/admin/subjects/:id", authAdmin, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ QR GENERATION ═════════════════════════════════
+// QR GENERATION
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/attendance/qr/student/:studentCode
@@ -1082,7 +1186,6 @@ router.get("/qr/student/:studentCode", async (req, res) => {
     }
     const student = studentRows[0];
 
-    // ✅ Aapke ID card ke format me QR generate karo
     const token = generateQRToken(student.student_id);
     const qrImage = await generateQRImage(token);
 
@@ -1102,8 +1205,27 @@ router.get("/qr/student/:studentCode", async (req, res) => {
   }
 });
 
+// POST /api/attendance/qr/generate-class/:class
+router.post("/qr/generate-class/:class", authAdmin, async (req, res) => {
+  try {
+    const { class: cls } = req.params;
+    const students = await q(
+      `SELECT id, student_id, name FROM Nstudent WHERE class = ? AND status = 'Active'`,
+      [cls]
+    );
+
+    res.json({
+      success: true,
+      message: `✅ ${students.length} students found in Class ${cls}. Use QR view to see individual QR.`,
+      total: students.length
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
-// ══════════════ REPORTS ═══════════════════════════════════════
+// REPORTS
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/attendance/reports/student/:studentCode
@@ -1128,7 +1250,6 @@ router.get("/reports/student/:studentCode", authAdmin, async (req, res) => {
     sql += ` ORDER BY date DESC, period DESC`;
 
     const records = await q(sql, params);
-
     const total = records.length;
     const present = records.filter(r => r.status === "present").length;
     const absent = records.filter(r => r.status === "absent").length;
