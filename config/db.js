@@ -1,6 +1,7 @@
 const mysql = require("mysql2");
 const fs = require("fs");
 const path = require("path");
+database: process.env.DB_NAME || "blog_db",   // ← ye change karo
 require("dotenv").config();
 
 // ==================== SSL CERTIFICATE CONFIGURATION ====================
@@ -357,6 +358,33 @@ const search = async (table, options = {}) => {
       hasNext: page * limit < total,
       hasPrev: page > 1
     }
+  };
+};
+
+
+
+
+// ==================== PAGINATION HELPER (NEW) ====================
+const paginate = async (baseSQL, params = [], page = 1, limit = 10) => {
+  page = Math.max(parseInt(page) || 1, 1);
+  limit = Math.min(parseInt(limit) || 10, 50);
+  const offset = (page - 1) * limit;
+
+  const countSQL = `SELECT COUNT(*) as total FROM (${baseSQL}) as t`;
+  const countResult = await query(countSQL, params);
+  const total = countResult[0]?.total || 0;
+
+  const dataSQL = `${baseSQL} LIMIT ? OFFSET ?`;
+  const data = await query(dataSQL, [...params, limit, offset]);
+
+  return {
+    data,
+    pagination: {
+      page, limit, total,
+      totalPages: Math.ceil(total / limit),
+      hasNext: page * limit < total,
+      hasPrev: page > 1,
+    },
   };
 };
 
