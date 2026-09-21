@@ -362,7 +362,54 @@ const search = async (table, options = {}) => {
 };
 
 
+// ============================================================
+// 🆕 BLOG DATABASE (Alag DB: blog_db)
+// Same host/user/password, sirf DB name alag
+// ============================================================
+const blogDb = mysql.createPool({
+  host: process.env.DB_HOST,                    // ← same as school
+  user: process.env.DB_USER,                    // ← same as school
+  password: process.env.DB_PASSWORD,            // ← same as school
+  port: Number(process.env.DB_PORT) || 4000,    // ← same as school
+  database: process.env.BLOG_DB_NAME || "blog_db", // ← SIRF YE ALAG
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
+  ssl: sslConfig,
+  dateStrings: true,
+  typeCast: function (field, next) {
+    if (field.type === "TINY" && field.length === 1) {
+      return field.string() === "1";
+    }
+    return next();
+  },
+});
 
+// Test blog DB
+blogDb.getConnection((err, conn) => {
+  if (err) {
+    console.error("❌ Blog DB Error:", err.message);
+  } else {
+    console.log("✅ Blog DB Connected:", process.env.BLOG_DB_NAME);
+    conn.release();
+  }
+});
+
+// Blog query wrapper
+const blogQuery = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    blogDb.query(sql, params, (error, results) => {
+      if (error) {
+        console.error("❌ Blog Query Error:", { sql, error: error.message });
+        reject(error);
+      } else {
+        resolve(results);
+      }
+    });
+  });
+};
 
 // ==================== PAGINATION HELPER (NEW) ====================
 const paginate = async (baseSQL, params = [], page = 1, limit = 10) => {
