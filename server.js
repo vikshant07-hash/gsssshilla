@@ -105,7 +105,7 @@ const checkSession = (req, res, next) => {
 const attendanceRoutes = require("./routes/attendance");
 app.use("/api/attendance", attendanceRoutes);
 // server.js mein sirf ye 2 lines add karo (routes import ke baad)
-const routes = require('.routes/routes');
+const routes = require('./routes/routes');
 app.use('/api/routes', routes);
 
 
