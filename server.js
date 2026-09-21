@@ -74,7 +74,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token']
 }));
 
-app.options(/.*/, cors());
+
 
 // ============================================================
 // MIDDLEWARE
@@ -106,7 +106,8 @@ const attendanceRoutes = require("./routes/attendance");
 app.use("/api/attendance", attendanceRoutes);
 // server.js mein sirf ye 2 lines add karo (routes import ke baad)
 const routes = require('./routes/routes');
-app.use('/api/routes', routes);
+
+app.use('/api', routes);
 
 
 const resultRoutes = require('./routes/resultRoutes');
