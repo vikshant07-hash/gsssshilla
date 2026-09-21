@@ -1,7 +1,6 @@
 const mysql = require("mysql2");
 const fs = require("fs");
 const path = require("path");
-database: process.env.DB_NAME || "blog_db",   // ← ye change karo
 require("dotenv").config();
 
 // ==================== SSL CERTIFICATE CONFIGURATION ====================
@@ -18,80 +17,52 @@ try {
     console.log("✅ SSL Certificate loaded successfully");
   } else {
     console.warn("⚠️ SSL Certificate not found at:", certPath);
-    console.warn("⚠️ Using SSL without certificate verification (development mode)");
-    sslConfig = {
-      rejectUnauthorized: false,
-    };
+    sslConfig = { rejectUnauthorized: false };
   }
 } catch (error) {
   console.error("❌ Error loading SSL certificate:", error.message);
-  sslConfig = {
-    rejectUnauthorized: false,
-  };
+  sslConfig = { rejectUnauthorized: false };
 }
 
-// ==================== DATABASE CONNECTION POOL ====================
+// ==================== SCHOOL DATABASE POOL ====================
 const db = mysql.createPool({
-  // Database Credentials
   host: process.env.DB_HOST || "localhost",
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD || "",
   database: process.env.DB_NAME || "school_management",
   port: Number(process.env.DB_PORT) || 3306,
-
-  // Connection Pool Settings
   waitForConnections: true,
   connectionLimit: Number(process.env.DB_POOL_SIZE) || 10,
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
-
-  // SSL Configuration
   ssl: sslConfig,
-
-  // Timeouts
-  connectTimeout: 10000,      // 10 seconds
-  acquireTimeout: 10000,      // 10 seconds
-  timeout: 60000,             // 60 seconds
-
-  // Timezone
-  timezone: "+05:30",         // India Standard Time (IST)
-
-  // Date Strings
+  connectTimeout: 10000,
+  timezone: "+05:30",
   dateStrings: true,
-
-  // Type Casting
   typeCast: function (field, next) {
     if (field.type === "TINY" && field.length === 1) {
-      return field.string() === "1"; // Convert TINYINT to boolean
+      return field.string() === "1";
     }
     return next();
   },
 });
 
-// ==================== TEST DATABASE CONNECTION ====================
+// ==================== TEST SCHOOL DB ====================
 db.getConnection((err, connection) => {
   if (err) {
     console.error("❌ Database Connection Error:", {
       message: err.message,
       code: err.code,
-      errno: err.errno,
-      sqlState: err.sqlState,
       host: process.env.DB_HOST,
       database: process.env.DB_NAME,
     });
-
-    // Retry logic for production
     if (process.env.NODE_ENV === "production") {
-      console.log("🔄 Retrying database connection in 5 seconds...");
+      console.log("🔄 Retrying in 5s...");
       setTimeout(() => {
         db.getConnection((retryErr, retryConn) => {
-          if (retryErr) {
-            console.error("❌ Database connection failed after retry:", retryErr.message);
-          } else {
-            console.log("✅ Database connected successfully after retry");
-            retryConn.release();
-          }
+          if (retryErr) console.error("❌ Retry failed:", retryErr.message);
+          else { console.log("✅ Connected after retry"); retryConn.release(); }
         });
       }, 5000);
     }
@@ -99,29 +70,16 @@ db.getConnection((err, connection) => {
     console.log("✅ Database Connected Successfully");
     console.log(`   📊 Database: ${process.env.DB_NAME}`);
     console.log(`   🖥️  Host: ${process.env.DB_HOST}`);
-    console.log(`   🔌 Port: ${process.env.DB_PORT}`);
-    console.log(`   🔗 Pool Size: ${process.env.DB_POOL_SIZE || 10}`);
     connection.release();
   }
 });
 
-// ==================== PROMISE WRAPPER ====================
-/**
- * Execute a SQL query with Promise
- * @param {string} sql - SQL query string
- * @param {Array} params - Query parameters
- * @returns {Promise} - Query results
- */
+// ==================== PROMISE WRAPPER (School) ====================
 const query = (sql, params = []) => {
   return new Promise((resolve, reject) => {
     db.query(sql, params, (error, results) => {
       if (error) {
-        console.error("❌ Query Error:", {
-          sql: sql,
-          params: params,
-          error: error.message,
-          code: error.code,
-        });
+        console.error("❌ Query Error:", { sql, error: error.message });
         reject(error);
       } else {
         resolve(results);
@@ -130,24 +88,13 @@ const query = (sql, params = []) => {
   });
 };
 
-// ==================== TRANSACTION HELPER ====================
-/**
- * Execute a transaction
- * @param {Function} callback - Transaction callback function
- * @returns {Promise} - Transaction result
- */
+// ==================== TRANSACTION ====================
 const transaction = async (callback) => {
   const connection = await db.promise().getConnection();
-  
   try {
     await connection.beginTransaction();
-    console.log("🔄 Transaction started");
-    
     const result = await callback(connection);
-    
     await connection.commit();
-    console.log("✅ Transaction committed");
-    
     return result;
   } catch (error) {
     await connection.rollback();
@@ -155,176 +102,87 @@ const transaction = async (callback) => {
     throw error;
   } finally {
     connection.release();
-    console.log("🔓 Connection released");
   }
 };
 
-// ==================== DATABASE HEALTH CHECK ====================
-/**
- * Check database health
- * @returns {Promise<Object>} - Health status
- */
+// ==================== HEALTH CHECK ====================
 const checkDatabaseHealth = async () => {
   try {
     const startTime = Date.now();
     const result = await query("SELECT 1 as health, NOW() as current_time");
     const endTime = Date.now();
-    
     return {
       status: "healthy",
       responseTime: `${endTime - startTime}ms`,
       timestamp: new Date().toISOString(),
-      serverTime: result[0]?.current_time || new Date().toISOString(),
+      serverTime: result[0]?.current_time,
       database: process.env.DB_NAME,
-      host: process.env.DB_HOST,
     };
   } catch (error) {
     return {
       status: "unhealthy",
       timestamp: new Date().toISOString(),
       error: error.message,
-      code: error.code,
-      database: process.env.DB_NAME,
-      host: process.env.DB_HOST,
     };
   }
 };
 
-// ==================== HELPER FUNCTIONS ====================
-
-/**
- * Get a single record by ID
- * @param {string} table - Table name
- * @param {number} id - Record ID
- * @returns {Promise<Object|null>} - Record or null
- */
+// ==================== HELPERS ====================
 const getById = async (table, id) => {
-  const sql = `SELECT * FROM ${table} WHERE id = ? LIMIT 1`;
-  const results = await query(sql, [id]);
+  const results = await query(`SELECT * FROM ${table} WHERE id = ? LIMIT 1`, [id]);
   return results[0] || null;
 };
 
-/**
- * Get all records from a table
- * @param {string} table - Table name
- * @param {string} orderBy - Order by column
- * @param {string} order - ASC or DESC
- * @param {number} limit - Limit results
- * @returns {Promise<Array>} - Records
- */
 const getAll = async (table, orderBy = "created_at", order = "DESC", limit = 100) => {
-  const sql = `SELECT * FROM ${table} ORDER BY ${orderBy} ${order} LIMIT ?`;
-  return await query(sql, [limit]);
+  return await query(`SELECT * FROM ${table} ORDER BY ${orderBy} ${order} LIMIT ?`, [limit]);
 };
 
-/**
- * Delete a record by ID
- * @param {string} table - Table name
- * @param {number} id - Record ID
- * @returns {Promise<Object>} - Delete result
- */
 const deleteById = async (table, id) => {
-  const sql = `DELETE FROM ${table} WHERE id = ?`;
-  return await query(sql, [id]);
+  return await query(`DELETE FROM ${table} WHERE id = ?`, [id]);
 };
 
-/**
- * Count records in a table
- * @param {string} table - Table name
- * @param {string} where - WHERE clause (optional)
- * @param {Array} params - Parameters for WHERE clause
- * @returns {Promise<number>} - Count
- */
 const count = async (table, where = "", params = []) => {
   let sql = `SELECT COUNT(*) as total FROM ${table}`;
-  if (where) {
-    sql += ` WHERE ${where}`;
-  }
+  if (where) sql += ` WHERE ${where}`;
   const results = await query(sql, params);
   return results[0]?.total || 0;
 };
 
-/**
- * Check if record exists
- * @param {string} table - Table name
- * @param {string} where - WHERE clause
- * @param {Array} params - Parameters
- * @returns {Promise<boolean>} - Exists or not
- */
 const exists = async (table, where, params = []) => {
-  const count = await count(table, where, params);
-  return count > 0;
+  const c = await count(table, where, params);
+  return c > 0;
 };
 
 // ==================== BULK OPERATIONS ====================
-
-/**
- * Insert multiple records
- * @param {string} table - Table name
- * @param {Array} records - Array of records to insert
- * @returns {Promise<Object>} - Insert result
- */
 const insertBulk = async (table, records) => {
-  if (!records || records.length === 0) {
-    throw new Error("No records to insert");
-  }
-
+  if (!records || records.length === 0) throw new Error("No records");
   const keys = Object.keys(records[0]);
   const placeholders = records.map(() => `(${keys.map(() => "?").join(", ")})`).join(", ");
   const values = records.flatMap(record => keys.map(key => record[key]));
-
-  const sql = `INSERT INTO ${table} (${keys.join(", ")}) VALUES ${placeholders}`;
-  return await query(sql, values);
+  return await query(`INSERT INTO ${table} (${keys.join(", ")}) VALUES ${placeholders}`, values);
 };
 
-/**
- * Update multiple records
- * @param {string} table - Table name
- * @param {Object} data - Data to update
- * @param {string} where - WHERE clause
- * @param {Array} params - Parameters
- * @returns {Promise<Object>} - Update result
- */
 const updateBulk = async (table, data, where, params = []) => {
   const keys = Object.keys(data);
   const setClause = keys.map(key => `${key} = ?`).join(", ");
-  const sql = `UPDATE ${table} SET ${setClause} WHERE ${where}`;
   const values = [...Object.values(data), ...params];
-  return await query(sql, values);
+  return await query(`UPDATE ${table} SET ${setClause} WHERE ${where}`, values);
 };
 
-// ==================== SEARCH FUNCTIONS ====================
-
-/**
- * Search in table with pagination
- * @param {string} table - Table name
- * @param {Object} options - Search options
- * @returns {Promise<Object>} - Search results
- */
+// ==================== SEARCH ====================
 const search = async (table, options = {}) => {
   const {
-    search = "",
-    searchColumns = [],
-    page = 1,
-    limit = 10,
-    orderBy = "created_at",
-    order = "DESC",
-    where = "",
-    whereParams = []
+    search = "", searchColumns = [], page = 1, limit = 10,
+    orderBy = "created_at", order = "DESC",
+    where = "", whereParams = []
   } = options;
 
   let sql = `SELECT * FROM ${table}`;
   let countSql = `SELECT COUNT(*) as total FROM ${table}`;
   let params = [];
-
-  // Build WHERE clause
   let conditions = [];
-  
-  if (where) {
-    conditions.push(where);
-    params = [...whereParams];
-  }
 
+  if (where) { conditions.push(where); params = [...whereParams]; }
   if (search && searchColumns.length > 0) {
     const searchCondition = searchColumns.map(col => `${col} LIKE ?`).join(" OR ");
     conditions.push(`(${searchCondition})`);
@@ -337,23 +195,18 @@ const search = async (table, options = {}) => {
     countSql += ` WHERE ${whereClause}`;
   }
 
-  // Count total
   const totalResult = await query(countSql, params);
   const total = totalResult[0]?.total || 0;
 
-  // Pagination
   const offset = (page - 1) * limit;
   sql += ` ORDER BY ${orderBy} ${order} LIMIT ? OFFSET ?`;
   params.push(limit, offset);
 
   const data = await query(sql, params);
-
   return {
     data,
     pagination: {
-      page,
-      limit,
-      total,
+      page, limit, total,
       totalPages: Math.ceil(total / limit),
       hasNext: page * limit < total,
       hasPrev: page > 1
@@ -361,23 +214,47 @@ const search = async (table, options = {}) => {
   };
 };
 
+// ==================== PAGINATION HELPER ====================
+const paginate = async (baseSQL, params = [], page = 1, limit = 10) => {
+  page = Math.max(parseInt(page) || 1, 1);
+  limit = Math.min(parseInt(limit) || 10, 50);
+  const offset = (page - 1) * limit;
 
-// ============================================================
-// 🆕 BLOG DATABASE (Alag DB: blog_db)
-// Same host/user/password, sirf DB name alag
-// ============================================================
+  const countSQL = `SELECT COUNT(*) as total FROM (${baseSQL}) as t`;
+  const countResult = await query(countSQL, params);
+  const total = countResult[0]?.total || 0;
+
+  const dataSQL = `${baseSQL} LIMIT ? OFFSET ?`;
+  const data = await query(dataSQL, [...params, limit, offset]);
+
+  return {
+    data,
+    pagination: {
+      page, limit, total,
+      totalPages: Math.ceil(total / limit),
+      hasNext: page * limit < total,
+      hasPrev: page > 1,
+    },
+  };
+};
+
+// ═══════════════════════════════════════════════════════════
+// 🆕 BLOG DATABASE POOL (Alag DB, BLOG_DB_* use karta hai)
+// ═══════════════════════════════════════════════════════════
 const blogDb = mysql.createPool({
-  host: process.env.DB_HOST,                    // ← same as school
-  user: process.env.DB_USER,                    // ← same as school
-  password: process.env.DB_PASSWORD,            // ← same as school
-  port: Number(process.env.DB_PORT) || 4000,    // ← same as school
-  database: process.env.BLOG_DB_NAME || "blog_db", // ← SIRF YE ALAG
+  host: process.env.BLOG_DB_HOST,                    // ← BLOG_DB_HOST
+  user: process.env.BLOG_DB_USER,                    // ← BLOG_DB_USER
+  password: process.env.BLOG_DB_PASSWORD,            // ← BLOG_DB_PASSWORD
+  port: Number(process.env.BLOG_DB_PORT) || 4000,    // ← BLOG_DB_PORT
+  database: process.env.BLOG_DB_NAME || "blog_db",   // ← BLOG_DB_NAME
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
   ssl: sslConfig,
+  connectTimeout: 10000,
+  timezone: "+05:30",
   dateStrings: true,
   typeCast: function (field, next) {
     if (field.type === "TINY" && field.length === 1) {
@@ -411,53 +288,24 @@ const blogQuery = (sql, params = []) => {
   });
 };
 
-// ==================== PAGINATION HELPER (NEW) ====================
-const paginate = async (baseSQL, params = [], page = 1, limit = 10) => {
-  page = Math.max(parseInt(page) || 1, 1);
-  limit = Math.min(parseInt(limit) || 10, 50);
-  const offset = (page - 1) * limit;
-
-  const countSQL = `SELECT COUNT(*) as total FROM (${baseSQL}) as t`;
-  const countResult = await query(countSQL, params);
-  const total = countResult[0]?.total || 0;
-
-  const dataSQL = `${baseSQL} LIMIT ? OFFSET ?`;
-  const data = await query(dataSQL, [...params, limit, offset]);
-
-  return {
-    data,
-    pagination: {
-      page, limit, total,
-      totalPages: Math.ceil(total / limit),
-      hasNext: page * limit < total,
-      hasPrev: page > 1,
-    },
-  };
-};
-
-// ==================== EXPORT ====================
+// ==================== EXPORTS ====================
 module.exports = {
-  // Connection
+  // School
   db,
-  
-  // Core Functions
   query,
   transaction,
-  
-  // Helper Functions
   getById,
   getAll,
   deleteById,
   count,
   exists,
-  
-  // Bulk Operations
   insertBulk,
   updateBulk,
-  
-  // Search
   search,
-  
-  // Health Check
+  paginate,
   checkDatabaseHealth,
+
+  // 🆕 Blog
+  blogDb,
+  blogQuery,
 };
