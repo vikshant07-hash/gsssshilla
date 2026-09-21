@@ -8,7 +8,7 @@ const {
   count,
   exists,
   paginate
-} = require("./db");
+} = require("../config/db");
 const {
   uploadBlogCover,
   uploadBlogContent,
