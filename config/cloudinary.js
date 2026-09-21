@@ -221,189 +221,152 @@ const uploadStudent = multer({
   }
 });
 
+
 // ============================================================
-// 🆕 BLOG: STORAGE 1 — COVER IMAGES
+// 🆕 BLOG STORAGES (Same Cloudinary, alag folders)
 // ============================================================
+
+const blogMakeId = (prefix, file) => {
+  const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+  const originalName = file.originalname
+    .split(".")[0].replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
+    .substring(0, 30);
+  return `${prefix}-${originalName}-${uniqueSuffix}`;
+};
+
+// BLOG COVER
 const blogCoverStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: process.env.CLOUDINARY_BLOG_COVER_FOLDER || "blog/covers",
+    folder: "blog/covers",
     resource_type: "image",
     allowed_formats: ["jpg", "jpeg", "png", "webp", "gif"],
     transformation: [
       { width: 1600, height: 900, crop: "fill", gravity: "auto" },
       { quality: "auto:good", fetch_format: "auto" }
     ],
-    public_id: (req, file) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
-      return `cover-${originalName}-${uniqueSuffix}`;
-    }
+    public_id: (req, file) => blogMakeId("cover", file)
   }
 });
 
-// ============================================================
-// 🆕 BLOG: STORAGE 2 — CONTENT IMAGES (in-article)
-// ============================================================
+// BLOG CONTENT
 const blogContentStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: process.env.CLOUDINARY_BLOG_CONTENT_FOLDER || "blog/content",
+    folder: "blog/content",
     resource_type: "image",
     allowed_formats: ["jpg", "jpeg", "png", "webp", "gif", "svg"],
     transformation: [
       { width: 1400, crop: "limit" },
       { quality: "auto:good", fetch_format: "auto" }
     ],
-    public_id: (req, file) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
-      return `content-${originalName}-${uniqueSuffix}`;
-    }
+    public_id: (req, file) => blogMakeId("content", file)
   }
 });
 
-// ============================================================
-// 🆕 BLOG: STORAGE 3 — AVATARS (publisher photos)
-// ============================================================
-const avatarStorage = new CloudinaryStorage({
+// BLOG AVATAR
+const blogAvatarStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: process.env.CLOUDINARY_AVATAR_FOLDER || "blog/avatars",
+    folder: "blog/avatars",
     resource_type: "image",
     allowed_formats: ["jpg", "jpeg", "png", "webp"],
     transformation: [
       { width: 400, height: 400, crop: "thumb", gravity: "face" },
       { quality: "auto:good", fetch_format: "auto" }
     ],
-    public_id: (req, file) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
-      return `avatar-${originalName}-${uniqueSuffix}`;
-    }
+    public_id: (req, file) => blogMakeId("avatar", file)
   }
 });
 
-// ============================================================
-// 🆕 BLOG: STORAGE 4 — FILES (PDF, docs)
-// ============================================================
+// BLOG FILE
 const blogFileStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: process.env.CLOUDINARY_BLOG_FILE_FOLDER || "blog/files",
+    folder: "blog/files",
     resource_type: "raw",
     allowed_formats: ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "zip"],
-    public_id: (req, file) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
-      return `file-${originalName}-${uniqueSuffix}`;
-    }
+    public_id: (req, file) => blogMakeId("file", file)
   }
 });
 
-// ============================================================
-// 🆕 BLOG: MULTER — COVER UPLOAD
-// ============================================================
+// MULTER UPLOADERS
 const uploadBlogCover = multer({
   storage: blogCoverStorage,
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"];
-    if (allowed.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only images (JPEG, PNG, WebP, GIF) allowed for cover"), false);
+    const ok = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images allowed for cover"), false);
   }
 });
 
-// ============================================================
-// 🆕 BLOG: MULTER — CONTENT IMAGE UPLOAD
-// ============================================================
 const uploadBlogContent = multer({
   storage: blogContentStorage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
-    if (allowed.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only image files allowed for content"), false);
+    const ok = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images allowed"), false);
   }
 });
 
-// ============================================================
-// 🆕 BLOG: MULTER — AVATAR UPLOAD
-// ============================================================
-const uploadAvatar = multer({
-  storage: avatarStorage,
+const uploadBlogAvatar = multer({
+  storage: blogAvatarStorage,
   limits: { fileSize: 3 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-    if (allowed.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only images (JPEG, PNG, WebP) allowed for avatar"), false);
+    const ok = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images allowed for avatar"), false);
   }
 });
 
-// ============================================================
-// 🆕 BLOG: MULTER — FILE UPLOAD
-// ============================================================
 const uploadBlogFile = multer({
   storage: blogFileStorage,
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = [
-      "application/pdf",
-      "application/msword",
+    const ok = [
+      "application/pdf", "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "application/vnd.ms-excel",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "application/vnd.ms-powerpoint",
       "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      "text/plain",
-      "application/zip",
-      "application/x-zip-compressed"
+      "text/plain", "application/zip", "application/x-zip-compressed"
     ];
-    if (allowed.includes(file.mimetype)) cb(null, true);
+    if (ok.includes(file.mimetype)) cb(null, true);
     else cb(new Error("File type not allowed"), false);
   }
 });
 
-// ============================================================
-// 🆕 BLOG: BASE64 UPLOAD (editor paste)
-// ============================================================
-const uploadBase64 = async (base64String, folder = "blog/content") => {
-  try {
-    const result = await cloudinary.uploader.upload(base64String, {
-      folder,
-      resource_type: "image",
-      transformation: [
-        { width: 1400, crop: "limit" },
-        { quality: "auto:good", fetch_format: "auto" }
-      ]
-    });
-    return {
-      url: result.secure_url,
-      public_id: result.public_id,
-      width: result.width,
-      height: result.height,
-      format: result.format
-    };
-  } catch (error) {
-    console.error("❌ Base64 upload failed:", error.message);
-    throw error;
-  }
+// BASE64 UPLOAD
+const uploadBlogBase64 = async (base64String, folder = "blog/content") => {
+  const result = await cloudinary.uploader.upload(base64String, {
+    folder,
+    resource_type: "image",
+    transformation: [
+      { width: 1400, crop: "limit" },
+      { quality: "auto:good", fetch_format: "auto" }
+    ]
+  });
+  return {
+    url: result.secure_url,
+    public_id: result.public_id,
+    width: result.width,
+    height: result.height,
+    format: result.format
+  };
 };
 
-// ============================================================
-// 🆕 BLOG: DELETE FROM CLOUDINARY
-// ============================================================
-const deleteFromCloudinary = async (publicId, resourceType = "image") => {
-  try {
-    const result = await cloudinary.uploader.destroy(publicId, {
-      resource_type: resourceType
-    });
-    return result;
-  } catch (error) {
-    console.error("❌ Cloudinary delete failed:", error.message);
-    throw error;
-  }
+// DELETE
+const deleteBlogFromCloudinary = async (publicId, resourceType = "image") => {
+  return await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
 };
+
+
+  
+
+
 
 // ============================================================
 // UPDATED EXPORTS (purane + naye sab)
