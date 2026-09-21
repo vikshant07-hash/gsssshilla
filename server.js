@@ -57,7 +57,7 @@ app.use(session({
 // ============================================================
 // CORS - ONLY ALLOW SPECIFIC DOMAINS
 // ============================================================
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5500,https://gsssshilla07.pages.dev').split(',');
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,https://inkwel.pages.dev,http://localhost:5500,https://gsssshilla07.pages.dev').split(',');
 
 app.use(cors({
     origin: function (origin, callback) {
@@ -104,6 +104,9 @@ const checkSession = (req, res, next) => {
 // ============================================================
 const attendanceRoutes = require("./routes/attendance");
 app.use("/api/attendance", attendanceRoutes);
+// server.js mein sirf ye 2 lines add karo (routes import ke baad)
+const routes = require('./routes');
+app.use('/api', routes);
 
 
 const resultRoutes = require('./routes/resultRoutes');
