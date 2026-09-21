@@ -15,10 +15,12 @@ cloudinary.config({
 console.log("☁️ Cloudinary configured for:", process.env.CLOUDINARY_CLOUD_NAME);
 
 // ============================================================
-// STORAGE FOR SLIDER IMAGES
+// 🏫 SCHOOL STORAGES
 // ============================================================
+
+// SLIDER
 const sliderStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: process.env.CLOUDINARY_SLIDER_FOLDER || "school/slider",
     resource_type: "auto",
@@ -35,11 +37,9 @@ const sliderStorage = new CloudinaryStorage({
   }
 });
 
-// ============================================================
-// STORAGE FOR RECENT UPDATES
-// ============================================================
+// RECENT UPDATES
 const recentStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: process.env.CLOUDINARY_RECENT_FOLDER || "school/recent_updates",
     resource_type: "auto",
@@ -52,11 +52,9 @@ const recentStorage = new CloudinaryStorage({
   }
 });
 
-// ============================================================
-// STORAGE FOR GALLERY - IMAGES & VIDEOS
-// ============================================================
+// GALLERY
 const galleryStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: process.env.CLOUDINARY_GALLERY_FOLDER || "school/gallery",
     resource_type: "auto",
@@ -69,11 +67,9 @@ const galleryStorage = new CloudinaryStorage({
   }
 });
 
-// ============================================================
-// STORAGE FOR DOWNLOADS
-// ============================================================
+// DOWNLOADS
 const downloadStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: process.env.CLOUDINARY_DOWNLOAD_FOLDER || "school/downloads",
     resource_type: "auto",
@@ -86,11 +82,9 @@ const downloadStorage = new CloudinaryStorage({
   }
 });
 
-// ============================================================
-// STORAGE FOR FACULTY PHOTOS
-// ============================================================
+// FACULTY
 const facultyStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: process.env.CLOUDINARY_FACULTY_FOLDER || "school/faculty",
     resource_type: "auto",
@@ -107,123 +101,99 @@ const facultyStorage = new CloudinaryStorage({
   }
 });
 
-// ============================================================
-// STORAGE FOR STUDENT DOCUMENTS  🆕
-// ============================================================
-
+// STUDENT
 const studentStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: (req, file) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
-
     return {
       folder: process.env.CLOUDINARY_STUDENT_FOLDER || "school/students",
-      resource_type: "auto",   // ✅ Ye change karo (pehle "raw" tha)
+      resource_type: "auto",
       allowed_formats: ["jpg", "jpeg", "png", "webp", "pdf"],
       public_id: `${file.fieldname}-${originalName}-${uniqueSuffix}`
     };
   }
 });
+
 // ============================================================
-// MULTER UPLOAD: SLIDER IMAGES
+// 🏫 SCHOOL MULTER UPLOADERS
 // ============================================================
 const uploadSlider = multer({
   storage: sliderStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"];
-    if (allowedTypes.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only images (JPEG, PNG, GIF, WebP) are allowed for slider!"), false);
+    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images allowed for slider"), false);
   }
 });
 
-// ============================================================
-// MULTER UPLOAD: RECENT UPDATES
-// ============================================================
 const uploadRecent = multer({
   storage: recentStorage,
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = [
+    const allowed = [
       "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
-      "application/pdf",
-      "application/msword",
+      "application/pdf", "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "audio/mpeg", "audio/wav", "audio/ogg",
       "video/mp4", "video/avi", "video/mpeg", "video/quicktime"
     ];
-    if (allowedTypes.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only images, PDFs, Word, Audio and Video files are allowed!"), false);
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("File type not allowed"), false);
   }
 });
 
-// ============================================================
-// MULTER UPLOAD: GALLERY
-// ============================================================
 const uploadGallery = multer({
   storage: galleryStorage,
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = [
+    const allowed = [
       "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
       "video/mp4", "video/avi", "video/mpeg", "video/quicktime", "video/webm", "video/x-matroska"
     ];
-    if (allowedTypes.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only images and video files are allowed for gallery!"), false);
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images/videos allowed for gallery"), false);
   }
 });
 
-// ============================================================
-// MULTER UPLOAD: DOWNLOADS
-// ============================================================
 const uploadDownload = multer({
   storage: downloadStorage,
   limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = [
+    const allowed = [
       "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
-      "application/pdf",
-      "application/msword",
+      "application/pdf", "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ];
-    if (allowedTypes.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only PDF, Word documents, and images are allowed!"), false);
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only PDF, Word, images allowed"), false);
   }
 });
 
-// ============================================================
-// MULTER UPLOAD: FACULTY PHOTOS
-// ============================================================
 const uploadFaculty = multer({
   storage: facultyStorage,
   limits: { fileSize: 3 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-    if (allowedTypes.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only images (JPEG, PNG, WebP) are allowed!"), false);
+    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only images allowed"), false);
   }
 });
 
-// ============================================================
-// MULTER UPLOAD: STUDENT DOCUMENTS  🆕
-// ============================================================
 const uploadStudent = multer({
   storage: studentStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = [
-      "image/jpeg", "image/jpg", "image/png", "image/webp",
-      "application/pdf"
-    ];
-    if (allowedTypes.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only JPG, PNG, WEBP, PDF allowed for student documents!"), false);
+    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPG, PNG, WEBP, PDF allowed"), false);
   }
 });
 
-
 // ============================================================
-// 🆕 BLOG STORAGES (Same Cloudinary, alag folders)
+// 📝 BLOG STORAGES (same Cloudinary, alag folders)
 // ============================================================
 
 const blogMakeId = (prefix, file) => {
@@ -236,7 +206,7 @@ const blogMakeId = (prefix, file) => {
 
 // BLOG COVER
 const blogCoverStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: "blog/covers",
     resource_type: "image",
@@ -251,7 +221,7 @@ const blogCoverStorage = new CloudinaryStorage({
 
 // BLOG CONTENT
 const blogContentStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: "blog/content",
     resource_type: "image",
@@ -266,7 +236,7 @@ const blogContentStorage = new CloudinaryStorage({
 
 // BLOG AVATAR
 const blogAvatarStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: "blog/avatars",
     resource_type: "image",
@@ -281,7 +251,7 @@ const blogAvatarStorage = new CloudinaryStorage({
 
 // BLOG FILE
 const blogFileStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: "blog/files",
     resource_type: "raw",
@@ -290,7 +260,9 @@ const blogFileStorage = new CloudinaryStorage({
   }
 });
 
-// MULTER UPLOADERS
+// ============================================================
+// 📝 BLOG MULTER UPLOADERS
+// ============================================================
 const uploadBlogCover = multer({
   storage: blogCoverStorage,
   limits: { fileSize: 8 * 1024 * 1024 },
@@ -311,6 +283,7 @@ const uploadBlogContent = multer({
   }
 });
 
+// ⚠️ IMPORTANT: Ye naam "uploadBlogAvatar" hai (routes.js isi naam se import karta hai)
 const uploadBlogAvatar = multer({
   storage: blogAvatarStorage,
   limits: { fileSize: 3 * 1024 * 1024 },
@@ -339,7 +312,7 @@ const uploadBlogFile = multer({
   }
 });
 
-// BASE64 UPLOAD
+// BLOG BASE64
 const uploadBlogBase64 = async (base64String, folder = "blog/content") => {
   const result = await cloudinary.uploader.upload(base64String, {
     folder,
@@ -358,34 +331,30 @@ const uploadBlogBase64 = async (base64String, folder = "blog/content") => {
   };
 };
 
-// DELETE
+// BLOG DELETE
 const deleteBlogFromCloudinary = async (publicId, resourceType = "image") => {
   return await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
 };
 
-
-  
-
-
-
 // ============================================================
-// UPDATED EXPORTS (purane + naye sab)
+// EXPORTS
 // ============================================================
 module.exports = {
   cloudinary,
-  // Existing (school project ke liye)
+
+  // 🏫 School
   uploadSlider,
   uploadRecent,
   uploadGallery,
   uploadDownload,
   uploadFaculty,
   uploadStudent,
-  // 🆕 Blog
+
+  // 📝 Blog
   uploadBlogCover,
   uploadBlogContent,
-  uploadAvatar,
+  uploadBlogAvatar,      // ← Ye routes.js use kar raha
   uploadBlogFile,
-  uploadBase64,
-  deleteFromCloudinary
+  uploadBlogBase64,
+  deleteBlogFromCloudinary
 };
-
