@@ -1260,6 +1260,41 @@ router.post("/blog/posts/:postId/share", blogAsync(async (req, res) => {
   res.json({ ok: true });
 }));
 
+
+// ═══════════════════════════════════════════════════════════
+// ⭐ FEATURED SLIDER — Top 5 verified authors, 1 post each
+// Har request pe random pick, frontend hour-cache karega
+// ═══════════════════════════════════════════════════════════
+router.get("/blog/featured-slider", blogAsync(async (req, res) => {
+  // Get 1 random published post from each verified author
+  // Only top 5 authors (by total views)
+  const posts = await blogQuery(`
+    SELECT p.id, p.title, p.slug, p.excerpt, p.cover_image,
+           p.views, p.read_time, p.published_at,
+           u.id AS author_id, u.name AS author_name,
+           u.avatar_url AS author_avatar, u.is_verified AS author_verified,
+           c.name AS category_name, c.slug AS category_slug,
+           c.color AS category_color
+    FROM posts p
+    JOIN users u ON u.id = p.author_id
+    LEFT JOIN categories c ON c.id = p.category_id
+    WHERE p.status = 'published'
+      AND u.status = 'approved'
+      AND u.is_verified = TRUE
+      AND p.id IN (
+        SELECT MAX(p2.id)
+        FROM posts p2
+        JOIN users u2 ON u2.id = p2.author_id
+        WHERE p2.status = 'published'
+          AND u2.status = 'approved'
+          AND u2.is_verified = TRUE
+        GROUP BY p2.author_id
+      )
+    ORDER BY p.views DESC
+    LIMIT 5
+  `);
+  res.json(posts);
+}));
 // ═══════════════════════════════════════════════════════════
 // ❤️ HEALTH CHECK
 // ═══════════════════════════════════════════════════════════
