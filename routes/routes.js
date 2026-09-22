@@ -69,6 +69,91 @@ const calcReadTime = (content) => {
 };
 
 // ═══════════════════════════════════════════════════════════
+// SMART TIME AGO — Delhi Time (IST) based
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Parse a date string as Delhi time.
+ * Backend DB returns "2025-01-15 10:30:00" (IST) — need to treat as IST.
+ * If ISO string with 'Z' — treat as UTC and convert.
+ */
+const parseDelhiDate = (dateStr) => {
+  if (!dateStr) return null;
+  
+  // If it has timezone info (Z or +/-), parse as-is
+  if (typeof dateStr === 'string' && (dateStr.includes('Z') || /[+-]\d{2}:?\d{2}$/.test(dateStr))) {
+    return new Date(dateStr);
+  }
+  
+  // Otherwise treat as Delhi time (IST = UTC+5:30)
+  if (typeof dateStr === 'string') {
+    // "2025-01-15 10:30:00" or "2025-01-15T10:30:00"
+    const normalized = dateStr.replace(' ', 'T');
+    return new Date(normalized + '+05:30');
+  }
+  
+  return new Date(dateStr);
+};
+
+const formatDelhi = (date, format = 'full') => {
+  if (!date) return '';
+  const opts = {
+    full: { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true },
+    date: { day: 'numeric', month: 'short', year: 'numeric' },
+    time: { hour: '2-digit', minute: '2-digit', hour12: true }
+  };
+  return date.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    ...opts[format]
+  });
+};
+
+/**
+ * Time ago formatter:
+ * - < 1 min: "just now"
+ * - < 60 min: "5 min ago"
+ * - >= 60 min: full datetime "15 Jan 2025, 10:30 AM"
+ */
+const timeAgo = (dateStr) => {
+  if (!dateStr) return '';
+  
+  const then = parseDelhiDate(dateStr);
+  if (!then || isNaN(then.getTime())) return '';
+  
+  const now = new Date();
+  const diffSec = Math.floor((now - then) / 1000);
+  
+  // Future dates — fallback to full date
+  if (diffSec < 0) return formatDelhi(then, 'full');
+  
+  // Just now — under 60 seconds
+  if (diffSec < 60) return 'just now';
+  
+  // Minutes ago — under 60 minutes
+  if (diffSec < 3600) {
+    const mins = Math.floor(diffSec / 60);
+    return `${mins} min ago`;
+  }
+  
+  // 1 hour or more — show full date & time (Delhi)
+  return formatDelhi(then, 'full');
+};
+
+// Simple date formatter (for cards where only date shown)
+const formatDate = (dateStr) => {
+  if (!dateStr) return '';
+  const d = parseDelhiDate(dateStr);
+  if (!d || isNaN(d.getTime())) return '';
+  return formatDelhi(d, 'date');
+};
+
+// Reading time (unchanged)
+const readingTime = (c) => {
+  if (!c) return '1 min read';
+  const w = c.replace(/<[^>]+>/g, '').split(/\s+/).length;
+  return Math.max(1, Math.ceil(w / 200)) + ' min read';
+};
+// ═══════════════════════════════════════════════════════════
 // 🆕 BLOG MIDDLEWARE
 // ═══════════════════════════════════════════════════════════
 const blogAuthRequired = (req, res, next) => {
