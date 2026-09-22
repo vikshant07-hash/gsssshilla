@@ -57,7 +57,13 @@ app.use(session({
 // ============================================================
 // CORS - ONLY ALLOW SPECIFIC DOMAINS
 // ============================================================
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,https://inkwel.pages.dev,http://localhost:5500,https://gsssshilla07.pages.dev').split(',');
+
+// ============================================================
+// CORS - ONLY ALLOW SPECIFIC DOMAINS
+// ============================================================
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 
+    'http://localhost:3000,https://inkwel.pages.dev,http://localhost:5500,https://gsssshilla07.pages.dev,https://gsssshilla.onrender.com'
+).split(',').map(o => o.trim());
 
 app.use(cors({
     origin: function (origin, callback) {
@@ -71,8 +77,23 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token']
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'X-Requested-With', 
+        'Accept', 
+        'X-CSRF-Token',
+        'X-Device-ID'  // ✅ YE ADD KIYA — IMPORTANT!
+    ],
+    exposedHeaders: ['X-Device-ID'],
+    maxAge: 86400
 }));
+
+// ✅ Handle preflight requests
+app.options('*', cors());
+
+
+
 
 
 
