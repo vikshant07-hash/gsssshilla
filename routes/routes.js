@@ -4,7 +4,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 
 // ═══════════════════════════════════════════════════════════
-// IMPORTS — School + Blog
+// IMPORTS
 // ═══════════════════════════════════════════════════════════
 const {
   db, query, transaction, getById, count, exists, blogQuery
@@ -23,7 +23,7 @@ const {
 const router = express.Router();
 
 // ═══════════════════════════════════════════════════════════
-// SHARED MIDDLEWARE
+// SHARED MIDDLEWARE (school)
 // ═══════════════════════════════════════════════════════════
 const authRequired = (req, res, next) => {
   const token = req.headers.authorization?.split(" ")[1];
@@ -46,11 +46,9 @@ const asyncHandler = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
 // ═══════════════════════════════════════════════════════════
-// 🏫 SCHOOL ROUTES — AAPKE EXISTING (unchanged)
+// 🏫 SCHOOL ROUTES — AAPKE EXISTING
 // ═══════════════════════════════════════════════════════════
-// ...
-// Yahan aapke existing school routes rahenge — jaise the
-// ...
+// ... yahan aapke existing school routes rahenge ...
 
 // ═══════════════════════════════════════════════════════════
 // 🆕 BLOG HELPERS
@@ -101,6 +99,28 @@ const blogApprovedOnly = async (req, res, next) => {
   }
 };
 
+// ⭐ Author OR Super Admin only — for publishing posts
+const blogAuthorOrAdmin = async (req, res, next) => {
+  try {
+    const rows = await blogQuery(
+      "SELECT role, role_type, status FROM users WHERE id = ?",
+      [req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "User not found" });
+    const { role, role_type, status } = rows[0];
+
+    if (status !== "approved")
+      return res.status(403).json({ error: "Account pending approval" });
+    if (role === "admin" || role_type === "author") return next();
+
+    return res.status(403).json({
+      error: "Only authors can publish posts. Contact super admin to become an author."
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
 // ═══════════════════════════════════════════════════════════
 // 🔐 BLOG AUTH
 // ═══════════════════════════════════════════════════════════
@@ -120,8 +140,8 @@ router.post("/blog/auth/register", blogAsync(async (req, res) => {
 
   const hash = await bcrypt.hash(password, 10);
   const result = await blogQuery(
-    `INSERT INTO users (name, email, password_hash, role, status)
-     VALUES (?, ?, ?, 'author', 'pending')`,
+    `INSERT INTO users (name, email, password_hash, role, role_type, status)
+     VALUES (?, ?, ?, 'user', 'user', 'pending')`,
     [name, email, hash]
   );
 
@@ -162,7 +182,8 @@ router.post("/blog/auth/login", blogAsync(async (req, res) => {
 // GET /api/blog/auth/me
 router.get("/blog/auth/me", blogAuthRequired, blogAsync(async (req, res) => {
   const rows = await blogQuery(
-    `SELECT id, name, email, role, status, bio, avatar_url, website, twitter, linkedin, is_verified
+    `SELECT id, name, email, role, role_type, status, bio, avatar_url, 
+            website, twitter, linkedin, is_verified 
      FROM users WHERE id = ?`,
     [req.user.id]
   );
@@ -202,7 +223,7 @@ router.put("/blog/auth/password", blogAuthRequired, blogAsync(async (req, res) =
   res.json({ message: "Password updated" });
 }));
 
-// POST /api/blog/auth/avatar — upload profile photo
+// POST /api/blog/auth/avatar
 router.post(
   "/blog/auth/avatar",
   blogAuthRequired,
@@ -419,63 +440,58 @@ router.get("/blog/posts/:slug", blogAsync(async (req, res) => {
   res.json(post);
 }));
 
-// POST /api/blog/posts — create (approved authors only)
-router.post(
-  "/blog/posts",
-  blogAuthRequired,
-  blogApprovedOnly,
-  blogAsync(async (req, res) => {
-    const {
-      title, excerpt, content, cover_image, cover_public_id,
-      category_id, status = "draft", featured = false,
-      meta_title, meta_description, tags = []
-    } = req.body;
+// POST /api/blog/posts — create (author or super admin)
+router.post("/blog/posts", blogAuthRequired, blogAuthorOrAdmin, blogAsync(async (req, res) => {
+  const {
+    title, excerpt, content, cover_image, cover_public_id,
+    category_id, status = "draft", featured = false,
+    meta_title, meta_description, tags = []
+  } = req.body;
 
-    if (!title || !content)
-      return res.status(400).json({ error: "Title and content required" });
+  if (!title || !content)
+    return res.status(400).json({ error: "Title and content required" });
 
-    let slug = blogSlugify(title);
-    const existing = await blogQuery("SELECT id FROM posts WHERE slug = ?", [slug]);
-    if (existing.length) slug = `${slug}-${Date.now()}`;
+  let slug = blogSlugify(title);
+  const existing = await blogQuery("SELECT id FROM posts WHERE slug = ?", [slug]);
+  if (existing.length) slug = `${slug}-${Date.now()}`;
 
-    const published_at = status === "published" ? new Date() : null;
-    const read_time = calcReadTime(content);
+  const published_at = status === "published" ? new Date() : null;
+  const read_time = calcReadTime(content);
 
-    const result = await blogQuery(
-      `INSERT INTO posts
-       (title, slug, excerpt, content, cover_image, cover_public_id,
-        author_id, category_id, status, featured, read_time,
-        meta_title, meta_description, published_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        title, slug, excerpt || null, content, cover_image || null,
-        cover_public_id || null, req.user.id, category_id || null,
-        status, featured ? 1 : 0, read_time,
-        meta_title || null, meta_description || null, published_at
-      ]
-    );
+  const result = await blogQuery(
+    `INSERT INTO posts
+     (title, slug, excerpt, content, cover_image, cover_public_id,
+      author_id, category_id, status, featured, read_time,
+      meta_title, meta_description, published_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      title, slug, excerpt || null, content, cover_image || null,
+      cover_public_id || null, req.user.id, category_id || null,
+      status, featured ? 1 : 0, read_time,
+      meta_title || null, meta_description || null, published_at
+    ]
+  );
 
-    if (Array.isArray(tags) && tags.length) {
-      for (const tagName of tags) {
-        const trimmed = String(tagName).trim();
-        if (!trimmed) continue;
-        const tagSlug = blogSlugify(trimmed);
-        await blogQuery("INSERT IGNORE INTO tags (name, slug) VALUES (?, ?)", [trimmed, tagSlug]);
-        const tagRows = await blogQuery("SELECT id FROM tags WHERE slug = ?", [tagSlug]);
-        if (tagRows.length) {
-          await blogQuery(
-            "INSERT IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)",
-            [result.insertId, tagRows[0].id]
-          );
-        }
+  if (Array.isArray(tags) && tags.length) {
+    for (const tagName of tags) {
+      const trimmed = String(tagName).trim();
+      if (!trimmed) continue;
+      const tagSlug = blogSlugify(trimmed);
+      await blogQuery("INSERT IGNORE INTO tags (name, slug) VALUES (?, ?)", [trimmed, tagSlug]);
+      const tagRows = await blogQuery("SELECT id FROM tags WHERE slug = ?", [tagSlug]);
+      if (tagRows.length) {
+        await blogQuery(
+          "INSERT IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)",
+          [result.insertId, tagRows[0].id]
+        );
       }
     }
+  }
 
-    res.status(201).json({ id: result.insertId, slug, message: "Post created" });
-  })
-);
+  res.status(201).json({ id: result.insertId, slug, message: "Post created" });
+}));
 
-// PUT /api/blog/posts/:id — update (author or admin)
+// PUT /api/blog/posts/:id — update
 router.put("/blog/posts/:id", blogAuthRequired, blogAsync(async (req, res) => {
   const rows = await blogQuery("SELECT * FROM posts WHERE id = ?", [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: "Post not found" });
@@ -537,7 +553,7 @@ router.put("/blog/posts/:id", blogAuthRequired, blogAsync(async (req, res) => {
   res.json({ message: "Post updated successfully", status });
 }));
 
-// DELETE /api/blog/posts/:id — author or admin
+// DELETE /api/blog/posts/:id — author or super admin
 router.delete("/blog/posts/:id", blogAuthRequired, blogAsync(async (req, res) => {
   const rows = await blogQuery("SELECT * FROM posts WHERE id = ?", [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: "Post not found" });
@@ -555,7 +571,7 @@ router.delete("/blog/posts/:id", blogAuthRequired, blogAsync(async (req, res) =>
 }));
 
 // ═══════════════════════════════════════════════════════════
-// 👤 AUTHOR DASHBOARD (isolated)
+// 👤 AUTHOR DASHBOARD
 // ═══════════════════════════════════════════════════════════
 
 router.get("/blog/author/my-posts", blogAuthRequired, blogAsync(async (req, res) => {
@@ -613,7 +629,7 @@ router.get("/blog/admin/users", blogAuthRequired, blogSuperAdminOnly, blogAsync(
   }
 
   const users = await blogQuery(`
-    SELECT id, name, email, role, status, bio, avatar_url,
+    SELECT id, name, email, role, role_type, status, bio, avatar_url,
            is_verified, verified_at, created_at, approved_at
     FROM users ${where}
     ORDER BY
@@ -636,7 +652,7 @@ router.put("/blog/admin/users/:id/status", blogAuthRequired, blogSuperAdminOnly,
   res.json({ message: `User ${status}` });
 }));
 
-// ✅ VERIFIED BADGE — Give/Remove (Facebook/WhatsApp style)
+// ✅ VERIFIED BADGE
 router.put("/blog/admin/users/:id/verify", blogAuthRequired, blogSuperAdminOnly, blogAsync(async (req, res) => {
   const { verified } = req.body;
   const val = verified ? 1 : 0;
@@ -650,6 +666,24 @@ router.put("/blog/admin/users/:id/verify", blogAuthRequired, blogSuperAdminOnly,
   });
 }));
 
+// ✍️ MAKE AUTHOR
+router.put("/blog/admin/users/:id/make-author", blogAuthRequired, blogSuperAdminOnly, blogAsync(async (req, res) => {
+  await blogQuery(
+    "UPDATE users SET role_type = 'author' WHERE id = ?",
+    [req.params.id]
+  );
+  res.json({ message: "User promoted to Author ✍️" });
+}));
+
+// 👤 MAKE USER
+router.put("/blog/admin/users/:id/make-user", blogAuthRequired, blogSuperAdminOnly, blogAsync(async (req, res) => {
+  await blogQuery(
+    "UPDATE users SET role_type = 'user' WHERE id = ?",
+    [req.params.id]
+  );
+  res.json({ message: "User demoted to Regular User 👤" });
+}));
+
 // DELETE user
 router.delete("/blog/admin/users/:id", blogAuthRequired, blogSuperAdminOnly, blogAsync(async (req, res) => {
   if (Number(req.params.id) === req.user.id)
@@ -658,7 +692,7 @@ router.delete("/blog/admin/users/:id", blogAuthRequired, blogSuperAdminOnly, blo
   res.json({ message: "User deleted" });
 }));
 
-// GET /api/blog/admin/posts/all — all posts from all authors
+// GET /api/blog/admin/posts/all
 router.get("/blog/admin/posts/all", blogAuthRequired, blogSuperAdminOnly, blogAsync(async (req, res) => {
   const { status, author_id } = req.query;
   let where = "WHERE 1=1";
@@ -719,7 +753,8 @@ router.get("/blog/admin/stats", blogAuthRequired, blogSuperAdminOnly, blogAsync(
     SELECT COUNT(*) AS total,
       COALESCE(SUM(status='pending'), 0) AS pending,
       COALESCE(SUM(status='approved'), 0) AS approved,
-      COALESCE(SUM(is_verified), 0) AS verified
+      COALESCE(SUM(is_verified), 0) AS verified,
+      COALESCE(SUM(role_type='author'), 0) AS authors
     FROM users WHERE role != 'admin'
   `);
   const ads = await blogQuery(`
@@ -734,7 +769,7 @@ router.get("/blog/admin/stats", blogAuthRequired, blogSuperAdminOnly, blogAsync(
 }));
 
 // ═══════════════════════════════════════════════════════════
-// ❤️ REACTIONS (Multiple emojis, one per device)
+// ❤️ REACTIONS
 // ═══════════════════════════════════════════════════════════
 
 router.post("/blog/posts/:postId/react", blogAsync(async (req, res) => {
@@ -806,9 +841,10 @@ router.get("/blog/posts/:postId/reactions", blogAsync(async (req, res) => {
 }));
 
 // ═══════════════════════════════════════════════════════════
-// 💬 COMMENTS
+// 💬 COMMENTS — 4-role hybrid system
 // ═══════════════════════════════════════════════════════════
 
+// GET /blog/posts/:postId/comments — public approved
 router.get("/blog/posts/:postId/comments", blogAsync(async (req, res) => {
   const rows = await blogQuery(`
     SELECT id, parent_id, author_name, author_avatar, content, created_at
@@ -828,13 +864,12 @@ router.get("/blog/posts/:postId/comments", blogAsync(async (req, res) => {
   res.json(roots);
 }));
 
+// POST /blog/posts/:postId/comments — HYBRID auto-approve
 router.post("/blog/posts/:postId/comments", blogAsync(async (req, res) => {
-  const { author_name, author_email, content, parent_id } = req.body;
-  if (!author_name || !author_email || !content)
-    return res.status(400).json({ error: "All fields required" });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(author_email))
-    return res.status(400).json({ error: "Invalid email format" });
-  if (content.length < 3 || content.length > 5000)
+  const { author_name, author_email, content, parent_id, guest_name } = req.body;
+
+  // Validation
+  if (!content || content.length < 3 || content.length > 5000)
     return res.status(400).json({ error: "Comment must be 3-5000 characters" });
 
   const postRows = await blogQuery(
@@ -843,16 +878,67 @@ router.post("/blog/posts/:postId/comments", blogAsync(async (req, res) => {
   );
   if (!postRows.length) return res.status(404).json({ error: "Post not found" });
 
+  let finalName, finalEmail, finalAvatar, autoStatus = "pending";
+
+  // ⭐ Check karo — registered user hai ya guest
+  if (author_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(author_email)) {
+    const userRows = await blogQuery(
+      `SELECT id, name, avatar_url, role, role_type, is_verified 
+       FROM users WHERE email = ? AND status = 'approved' LIMIT 1`,
+      [author_email.trim().toLowerCase()]
+    );
+
+    if (userRows.length) {
+      // ✅ Registered user — turant approve
+      const user = userRows[0];
+      finalName = user.name;
+      finalEmail = author_email.trim().toLowerCase();
+      finalAvatar = user.avatar_url;
+      autoStatus = "approved";
+    } else {
+      // ⏳ Email diya but registered nahi — moderation
+      finalName = (author_name || guest_name || "Anonymous").trim();
+      finalEmail = author_email.trim().toLowerCase();
+      finalAvatar = null;
+      autoStatus = "pending";
+    }
+  } else {
+    // 👻 Guest — email nahi diya
+    finalName = (guest_name || author_name || "Guest").trim();
+    finalEmail = "guest@inkwell.local";
+    finalAvatar = null;
+    autoStatus = "pending";
+  }
+
+  // Spam check — same IP se 30 sec mein ek comment
+  const recentComments = await blogQuery(
+    `SELECT id FROM comments 
+     WHERE author_ip = ? AND created_at > DATE_SUB(NOW(), INTERVAL 30 SECOND)`,
+    [req.ip]
+  );
+  if (recentComments.length)
+    return res.status(429).json({ error: "Please wait a moment before commenting again" });
+
   const result = await blogQuery(
-    `INSERT INTO comments (post_id, parent_id, author_name, author_email, content, author_ip, status)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-    [req.params.postId, parent_id || null, author_name.trim(),
-     author_email.trim(), content.trim(), req.ip]
+    `INSERT INTO comments 
+     (post_id, parent_id, author_name, author_email, author_avatar, content, author_ip, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      req.params.postId, parent_id || null, finalName,
+      finalEmail, finalAvatar, content.trim(), req.ip, autoStatus
+    ]
   );
 
-  res.status(201).json({ id: result.insertId, message: "Comment submitted for moderation" });
+  res.status(201).json({
+    id: result.insertId,
+    status: autoStatus,
+    message: autoStatus === "approved"
+      ? "✅ Comment posted successfully!"
+      : "✅ Comment submitted! It will appear after moderation."
+  });
 }));
 
+// GET /blog/comments — admin: all (super admin) or own (author)
 router.get("/blog/comments", blogAuthRequired, blogAsync(async (req, res) => {
   let where = "";
   const params = [];
@@ -872,6 +958,7 @@ router.get("/blog/comments", blogAuthRequired, blogAsync(async (req, res) => {
   res.json(rows);
 }));
 
+// PUT /blog/comments/:id — approve/spam
 router.put("/blog/comments/:id", blogAuthRequired, blogAsync(async (req, res) => {
   const { status } = req.body;
   if (!["pending", "approved", "spam"].includes(status))
@@ -880,13 +967,14 @@ router.put("/blog/comments/:id", blogAuthRequired, blogAsync(async (req, res) =>
   res.json({ message: "Comment updated" });
 }));
 
+// DELETE /blog/comments/:id
 router.delete("/blog/comments/:id", blogAuthRequired, blogAsync(async (req, res) => {
   await blogQuery("DELETE FROM comments WHERE id = ?", [req.params.id]);
   res.json({ message: "Comment deleted" });
 }));
 
 // ═══════════════════════════════════════════════════════════
-// 📤 UPLOADS (Cloudinary)
+// 📤 UPLOADS
 // ═══════════════════════════════════════════════════════════
 
 router.post("/blog/upload/cover", blogAuthRequired, uploadBlogCover.single("file"),
@@ -1085,38 +1173,6 @@ router.post("/blog/posts/:postId/share", blogAsync(async (req, res) => {
     [req.params.postId, platform, req.ip]
   );
   res.json({ ok: true });
-}));
-
-// ═══════════════════════════════════════════════════════════
-// 📊 LEGACY STATS (backward compatibility)
-// ═══════════════════════════════════════════════════════════
-
-router.get("/blog/stats", blogAuthRequired, blogSuperAdminOnly, blogAsync(async (req, res) => {
-  const posts = await blogQuery(`
-    SELECT COUNT(*) AS total,
-      COALESCE(SUM(status='published'), 0) AS published,
-      COALESCE(SUM(status='draft'), 0) AS drafts,
-      COALESCE(SUM(views), 0) AS total_views FROM posts
-  `);
-  const comments = await blogQuery(
-    "SELECT COUNT(*) AS total, COALESCE(SUM(status='pending'), 0) AS pending FROM comments"
-  );
-  const subscribers = await blogQuery("SELECT COUNT(*) AS total FROM subscribers");
-  const reactions = await blogQuery("SELECT COUNT(*) AS total FROM reactions");
-  const users = await blogQuery(`
-    SELECT COUNT(*) AS total,
-      COALESCE(SUM(status='pending'), 0) AS pending,
-      COALESCE(SUM(is_verified), 0) AS verified
-    FROM users WHERE role != 'admin'
-  `);
-  const ads = await blogQuery(
-    "SELECT COUNT(*) AS total, COALESCE(SUM(impressions), 0) AS impressions, COALESCE(SUM(clicks), 0) AS clicks FROM ads"
-  );
-  res.json({
-    posts: posts[0], comments: comments[0],
-    subscribers: subscribers[0].total, reactions: reactions[0].total,
-    users: users[0], ads: ads[0]
-  });
 }));
 
 // ═══════════════════════════════════════════════════════════
