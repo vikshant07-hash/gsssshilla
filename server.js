@@ -129,6 +129,12 @@ app.use("/api/attendance", attendanceRoutes);
 const routes = require('./routes/routes');
 
 app.use('/api', routes);
+// ============================================================
+// 🟢 FILE MANAGER ROUTES
+// ============================================================
+const filesRoutes = require('./routes/FilesRoutes');
+app.use('/api/files', filesRoutes);
+console.log('✅ File Manager routes registered at /api/files');
 
 
 const resultRoutes = require('./routes/resultRoutes');
