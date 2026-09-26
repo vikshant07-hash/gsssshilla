@@ -1529,7 +1529,106 @@ router.post("/recover-credential", async (req, res) => {
 // ✅ ====== STUDENT 6-DIGIT PIN SYSTEM (ROUTES) ======
 // ============================================================
 // ============================================================
+// ============================================================
+// ✅ STUDENT LOGIN WITH PIN (Email + Student ID + 6-digit PIN)
+// ============================================================
+router.post("/verify-login-pin", async (req, res) => {
+  try {
+    const { email, studentId, pin } = req.body;
 
+    if (!email || !studentId || !pin) {
+      return res.status(400).json({ success: false, message: "Email, Student ID and PIN required" });
+    }
+
+    const emailClean = String(email).toLowerCase().trim();
+    const sidClean = String(studentId).trim();
+    const pinClean = String(pin).trim();
+
+    if (!/^\d{6}$/.test(pinClean)) {
+      return res.status(400).json({ success: false, message: "PIN must be 6 digits" });
+    }
+
+    const rows = await q(
+      `SELECT * FROM Nstudent WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? LIMIT 1`,
+      [emailClean, sidClean.toLowerCase()]
+    );
+
+    if (!rows.length) {
+      return res.status(401).json({ success: false, message: "Invalid email or Student ID" });
+    }
+
+    const s = revertStatusIfExpired(rows[0]);
+
+    if (s.status && s.status.toLowerCase() === "inactive") {
+      return res.status(403).json({ success: false, message: "Account inactive. Contact school office." });
+    }
+
+    const pinRows = await q(`SELECT * FROM student_pins WHERE student_id = ?`, [s.id]);
+    if (!pinRows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No PIN set for this student. Create one from dashboard.",
+        code: "NO_PIN_SET"
+      });
+    }
+
+    const pinRec = pinRows[0];
+
+    if (pinRec.locked_until && new Date(pinRec.locked_until) > new Date()) {
+      const mins = Math.ceil((new Date(pinRec.locked_until) - new Date()) / 60000);
+      return res.status(423).json({
+        success: false,
+        message: `Account locked. Try in ${mins} min.`,
+        lockedUntil: pinRec.locked_until
+      });
+    }
+
+    const hash = hashPin(pinClean, pinRec.pin_salt);
+    if (!safeCompareHex(hash, pinRec.pin_hash)) {
+      const newFailed = (pinRec.failed_attempts || 0) + 1;
+      let lockUntil = null;
+      let msg = "Incorrect PIN";
+
+      if (newFailed >= MAX_FAILED_ATTEMPTS) {
+        lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
+        msg = "Too many wrong attempts. Locked for 30 minutes.";
+      } else {
+        msg = `Incorrect PIN. ${MAX_FAILED_ATTEMPTS - newFailed} attempts left.`;
+      }
+
+      await q(
+        `UPDATE student_pins SET failed_attempts = ?, locked_until = ? WHERE student_id = ?`,
+        [newFailed, lockUntil, s.id]
+      );
+
+      return res.status(401).json({ success: false, message: msg, attemptsLeft: MAX_FAILED_ATTEMPTS - newFailed });
+    }
+
+    await q(`UPDATE student_pins SET failed_attempts = 0, locked_until = NULL WHERE student_id = ?`, [s.id]);
+
+    const thisMonth = currentMonthYear();
+    const needsChange = pinRec.month_year !== thisMonth;
+    const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
+
+    const safeStudent = { ...s };
+    for (const k of Object.keys(safeStudent)) {
+      if (k.endsWith("_pid")) delete safeStudent[k];
+      if (k === "aadhar_number") delete safeStudent[k];
+    }
+
+    res.json({
+      success: true,
+      message: "Login successful ✅",
+      student: safeStudent,
+      token,
+      needsChange,
+      loginTime: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ verify-login-pin error:", err.message);
+    res.status(500).json({ success: false, message: "Server error. Please try again." });
+  }
+});
 // ============================================================
 // ✅ PIN STATUS — Check if student has PIN / needs monthly change
 // ============================================================
