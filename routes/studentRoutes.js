@@ -19,10 +19,21 @@ const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 30 * 60 * 1000;     // 30 minutes
 const PIN_OTP_EXPIRY_MS = 10 * 60 * 1000;    // 10 minutes
 const PIN_OTP_MAX_ATTEMPTS = 5;
+const PIN_OTP_RESEND_COOLDOWN_MS = 30 * 1000; // 30 sec cooldown between resends
 
 function currentMonthYear() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// ✅ FIX: Calculates remaining lock minutes correctly (timezone-safe)
+function calcRemainingLockMins(lockedUntil) {
+  if (!lockedUntil) return 0;
+  const lockTime = new Date(lockedUntil).getTime();
+  if (isNaN(lockTime)) return 0;
+  const diffMs = lockTime - Date.now();
+  if (diffMs <= 0) return 0;
+  return Math.max(1, Math.ceil(diffMs / 60000));
 }
 
 function validatePin(pin) {
@@ -185,13 +196,11 @@ async function resolveStudentId(input) {
   const v = String(input || "").trim();
   if (!v) return null;
 
-  // Try numeric DB id first
   if (/^\d+$/.test(v)) {
     const r = await q(`SELECT id FROM Nstudent WHERE id = ? LIMIT 1`, [v]);
     if (r.length) return r[0].id;
   }
 
-  // Fall back to student_id string (like "HP12A000")
   const r = await q(`SELECT id FROM Nstudent WHERE LOWER(student_id) = LOWER(?) LIMIT 1`, [v]);
   return r.length ? r[0].id : null;
 }
@@ -560,7 +569,6 @@ async function generateWelcomePDF(student) {
       const MR = 45;
       const contentW = pageW - ML - MR;
 
-      // Watermark
       doc.save();
       doc.opacity(0.04);
       doc.fontSize(80).fillColor("#c9972b").font("Helvetica-Bold");
@@ -576,7 +584,6 @@ async function generateWelcomePDF(student) {
         doc.restore();
       }
 
-      // Header
       let y = 40;
       if (logoBuf) {
         try {
@@ -599,7 +606,6 @@ async function generateWelcomePDF(student) {
       doc.moveTo(ML, y).lineTo(pageW - MR, y).lineWidth(3).strokeColor("#c9972b").stroke();
       doc.moveTo(ML, y + 3).lineTo(pageW - MR, y + 3).lineWidth(0.5).strokeColor("#0d1b2a").stroke();
 
-      // Title
       y += 20;
       const titleText = "PROVISIONAL REGISTRATION FORM";
       doc.font("Helvetica-Bold").fontSize(13);
@@ -612,7 +618,6 @@ async function generateWelcomePDF(student) {
 
       y += 40;
 
-      // Photo box
       const photoBoxW = 90, photoBoxH = 105;
       const photoBoxX = pageW - MR - photoBoxW;
       const photoBoxY = y;
@@ -694,7 +699,6 @@ async function generateWelcomePDF(student) {
       drawFullRow("State", s.state);
       drawFullRow("Pincode", s.pincode);
 
-      // Login credentials box
       y += 12;
       const credBoxH = 95;
       if (y + credBoxH < pageH - 150) {
@@ -721,7 +725,6 @@ async function generateWelcomePDF(student) {
         y += credBoxH + 12;
       }
 
-      // Signature
       if (y < pageH - 130) {
         const sigW = 180;
         const sigX = pageW - MR - sigW;
@@ -1007,7 +1010,6 @@ router.post("/verify-aadhaar", async (req, res) => {
 
 // ============================================================
 // ✅ PDF PROXY — Cloudinary /raw/ PDF view fix
-// ⚠️ IMPORTANT: Ye route /:id se PEHLE hona chahiye
 // ============================================================
 router.get("/proxy-pdf", async (req, res) => {
   try {
@@ -1314,7 +1316,7 @@ router.post(
 );
 
 // ============================================================
-// ✅ STUDENT LOGIN VERIFY (Email + Student ID)
+// ✅ STUDENT LOGIN VERIFY (Email + Student ID) — Legacy
 // ============================================================
 router.post("/verify-login", async (req, res) => {
   try {
@@ -1403,7 +1405,6 @@ router.post("/recover-credential", async (req, res) => {
       });
     }
 
-    // ========== RECOVER EMAIL ==========
     if (recoverType === "email") {
       const { class: cls, studentId, apaarId, dob, motherName } = req.body;
 
@@ -1459,7 +1460,6 @@ router.post("/recover-credential", async (req, res) => {
       });
     }
 
-    // ========== RECOVER STUDENT ID ==========
     if (recoverType === "studentId") {
       const { class: cls, email, aadharNumber, dob, fatherName } = req.body;
 
@@ -1525,11 +1525,6 @@ router.post("/recover-credential", async (req, res) => {
 });
 
 // ============================================================
-// ============================================================
-// ✅ ====== STUDENT 6-DIGIT PIN SYSTEM (ROUTES) ======
-// ============================================================
-// ============================================================
-// ============================================================
 // ✅ STUDENT LOGIN WITH PIN (Email + Student ID + 6-digit PIN)
 // ============================================================
 router.post("/verify-login-pin", async (req, res) => {
@@ -1573,12 +1568,12 @@ router.post("/verify-login-pin", async (req, res) => {
     }
 
     const pinRec = pinRows[0];
+    const lockMins = calcRemainingLockMins(pinRec.locked_until);
 
-    if (pinRec.locked_until && new Date(pinRec.locked_until) > new Date()) {
-      const mins = Math.ceil((new Date(pinRec.locked_until) - new Date()) / 60000);
+    if (lockMins > 0) {
       return res.status(423).json({
         success: false,
-        message: `Account locked. Try in ${mins} min.`,
+        message: `Account locked. Try again in ${lockMins} minute(s).`,
         lockedUntil: pinRec.locked_until
       });
     }
@@ -1591,7 +1586,7 @@ router.post("/verify-login-pin", async (req, res) => {
 
       if (newFailed >= MAX_FAILED_ATTEMPTS) {
         lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
-        msg = "Too many wrong attempts. Locked for 30 minutes.";
+        msg = `Too many wrong attempts. Locked for 30 minutes.`;
       } else {
         msg = `Incorrect PIN. ${MAX_FAILED_ATTEMPTS - newFailed} attempts left.`;
       }
@@ -1629,8 +1624,9 @@ router.post("/verify-login-pin", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error. Please try again." });
   }
 });
+
 // ============================================================
-// ✅ PIN STATUS — Check if student has PIN / needs monthly change
+// ✅ PIN STATUS
 // ============================================================
 router.get("/pin/status/:studentId", async (req, res) => {
   try {
@@ -1657,7 +1653,8 @@ router.get("/pin/status/:studentId", async (req, res) => {
     }
 
     const r = rows[0];
-    const locked = r.locked_until && new Date(r.locked_until) > new Date();
+    const lockMins = calcRemainingLockMins(r.locked_until);
+    const locked = lockMins > 0;
     const monthChanged = r.month_year !== thisMonth;
     const changesUsed = monthChanged ? 0 : r.change_count_this_month;
     const remaining = Math.max(0, MAX_CHANGES_PER_MONTH - changesUsed);
@@ -1668,6 +1665,7 @@ router.get("/pin/status/:studentId", async (req, res) => {
       hasPin: true,
       locked,
       lockedUntil: r.locked_until,
+      lockMinutesRemaining: lockMins,
       failedAttempts: r.failed_attempts || 0,
       lastChangedAt: r.last_changed_at,
       changesUsed,
@@ -1683,7 +1681,7 @@ router.get("/pin/status/:studentId", async (req, res) => {
 });
 
 // ============================================================
-// ✅ CREATE PIN (first time only)
+// ✅ CREATE PIN
 // ============================================================
 router.post("/pin/create", async (req, res) => {
   try {
@@ -1736,7 +1734,7 @@ router.post("/pin/create", async (req, res) => {
 });
 
 // ============================================================
-// ✅ CHANGE PIN (requires old PIN, monthly limit applied)
+// ✅ CHANGE PIN
 // ============================================================
 router.post("/pin/change", async (req, res) => {
   try {
@@ -1766,12 +1764,12 @@ router.post("/pin/change", async (req, res) => {
     }
 
     const pinRec = rows[0];
+    const lockMins = calcRemainingLockMins(pinRec.locked_until);
 
-    if (pinRec.locked_until && new Date(pinRec.locked_until) > new Date()) {
-      const mins = Math.ceil((new Date(pinRec.locked_until) - new Date()) / 60000);
+    if (lockMins > 0) {
       return res.status(423).json({
         success: false,
-        message: `Account temporarily locked. Try again in ${mins} minute(s).`,
+        message: `Account temporarily locked. Try again in ${lockMins} minute(s).`,
         lockedUntil: pinRec.locked_until
       });
     }
@@ -1839,7 +1837,7 @@ router.post("/pin/change", async (req, res) => {
 });
 
 // ============================================================
-// ✅ VERIFY PIN — Login flow me use hoga
+// ✅ VERIFY PIN (standalone)
 // ============================================================
 router.post("/pin/verify", async (req, res) => {
   try {
@@ -1858,12 +1856,12 @@ router.post("/pin/verify", async (req, res) => {
     }
 
     const pinRec = rows[0];
+    const lockMins = calcRemainingLockMins(pinRec.locked_until);
 
-    if (pinRec.locked_until && new Date(pinRec.locked_until) > new Date()) {
-      const mins = Math.ceil((new Date(pinRec.locked_until) - new Date()) / 60000);
+    if (lockMins > 0) {
       return res.status(423).json({
         success: false,
-        message: `Account temporarily locked. Try again in ${mins} minute(s).`,
+        message: `Account temporarily locked. Try again in ${lockMins} minute(s).`,
         lockedUntil: pinRec.locked_until
       });
     }
@@ -1911,44 +1909,124 @@ router.post("/pin/verify", async (req, res) => {
 });
 
 // ============================================================
-// ✅ FORGOT PIN — Step 1: OTP bhejo registered email pe
+// ✅ FORGOT PIN — Step 1: Verify identity + send OTP
+// SECURITY: Requires Student ID + APAAR ID + Aadhaar Number
 // ============================================================
 router.post("/pin/forgot/request-otp", async (req, res) => {
   try {
-    const { studentId } = req.body;
-    if (!studentId) return res.status(400).json({ success: false, message: "Student ID required" });
+    const { studentId, apaarId, aadharNumber } = req.body;
 
-    const sid = await resolveStudentId(studentId);
-    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
-
-    const stu = await q(`SELECT id, name, email_id FROM Nstudent WHERE id = ?`, [sid]);
-    if (!stu.length) return res.status(404).json({ success: false, message: "Student not found" });
-
-    const student = stu[0];
-    if (!student.email_id) {
-      return res.status(400).json({ success: false, message: "No email registered. Contact admin." });
-    }
-
-    const pinExists = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
-    if (!pinExists.length) {
-      return res.status(404).json({
+    // ---- Validation ----
+    if (!studentId || !apaarId || !aadharNumber) {
+      return res.status(400).json({
         success: false,
-        message: "No PIN set. Please create PIN first (dashboard se)."
+        message: "Student ID, APAAR ID and Aadhaar Number are required"
       });
     }
 
+    const sidClean = String(studentId).trim();
+    const apaarClean = String(apaarId).replace(/\s/g, "").trim();
+    const aadhaarClean = String(aadharNumber).replace(/[\s-]/g, "").trim();
+
+    if (sidClean.length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: "Student ID must be at least 3 characters"
+      });
+    }
+
+    if (!/^\d{12}$/.test(apaarClean)) {
+      return res.status(400).json({
+        success: false,
+        message: "APAAR ID must be exactly 12 digits"
+      });
+    }
+
+    if (!/^\d{12}$/.test(aadhaarClean)) {
+      return res.status(400).json({
+        success: false,
+        message: "Aadhaar Number must be exactly 12 digits"
+      });
+    }
+
+    // ---- Verify all 3 fields match the same student ----
+    const rows = await q(
+      `SELECT id, name, email_id, student_id, apaar_id, aadhar_number
+       FROM Nstudent 
+       WHERE LOWER(student_id) = LOWER(?)
+         AND apaar_id = ?
+         AND aadhar_number = ?
+       LIMIT 1`,
+      [sidClean, apaarClean, aadhaarClean]
+    );
+
+    if (!rows.length) {
+      // Security: don't reveal which field was wrong
+      return res.status(401).json({
+        success: false,
+        message: "Details do not match our records. Please check Student ID, APAAR ID and Aadhaar Number."
+      });
+    }
+
+    const student = rows[0];
+
+    if (!student.email_id) {
+      return res.status(400).json({
+        success: false,
+        message: "No email registered. Please contact the school office."
+      });
+    }
+
+    // ---- Check if PIN exists ----
+    const pinExists = await q(`SELECT locked_until FROM student_pins WHERE student_id = ?`, [student.id]);
+    if (!pinExists.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No PIN set for this student. Please contact the school office."
+      });
+    }
+
+    // ---- Check if account locked ----
+    const lockMins = calcRemainingLockMins(pinExists[0].locked_until);
+    if (lockMins > 0) {
+      return res.status(423).json({
+        success: false,
+        message: `Account is currently locked. Try again in ${lockMins} minute(s).`
+      });
+    }
+
+    // ---- Rate limit: check recent OTP ----
+    const recentOtp = await q(
+      `SELECT id, created_at FROM student_pin_reset_otps 
+       WHERE student_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 30 SECOND)
+       ORDER BY id DESC LIMIT 1`,
+      [student.id]
+    );
+    if (recentOtp.length) {
+      const waitSec = Math.ceil((30 * 1000 - (Date.now() - new Date(recentOtp[0].created_at).getTime())) / 1000);
+      if (waitSec > 0) {
+        return res.status(429).json({
+          success: false,
+          message: `Please wait ${waitSec} second(s) before requesting a new OTP.`
+        });
+      }
+    }
+
+    // ---- Generate OTP ----
     const otp = genPinOTP();
     const expiresAt = new Date(Date.now() + PIN_OTP_EXPIRY_MS);
 
-    await q(`DELETE FROM student_pin_reset_otps WHERE student_id = ?`, [sid]);
+    await q(`DELETE FROM student_pin_reset_otps WHERE student_id = ?`, [student.id]);
     await q(
       `INSERT INTO student_pin_reset_otps (student_id, otp, expires_at) VALUES (?, ?, ?)`,
-      [sid, otp, expiresAt]
+      [student.id, otp, expiresAt]
     );
 
+    // ---- Mask email ----
     const [namePart, domain] = String(student.email_id).split("@");
     const maskedEmail = namePart.substring(0, 2) + "***@" + domain;
 
+    // ---- Send email ----
     if (BREVO_API_KEY) {
       try {
         const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -2008,23 +2086,25 @@ If you didn't request this, please ignore this email — your PIN is safe.
         console.error("PIN OTP email error:", emailErr.message);
       }
     } else {
-      console.log(`📧 PIN OTP for student ${sid}: ${otp}`);
+      console.log(`📧 PIN OTP for student ${student.id}: ${otp}`);
     }
 
     res.json({
       success: true,
       message: `OTP sent to ${maskedEmail} ✅`,
       maskedEmail,
+      studentName: student.name,
       expiresInMinutes: 10
     });
+
   } catch (err) {
     console.error("PIN forgot OTP error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: "Server error. Please try again." });
   }
 });
 
 // ============================================================
-// ✅ FORGOT PIN — Step 2: OTP verify + naya PIN set
+// ✅ FORGOT PIN — Step 2: Verify OTP + set new PIN
 // ============================================================
 router.post("/pin/forgot/reset", async (req, res) => {
   try {
