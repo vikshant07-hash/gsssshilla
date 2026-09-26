@@ -1370,13 +1370,11 @@ router.post("/verify-login", async (req, res) => {
     }
 
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
-
-    const safeStudent = { ...s };
-    for (const k of Object.keys(safeStudent)) {
-      if (k.endsWith("_pid")) delete safeStudent[k];
-      if (k === "aadhar_number") delete safeStudent[k];
-    }
-
+const safeStudent = { ...s };
+for (const k of Object.keys(safeStudent)) {
+  if (k.endsWith("_pid")) delete safeStudent[k];
+}
+    
     res.json({
       success: true,
       message: "Login successful ✅",
@@ -1606,10 +1604,9 @@ router.post("/verify-login-pin", async (req, res) => {
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
 
     const safeStudent = { ...s };
-    for (const k of Object.keys(safeStudent)) {
-      if (k.endsWith("_pid")) delete safeStudent[k];
-      if (k === "aadhar_number") delete safeStudent[k];
-    }
+for (const k of Object.keys(safeStudent)) {
+  if (k.endsWith("_pid")) delete safeStudent[k];
+}
 
     res.json({
       success: true,
