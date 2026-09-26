@@ -5,14 +5,14 @@ const PDFDocument = require("pdfkit");
 const https = require("https");
 const http = require("http");
 const path = require("path");
+const crypto = require("crypto");
 
 const db = require("../config/db");
 const { cloudinary, uploadStudent } = require("../config/cloudinary");
+
 // ============================================================
 // ✅ PIN SYSTEM — Constants & Helpers
 // ============================================================
-const crypto = require("crypto");
-
 const PIN_LENGTH = 6;
 const MAX_CHANGES_PER_MONTH = 3;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -73,9 +73,6 @@ async function logPinHistory(studentId, action, changedBy, req) {
     console.error("PIN history log error:", e.message);
   }
 }
-// ============================================================
-// ✅ END PIN SYSTEM HELPERS
-// ============================================================
 
 // ==================== MULTER FIELDS ====================
 const studentUploadFields = uploadStudent.fields([
@@ -180,6 +177,24 @@ const nextClass = (currentClass) => {
 };
 
 const q = (sql, params = []) => db.query(sql, params);
+
+// ============================================================
+// ✅ HELPER: Resolve numeric id OR student_id string
+// ============================================================
+async function resolveStudentId(input) {
+  const v = String(input || "").trim();
+  if (!v) return null;
+
+  // Try numeric DB id first
+  if (/^\d+$/.test(v)) {
+    const r = await q(`SELECT id FROM Nstudent WHERE id = ? LIMIT 1`, [v]);
+    if (r.length) return r[0].id;
+  }
+
+  // Fall back to student_id string (like "HP12A000")
+  const r = await q(`SELECT id FROM Nstudent WHERE LOWER(student_id) = LOWER(?) LIMIT 1`, [v]);
+  return r.length ? r[0].id : null;
+}
 
 // ============================================================
 // ✅ AADHAAR VALIDATION
@@ -1299,7 +1314,920 @@ router.post(
 );
 
 // ============================================================
-// ✅ GET SINGLE
+// ✅ STUDENT LOGIN VERIFY (Email + Student ID)
+// ============================================================
+router.post("/verify-login", async (req, res) => {
+  try {
+    const { email, studentId } = req.body;
+
+    if (!email || !studentId) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and Student ID are required"
+      });
+    }
+
+    const emailClean = String(email).toLowerCase().trim();
+    const sidClean = String(studentId).trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClean)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address"
+      });
+    }
+
+    if (sidClean.length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: "Student ID must be at least 3 characters"
+      });
+    }
+
+    const rows = await q(
+      `SELECT * FROM Nstudent 
+       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
+       LIMIT 1`,
+      [emailClean, sidClean.toLowerCase()]
+    );
+
+    if (!rows.length) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or Student ID. Please check your details."
+      });
+    }
+
+    const s = revertStatusIfExpired(rows[0]);
+
+    if (s.status && s.status.toLowerCase() === "inactive") {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is inactive. Please contact the school office."
+      });
+    }
+
+    const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
+
+    const safeStudent = { ...s };
+    for (const k of Object.keys(safeStudent)) {
+      if (k.endsWith("_pid")) delete safeStudent[k];
+      if (k === "aadhar_number") delete safeStudent[k];
+    }
+
+    res.json({
+      success: true,
+      message: "Login successful ✅",
+      student: safeStudent,
+      token,
+      loginTime: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error("❌ Verify-login error:", err.message);
+    res.status(500).json({ success: false, message: "Server error. Please try again." });
+  }
+});
+
+// ============================================================
+// ✅ RECOVER CREDENTIAL (Email or Student ID)
+// ============================================================
+router.post("/recover-credential", async (req, res) => {
+  try {
+    const { recoverType } = req.body;
+
+    if (!recoverType || !["email", "studentId"].includes(recoverType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid recovery type"
+      });
+    }
+
+    // ========== RECOVER EMAIL ==========
+    if (recoverType === "email") {
+      const { class: cls, studentId, apaarId, dob, motherName } = req.body;
+
+      if (!cls || !studentId || !apaarId || !dob || !motherName) {
+        return res.status(400).json({
+          success: false,
+          message: "All fields required"
+        });
+      }
+
+      if (!/^\d{12}$/.test(String(apaarId).replace(/\s/g, ""))) {
+        return res.status(400).json({
+          success: false,
+          message: "APAAR ID must be 12 digits"
+        });
+      }
+
+      const rows = await q(
+        `SELECT id, name, father_name, class, student_id, email_id
+         FROM Nstudent 
+         WHERE class = ? 
+           AND LOWER(student_id) = LOWER(?)
+           AND apaar_id = ?
+           AND DATE(dob) = DATE(?)
+           AND LOWER(mother_name) = LOWER(?)
+         LIMIT 1`,
+        [
+          cls,
+          String(studentId).trim(),
+          String(apaarId).replace(/\s/g, "").trim(),
+          dob,
+          String(motherName).trim()
+        ]
+      );
+
+      if (!rows.length) {
+        return res.status(401).json({
+          success: false,
+          message: "No matching record found. Please check your details."
+        });
+      }
+
+      const s = rows[0];
+
+      return res.json({
+        success: true,
+        student: {
+          class: s.class,
+          name: s.name,
+          fatherName: s.father_name,
+          email: s.email_id
+        }
+      });
+    }
+
+    // ========== RECOVER STUDENT ID ==========
+    if (recoverType === "studentId") {
+      const { class: cls, email, aadharNumber, dob, fatherName } = req.body;
+
+      if (!cls || !email || !aadharNumber || !dob || !fatherName) {
+        return res.status(400).json({
+          success: false,
+          message: "All fields required"
+        });
+      }
+
+      const aadhaar = String(aadharNumber).replace(/[\s-]/g, "");
+      if (!/^\d{12}$/.test(aadhaar)) {
+        return res.status(400).json({
+          success: false,
+          message: "Aadhaar must be 12 digits"
+        });
+      }
+
+      const rows = await q(
+        `SELECT id, name, father_name, class, student_id, email_id
+         FROM Nstudent 
+         WHERE class = ?
+           AND LOWER(email_id) = LOWER(?)
+           AND aadhar_number = ?
+           AND DATE(dob) = DATE(?)
+           AND LOWER(father_name) = LOWER(?)
+         LIMIT 1`,
+        [
+          cls,
+          String(email).trim(),
+          aadhaar,
+          dob,
+          String(fatherName).trim()
+        ]
+      );
+
+      if (!rows.length) {
+        return res.status(401).json({
+          success: false,
+          message: "No matching record found. Please check your details."
+        });
+      }
+
+      const s = rows[0];
+
+      return res.json({
+        success: true,
+        student: {
+          class: s.class,
+          name: s.name,
+          fatherName: s.father_name,
+          studentId: s.student_id
+        }
+      });
+    }
+
+    return res.status(400).json({ success: false, message: "Unknown recovery type" });
+
+  } catch (err) {
+    console.error("❌ recover-credential error:", err.message);
+    res.status(500).json({ success: false, message: "Server error. Please try again." });
+  }
+});
+
+// ============================================================
+// ============================================================
+// ✅ ====== STUDENT 6-DIGIT PIN SYSTEM (ROUTES) ======
+// ============================================================
+// ============================================================
+
+// ============================================================
+// ✅ PIN STATUS — Check if student has PIN / needs monthly change
+// ============================================================
+router.get("/pin/status/:studentId", async (req, res) => {
+  try {
+    const sid = await resolveStudentId(req.params.studentId);
+    if (!sid) {
+      return res.status(404).json({ success: false, message: "Student not found" });
+    }
+
+    const rows = await q(
+      `SELECT student_id, last_changed_at, change_count_this_month, month_year, locked_until, failed_attempts
+       FROM student_pins WHERE student_id = ?`,
+      [sid]
+    );
+
+    const thisMonth = currentMonthYear();
+
+    if (!rows.length) {
+      return res.json({
+        success: true,
+        hasPin: false,
+        needsChange: true,
+        message: "No PIN set. Please create one to secure your account."
+      });
+    }
+
+    const r = rows[0];
+    const locked = r.locked_until && new Date(r.locked_until) > new Date();
+    const monthChanged = r.month_year !== thisMonth;
+    const changesUsed = monthChanged ? 0 : r.change_count_this_month;
+    const remaining = Math.max(0, MAX_CHANGES_PER_MONTH - changesUsed);
+    const needsChange = monthChanged;
+
+    res.json({
+      success: true,
+      hasPin: true,
+      locked,
+      lockedUntil: r.locked_until,
+      failedAttempts: r.failed_attempts || 0,
+      lastChangedAt: r.last_changed_at,
+      changesUsed,
+      changesRemaining: remaining,
+      maxChangesPerMonth: MAX_CHANGES_PER_MONTH,
+      needsChange,
+      monthYear: thisMonth
+    });
+  } catch (err) {
+    console.error("PIN status error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ CREATE PIN (first time only)
+// ============================================================
+router.post("/pin/create", async (req, res) => {
+  try {
+    const { studentId, pin, confirmPin } = req.body;
+
+    if (!studentId || !pin || !confirmPin) {
+      return res.status(400).json({ success: false, message: "All fields required" });
+    }
+
+    if (pin !== confirmPin) {
+      return res.status(400).json({ success: false, message: "PIN and Confirm PIN do not match" });
+    }
+
+    const pinErr = validatePin(pin);
+    if (pinErr) return res.status(400).json({ success: false, message: pinErr });
+
+    const sid = await resolveStudentId(studentId);
+    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const existing = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
+    if (existing.length) {
+      return res.status(409).json({
+        success: false,
+        message: "PIN already exists. Use 'Change PIN' instead."
+      });
+    }
+
+    const salt = generatePinSalt();
+    const hash = hashPin(pin, salt);
+    const thisMonth = currentMonthYear();
+
+    await q(
+      `INSERT INTO student_pins 
+       (student_id, pin_hash, pin_salt, last_changed_at, change_count_this_month, month_year)
+       VALUES (?, ?, ?, NOW(), 1, ?)`,
+      [sid, hash, salt, thisMonth]
+    );
+
+    await logPinHistory(sid, "create", "student", req);
+
+    res.status(201).json({
+      success: true,
+      message: "PIN created successfully ✅",
+      changesRemaining: MAX_CHANGES_PER_MONTH - 1
+    });
+  } catch (err) {
+    console.error("Create PIN error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ CHANGE PIN (requires old PIN, monthly limit applied)
+// ============================================================
+router.post("/pin/change", async (req, res) => {
+  try {
+    const { studentId, oldPin, newPin, confirmPin } = req.body;
+
+    if (!studentId || !oldPin || !newPin || !confirmPin) {
+      return res.status(400).json({ success: false, message: "All fields required" });
+    }
+
+    if (newPin !== confirmPin) {
+      return res.status(400).json({ success: false, message: "New PIN and Confirm PIN do not match" });
+    }
+
+    const pinErr = validatePin(newPin);
+    if (pinErr) return res.status(400).json({ success: false, message: pinErr });
+
+    if (oldPin === newPin) {
+      return res.status(400).json({ success: false, message: "New PIN must be different from old PIN" });
+    }
+
+    const sid = await resolveStudentId(studentId);
+    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const rows = await q(`SELECT * FROM student_pins WHERE student_id = ?`, [sid]);
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "No PIN set. Please create one first." });
+    }
+
+    const pinRec = rows[0];
+
+    if (pinRec.locked_until && new Date(pinRec.locked_until) > new Date()) {
+      const mins = Math.ceil((new Date(pinRec.locked_until) - new Date()) / 60000);
+      return res.status(423).json({
+        success: false,
+        message: `Account temporarily locked. Try again in ${mins} minute(s).`,
+        lockedUntil: pinRec.locked_until
+      });
+    }
+
+    const oldHash = hashPin(oldPin, pinRec.pin_salt);
+    if (!safeCompareHex(oldHash, pinRec.pin_hash)) {
+      const newFailed = (pinRec.failed_attempts || 0) + 1;
+      let lockUntil = null;
+      let msg = "Old PIN is incorrect";
+
+      if (newFailed >= MAX_FAILED_ATTEMPTS) {
+        lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
+        msg = "Too many failed attempts. Account locked for 30 minutes.";
+      } else {
+        msg = `Old PIN is incorrect. ${MAX_FAILED_ATTEMPTS - newFailed} attempts remaining.`;
+      }
+
+      await q(
+        `UPDATE student_pins SET failed_attempts = ?, locked_until = ? WHERE student_id = ?`,
+        [newFailed, lockUntil, sid]
+      );
+
+      return res.status(401).json({ success: false, message: msg, lockedUntil: lockUntil });
+    }
+
+    const thisMonth = currentMonthYear();
+    let changesUsed = pinRec.change_count_this_month || 0;
+    if (pinRec.month_year !== thisMonth) changesUsed = 0;
+
+    if (changesUsed >= MAX_CHANGES_PER_MONTH) {
+      return res.status(429).json({
+        success: false,
+        message: `You can change PIN max ${MAX_CHANGES_PER_MONTH} times per month. Limit reached for ${thisMonth}.`,
+        changesUsed,
+        changesRemaining: 0
+      });
+    }
+
+    const newSalt = generatePinSalt();
+    const newHash = hashPin(newPin, newSalt);
+
+    await q(
+      `UPDATE student_pins 
+       SET pin_hash = ?, pin_salt = ?, last_changed_at = NOW(),
+           change_count_this_month = ?, month_year = ?,
+           failed_attempts = 0, locked_until = NULL
+       WHERE student_id = ?`,
+      [newHash, newSalt, changesUsed + 1, thisMonth, sid]
+    );
+
+    await logPinHistory(sid, "change", "student", req);
+
+    const remaining = MAX_CHANGES_PER_MONTH - (changesUsed + 1);
+
+    res.json({
+      success: true,
+      message: "PIN changed successfully ✅",
+      changesRemaining: remaining,
+      maxChangesPerMonth: MAX_CHANGES_PER_MONTH
+    });
+  } catch (err) {
+    console.error("Change PIN error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ VERIFY PIN — Login flow me use hoga
+// ============================================================
+router.post("/pin/verify", async (req, res) => {
+  try {
+    const { studentId, pin } = req.body;
+    if (!studentId || !pin) {
+      return res.status(400).json({ success: false, message: "Student ID and PIN required" });
+    }
+
+    const sid = await resolveStudentId(studentId);
+    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const rows = await q(`SELECT * FROM student_pins WHERE student_id = ?`, [sid]);
+
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "No PIN set for this student" });
+    }
+
+    const pinRec = rows[0];
+
+    if (pinRec.locked_until && new Date(pinRec.locked_until) > new Date()) {
+      const mins = Math.ceil((new Date(pinRec.locked_until) - new Date()) / 60000);
+      return res.status(423).json({
+        success: false,
+        message: `Account temporarily locked. Try again in ${mins} minute(s).`,
+        lockedUntil: pinRec.locked_until
+      });
+    }
+
+    const hash = hashPin(String(pin), pinRec.pin_salt);
+    if (!safeCompareHex(hash, pinRec.pin_hash)) {
+      const newFailed = (pinRec.failed_attempts || 0) + 1;
+      let lockUntil = null;
+      let msg = "Incorrect PIN";
+
+      if (newFailed >= MAX_FAILED_ATTEMPTS) {
+        lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
+        msg = "Too many failed attempts. Locked for 30 minutes.";
+      } else {
+        msg = `Incorrect PIN. ${MAX_FAILED_ATTEMPTS - newFailed} attempts left.`;
+      }
+
+      await q(
+        `UPDATE student_pins SET failed_attempts = ?, locked_until = ? WHERE student_id = ?`,
+        [newFailed, lockUntil, sid]
+      );
+
+      return res.status(401).json({ success: false, message: msg, lockedUntil: lockUntil });
+    }
+
+    await q(
+      `UPDATE student_pins SET failed_attempts = 0, locked_until = NULL WHERE student_id = ?`,
+      [sid]
+    );
+
+    const thisMonth = currentMonthYear();
+    const needsChange = pinRec.month_year !== thisMonth;
+
+    res.json({
+      success: true,
+      verified: true,
+      message: "PIN verified ✅",
+      needsChange,
+      lastChangedAt: pinRec.last_changed_at
+    });
+  } catch (err) {
+    console.error("Verify PIN error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ FORGOT PIN — Step 1: OTP bhejo registered email pe
+// ============================================================
+router.post("/pin/forgot/request-otp", async (req, res) => {
+  try {
+    const { studentId } = req.body;
+    if (!studentId) return res.status(400).json({ success: false, message: "Student ID required" });
+
+    const sid = await resolveStudentId(studentId);
+    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const stu = await q(`SELECT id, name, email_id FROM Nstudent WHERE id = ?`, [sid]);
+    if (!stu.length) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const student = stu[0];
+    if (!student.email_id) {
+      return res.status(400).json({ success: false, message: "No email registered. Contact admin." });
+    }
+
+    const pinExists = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
+    if (!pinExists.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No PIN set. Please create PIN first (dashboard se)."
+      });
+    }
+
+    const otp = genPinOTP();
+    const expiresAt = new Date(Date.now() + PIN_OTP_EXPIRY_MS);
+
+    await q(`DELETE FROM student_pin_reset_otps WHERE student_id = ?`, [sid]);
+    await q(
+      `INSERT INTO student_pin_reset_otps (student_id, otp, expires_at) VALUES (?, ?, ?)`,
+      [sid, otp, expiresAt]
+    );
+
+    const [namePart, domain] = String(student.email_id).split("@");
+    const maskedEmail = namePart.substring(0, 2) + "***@" + domain;
+
+    if (BREVO_API_KEY) {
+      try {
+        const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "api-key": BREVO_API_KEY
+          },
+          body: JSON.stringify({
+            sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+            to: [{ email: student.email_id }],
+            subject: "🔐 PIN Reset OTP — GSSS Shilla",
+            htmlContent: `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0; padding:0; background:#f1f5f9; font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
+<tr><td align="center">
+<table width="520" cellpadding="0" cellspacing="0" style="background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 4px 18px rgba(0,0,0,0.08);">
+<tr><td style="background: linear-gradient(135deg, #5b6bc0 0%, #7c4d9e 100%); padding: 32px 24px; text-align:center;">
+<img src="${SCHOOL_LOGO_URL}" alt="GSSS" width="80" height="80" style="border-radius:50%; background:#fff; padding:6px; margin-bottom:12px;">
+<h1 style="color:#fff; font-size:22px; margin:8px 0 2px;">GSSS SHILLA</h1>
+<p style="color:#e0e7ff; font-size:13px; margin:0;">PIN Reset Verification</p>
+</td></tr>
+<tr><td style="padding: 32px 28px;">
+<h2 style="color:#1e293b; font-size:18px; margin:0 0 8px;">Hello ${student.name},</h2>
+<p style="color:#64748b; font-size:14px; line-height:1.6; margin:0 0 20px;">
+Someone requested to reset your 6-digit portal PIN. Use the OTP below to proceed.
+</p>
+<table width="100%" cellpadding="0" cellspacing="0">
+<tr><td align="center" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px dashed #6366f1; border-radius: 12px; padding: 20px;">
+<p style="margin:0 0 8px; color:#6366f1; font-size:12px; font-weight:600; text-transform:uppercase;">Your OTP Code</p>
+<div style="font-size:36px; font-weight:800; letter-spacing:10px; color:#1e1b4b;">${otp}</div>
+</td></tr>
+</table>
+<p style="color:#94a3b8; font-size:12px; margin:20px 0 0; line-height:1.6;">
+⏱ Valid for <strong>10 minutes</strong>.<br>
+If you didn't request this, please ignore this email — your PIN is safe.
+</p>
+</td></tr>
+<tr><td style="background:#f8fafc; padding: 16px 24px; text-align:center; border-top:1px solid #e2e8f0;">
+<p style="margin:0; color:#94a3b8; font-size:11px;">© ${new Date().getFullYear()} GSSS SHILLA · Automated email</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body></html>`,
+            textContent: `Your PIN Reset OTP: ${otp}\nValid for 10 minutes.`
+          })
+        });
+
+        if (!resp.ok) {
+          const errBody = await resp.text();
+          console.error("Brevo PIN OTP error:", resp.status, errBody);
+        }
+      } catch (emailErr) {
+        console.error("PIN OTP email error:", emailErr.message);
+      }
+    } else {
+      console.log(`📧 PIN OTP for student ${sid}: ${otp}`);
+    }
+
+    res.json({
+      success: true,
+      message: `OTP sent to ${maskedEmail} ✅`,
+      maskedEmail,
+      expiresInMinutes: 10
+    });
+  } catch (err) {
+    console.error("PIN forgot OTP error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ FORGOT PIN — Step 2: OTP verify + naya PIN set
+// ============================================================
+router.post("/pin/forgot/reset", async (req, res) => {
+  try {
+    const { studentId, otp, newPin, confirmPin } = req.body;
+
+    if (!studentId || !otp || !newPin || !confirmPin) {
+      return res.status(400).json({ success: false, message: "All fields required" });
+    }
+
+    if (newPin !== confirmPin) {
+      return res.status(400).json({ success: false, message: "New PIN and Confirm PIN do not match" });
+    }
+
+    const pinErr = validatePin(newPin);
+    if (pinErr) return res.status(400).json({ success: false, message: pinErr });
+
+    const sid = await resolveStudentId(studentId);
+    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const rows = await q(
+      `SELECT * FROM student_pin_reset_otps 
+       WHERE student_id = ? AND expires_at > NOW() 
+       ORDER BY id DESC LIMIT 1`,
+      [sid]
+    );
+
+    if (!rows.length) {
+      return res.status(400).json({ success: false, message: "OTP expired or not found. Please request a new one." });
+    }
+
+    const rec = rows[0];
+
+    if (rec.attempts >= PIN_OTP_MAX_ATTEMPTS) {
+      await q(`DELETE FROM student_pin_reset_otps WHERE id = ?`, [rec.id]);
+      return res.status(400).json({ success: false, message: "Too many wrong attempts. Request a new OTP." });
+    }
+
+    if (String(rec.otp) !== String(otp).trim()) {
+      await q(`UPDATE student_pin_reset_otps SET attempts = attempts + 1 WHERE id = ?`, [rec.id]);
+      return res.status(400).json({
+        success: false,
+        message: `Incorrect OTP. ${PIN_OTP_MAX_ATTEMPTS - rec.attempts - 1} attempts left.`
+      });
+    }
+
+    await q(`UPDATE student_pin_reset_otps SET verified = 1 WHERE id = ?`, [rec.id]);
+
+    const pinRows = await q(`SELECT * FROM student_pins WHERE student_id = ?`, [sid]);
+    const thisMonth = currentMonthYear();
+    const salt = generatePinSalt();
+    const hash = hashPin(newPin, salt);
+
+    if (!pinRows.length) {
+      await q(
+        `INSERT INTO student_pins 
+         (student_id, pin_hash, pin_salt, last_changed_at, change_count_this_month, month_year)
+         VALUES (?, ?, ?, NOW(), 1, ?)`,
+        [sid, hash, salt, thisMonth]
+      );
+    } else {
+      const pinRec = pinRows[0];
+      let changesUsed = pinRec.change_count_this_month || 0;
+      if (pinRec.month_year !== thisMonth) changesUsed = 0;
+
+      if (changesUsed >= MAX_CHANGES_PER_MONTH) {
+        return res.status(429).json({
+          success: false,
+          message: `Monthly limit reached (${MAX_CHANGES_PER_MONTH}/month). Contact admin to reset.`,
+          code: "MONTHLY_LIMIT_REACHED"
+        });
+      }
+
+      await q(
+        `UPDATE student_pins 
+         SET pin_hash = ?, pin_salt = ?, last_changed_at = NOW(),
+             change_count_this_month = ?, month_year = ?,
+             failed_attempts = 0, locked_until = NULL
+         WHERE student_id = ?`,
+        [hash, salt, changesUsed + 1, thisMonth, sid]
+      );
+    }
+
+    await q(`DELETE FROM student_pin_reset_otps WHERE student_id = ?`, [sid]);
+    await logPinHistory(sid, "reset_by_student", "student", req);
+
+    res.json({ success: true, message: "PIN reset successfully ✅ Please login with your new PIN." });
+  } catch (err) {
+    console.error("PIN reset error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ ADMIN — Reset kisi bhi student ka PIN
+// ============================================================
+router.post("/pin/admin/reset", async (req, res) => {
+  try {
+    const { studentId, newPin, adminKey } = req.body;
+
+    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    if (!studentId || !newPin) {
+      return res.status(400).json({ success: false, message: "studentId and newPin required" });
+    }
+
+    const pinErr = validatePin(newPin);
+    if (pinErr) return res.status(400).json({ success: false, message: pinErr });
+
+    const sid = await resolveStudentId(studentId);
+    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const salt = generatePinSalt();
+    const hash = hashPin(newPin, salt);
+    const thisMonth = currentMonthYear();
+
+    const existing = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
+    if (existing.length) {
+      await q(
+        `UPDATE student_pins 
+         SET pin_hash = ?, pin_salt = ?, last_changed_at = NOW(),
+             change_count_this_month = 0, month_year = ?,
+             failed_attempts = 0, locked_until = NULL
+         WHERE student_id = ?`,
+        [hash, salt, thisMonth, sid]
+      );
+    } else {
+      await q(
+        `INSERT INTO student_pins 
+         (student_id, pin_hash, pin_salt, last_changed_at, change_count_this_month, month_year)
+         VALUES (?, ?, ?, NOW(), 0, ?)`,
+        [sid, hash, salt, thisMonth]
+      );
+    }
+
+    await logPinHistory(sid, "reset_by_admin", "admin", req);
+
+    res.json({
+      success: true,
+      message: `PIN reset by admin ✅ (month counter refreshed to 0)`
+    });
+  } catch (err) {
+    console.error("Admin PIN reset error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ ADMIN — Unlock a locked student
+// ============================================================
+router.post("/pin/admin/unlock", async (req, res) => {
+  try {
+    const { studentId, adminKey } = req.body;
+    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    const sid = await resolveStudentId(studentId);
+    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
+
+    await q(
+      `UPDATE student_pins SET failed_attempts = 0, locked_until = NULL WHERE student_id = ?`,
+      [sid]
+    );
+
+    await logPinHistory(sid, "admin_unlock", "admin", req);
+    res.json({ success: true, message: "Account unlocked ✅" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ ADMIN — PIN change history of a student
+// ============================================================
+router.get("/pin/admin/history/:studentId", async (req, res) => {
+  try {
+    const { adminKey } = req.query;
+    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    const sid = await resolveStudentId(req.params.studentId);
+    if (!sid) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const rows = await q(
+      `SELECT id, action, changed_by, ip_address, user_agent, created_at 
+       FROM student_pin_history WHERE student_id = ? 
+       ORDER BY created_at DESC LIMIT 100`,
+      [sid]
+    );
+
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ ADMIN — All students ka PIN status
+// ============================================================
+router.get("/pin/admin/all-status", async (req, res) => {
+  try {
+    const { adminKey, filter } = req.query;
+    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    const thisMonth = currentMonthYear();
+
+    let whereClause = "";
+    const params = [];
+
+    if (filter === "no_pin") {
+      whereClause = "WHERE p.id IS NULL";
+    } else if (filter === "locked") {
+      whereClause = "WHERE p.locked_until IS NOT NULL AND p.locked_until > NOW()";
+    } else if (filter === "needs_change") {
+      whereClause = "WHERE p.id IS NOT NULL AND p.month_year != ?";
+      params.push(thisMonth);
+    } else if (filter === "limit_reached") {
+      whereClause = "WHERE p.change_count_this_month >= ?";
+      params.push(MAX_CHANGES_PER_MONTH);
+    }
+
+    params.push(thisMonth, MAX_CHANGES_PER_MONTH);
+
+    const rows = await q(
+      `SELECT n.id, n.student_id, n.name, n.class, n.email_id, n.mobile_number,
+              p.last_changed_at, p.change_count_this_month, p.month_year,
+              p.locked_until, p.failed_attempts,
+              CASE 
+                WHEN p.id IS NULL THEN 'no_pin'
+                WHEN p.locked_until IS NOT NULL AND p.locked_until > NOW() THEN 'locked'
+                WHEN p.month_year != ? THEN 'needs_change'
+                WHEN p.change_count_this_month >= ? THEN 'limit_reached'
+                ELSE 'ok'
+              END AS pin_status
+       FROM Nstudent n
+       LEFT JOIN student_pins p ON p.student_id = n.id
+       ${whereClause}
+       ORDER BY n.class, n.name
+       LIMIT 500`,
+      params
+    );
+
+    res.json({
+      success: true,
+      monthYear: thisMonth,
+      maxChangesPerMonth: MAX_CHANGES_PER_MONTH,
+      count: rows.length,
+      data: rows
+    });
+  } catch (err) {
+    console.error("Admin all-status error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ ADMIN — Dashboard summary
+// ============================================================
+router.get("/pin/admin/summary", async (req, res) => {
+  try {
+    const { adminKey } = req.query;
+    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    const thisMonth = currentMonthYear();
+
+    const totalStudents = (await q(`SELECT COUNT(*) AS c FROM Nstudent`))[0].c;
+    const totalPins    = (await q(`SELECT COUNT(*) AS c FROM student_pins`))[0].c;
+    const locked       = (await q(`SELECT COUNT(*) AS c FROM student_pins WHERE locked_until IS NOT NULL AND locked_until > NOW()`))[0].c;
+    const needsChange  = (await q(`SELECT COUNT(*) AS c FROM student_pins WHERE month_year != ?`, [thisMonth]))[0].c;
+    const limitReached = (await q(`SELECT COUNT(*) AS c FROM student_pins WHERE change_count_this_month >= ? AND month_year = ?`, [MAX_CHANGES_PER_MONTH, thisMonth]))[0].c;
+
+    res.json({
+      success: true,
+      monthYear: thisMonth,
+      stats: {
+        totalStudents,
+        totalPins,
+        noPin: totalStudents - totalPins,
+        locked,
+        needsChange,
+        limitReached
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// ✅ GET SINGLE (must be LAST among GET routes)
 // ============================================================
 router.get("/:id", async (req, res) => {
   try {
@@ -1494,926 +2422,4 @@ router.get("/:id/pdf", async (req, res) => {
   }
 });
 
-// ============================================================
-// ✅ STUDENT LOGIN VERIFY
-// ============================================================
-// ============================================================
-// ✅ STUDENT LOGIN VERIFY (Email + Student ID)
-// ============================================================
-router.post("/verify-login", async (req, res) => {
-  try {
-    const { email, studentId } = req.body;
-
-    // ---- Validation ----
-    if (!email || !studentId) {
-      return res.status(400).json({
-        success: false,
-        message: "Email and Student ID are required"
-      });
-    }
-
-    const emailClean = String(email).toLowerCase().trim();
-    const sidClean = String(studentId).trim();
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClean)) {
-      return res.status(400).json({
-        success: false,
-        message: "Please enter a valid email address"
-      });
-    }
-
-    if (sidClean.length < 3) {
-      return res.status(400).json({
-        success: false,
-        message: "Student ID must be at least 3 characters"
-      });
-    }
-
-    // ---- DB Lookup: Email + Student ID (case-insensitive) ----
-    const rows = await q(
-      `SELECT * FROM Nstudent 
-       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
-       LIMIT 1`,
-      [emailClean, sidClean.toLowerCase()]
-    );
-
-    if (!rows.length) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or Student ID. Please check your details."
-      });
-    }
-
-    const s = revertStatusIfExpired(rows[0]);
-
-    // ---- Block inactive/suspended students (optional) ----
-    if (s.status && s.status.toLowerCase() === "inactive") {
-      return res.status(403).json({
-        success: false,
-        message: "Your account is inactive. Please contact the school office."
-      });
-    }
-
-    // ---- Generate session token ----
-    const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
-
-    // ---- Remove sensitive internal fields before sending ----
-    const safeStudent = { ...s };
-    for (const k of Object.keys(safeStudent)) {
-      if (k.endsWith("_pid")) delete safeStudent[k];
-      if (k === "aadhar_number") delete safeStudent[k];  // optional
-    }
-
-    res.json({
-      success: true,
-      message: "Login successful ✅",
-      student: safeStudent,
-      token,
-      loginTime: new Date().toISOString()
-    });
-
-  } catch (err) {
-    console.error("❌ Verify-login error:", err.message);
-    res.status(500).json({ success: false, message: "Server error. Please try again." });
-  }
-});
-    // ============================================================
-// ✅ RECOVER CREDENTIAL (Email or Student ID)
-// ============================================================
-router.post("/recover-credential", async (req, res) => {
-  try {
-    const { recoverType } = req.body;
-
-    // ---- Validation ----
-    if (!recoverType || !["email", "studentId"].includes(recoverType)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid recovery type"
-      });
-    }
-
-    // ========== RECOVER EMAIL ==========
-    if (recoverType === "email") {
-      const { class: cls, studentId, apaarId, dob, motherName } = req.body;
-
-      if (!cls || !studentId || !apaarId || !dob || !motherName) {
-        return res.status(400).json({
-          success: false,
-          message: "All fields required"
-        });
-      }
-
-      if (!/^\d{12}$/.test(String(apaarId).replace(/\s/g, ""))) {
-        return res.status(400).json({
-          success: false,
-          message: "APAAR ID must be 12 digits"
-        });
-      }
-
-      const rows = await q(
-        `SELECT id, name, father_name, class, student_id, email_id
-         FROM Nstudent 
-         WHERE class = ? 
-           AND LOWER(student_id) = LOWER(?)
-           AND apaar_id = ?
-           AND DATE(dob) = DATE(?)
-           AND LOWER(mother_name) = LOWER(?)
-         LIMIT 1`,
-        [
-          cls,
-          String(studentId).trim(),
-          String(apaarId).replace(/\s/g, "").trim(),
-          dob,
-          String(motherName).trim()
-        ]
-      );
-
-      if (!rows.length) {
-        return res.status(401).json({
-          success: false,
-          message: "No matching record found. Please check your details."
-        });
-      }
-
-      const s = rows[0];
-
-      // Only return safe fields
-      return res.json({
-        success: true,
-        student: {
-          class: s.class,
-          name: s.name,
-          fatherName: s.father_name,
-          email: s.email_id
-        }
-      });
-    }
-
-    // ========== RECOVER STUDENT ID ==========
-    if (recoverType === "studentId") {
-      const { class: cls, email, aadharNumber, dob, fatherName } = req.body;
-
-      if (!cls || !email || !aadharNumber || !dob || !fatherName) {
-        return res.status(400).json({
-          success: false,
-          message: "All fields required"
-        });
-      }
-
-      const aadhaar = String(aadharNumber).replace(/[\s-]/g, "");
-      if (!/^\d{12}$/.test(aadhaar)) {
-        return res.status(400).json({
-          success: false,
-          message: "Aadhaar must be 12 digits"
-        });
-      }
-
-      const rows = await q(
-        `SELECT id, name, father_name, class, student_id, email_id
-         FROM Nstudent 
-         WHERE class = ?
-           AND LOWER(email_id) = LOWER(?)
-           AND aadhar_number = ?
-           AND DATE(dob) = DATE(?)
-           AND LOWER(father_name) = LOWER(?)
-         LIMIT 1`,
-        [
-          cls,
-          String(email).trim(),
-          aadhaar,
-          dob,
-          String(fatherName).trim()
-        ]
-      );
-
-      if (!rows.length) {
-        return res.status(401).json({
-          success: false,
-          message: "No matching record found. Please check your details."
-        });
-      }
-
-      const s = rows[0];
-
-      return res.json({
-        success: true,
-        student: {
-          class: s.class,
-          name: s.name,
-          fatherName: s.father_name,
-          studentId: s.student_id
-        }
-      });
-    }
-
-    return res.status(400).json({ success: false, message: "Unknown recovery type" });
-
-  } catch (err) {
-    console.error("❌ recover-credential error:", err.message);
-    res.status(500).json({ success: false, message: "Server error. Please try again." });
-  }
-});
-// ============================================================
-// ============================================================
-// ✅ ====== STUDENT 6-DIGIT PIN SYSTEM (ROUTES) ======
-// ============================================================
-// ============================================================
-
-// ============================================================
-// ✅ PIN STATUS — Check if student has PIN / needs monthly change
-// ============================================================
-router.get("/pin/status/:studentId", async (req, res) => {
-  try {
-    const studentId = parseInt(req.params.studentId);
-    if (!studentId) return res.status(400).json({ success: false, message: "Invalid student ID" });
-
-    const rows = await q(
-      `SELECT student_id, last_changed_at, change_count_this_month, month_year, locked_until, failed_attempts
-       FROM student_pins WHERE student_id = ?`,
-      [studentId]
-    );
-
-    const thisMonth = currentMonthYear();
-
-    if (!rows.length) {
-      return res.json({
-        success: true,
-        hasPin: false,
-        needsChange: true,
-        message: "No PIN set. Please create one to secure your account."
-      });
-    }
-
-    const r = rows[0];
-    const locked = r.locked_until && new Date(r.locked_until) > new Date();
-    const monthChanged = r.month_year !== thisMonth;
-    const changesUsed = monthChanged ? 0 : r.change_count_this_month;
-    const remaining = Math.max(0, MAX_CHANGES_PER_MONTH - changesUsed);
-    const needsChange = monthChanged;   // last month ka hai → change zaroori
-
-    res.json({
-      success: true,
-      hasPin: true,
-      locked,
-      lockedUntil: r.locked_until,
-      failedAttempts: r.failed_attempts || 0,
-      lastChangedAt: r.last_changed_at,
-      changesUsed,
-      changesRemaining: remaining,
-      maxChangesPerMonth: MAX_CHANGES_PER_MONTH,
-      needsChange,
-      monthYear: thisMonth
-    });
-  } catch (err) {
-    console.error("PIN status error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ CREATE PIN (first time only)
-// ============================================================
-router.post("/pin/create", async (req, res) => {
-  try {
-    const { studentId, pin, confirmPin } = req.body;
-
-    if (!studentId || !pin || !confirmPin) {
-      return res.status(400).json({ success: false, message: "All fields required" });
-    }
-
-    const sid = parseInt(studentId);
-    if (pin !== confirmPin) {
-      return res.status(400).json({ success: false, message: "PIN and Confirm PIN do not match" });
-    }
-
-    const pinErr = validatePin(pin);
-    if (pinErr) return res.status(400).json({ success: false, message: pinErr });
-
-    const stu = await q(`SELECT id, name FROM Nstudent WHERE id = ?`, [sid]);
-    if (!stu.length) return res.status(404).json({ success: false, message: "Student not found" });
-
-    const existing = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
-    if (existing.length) {
-      return res.status(409).json({
-        success: false,
-        message: "PIN already exists. Use 'Change PIN' instead."
-      });
-    }
-
-    const salt = generatePinSalt();
-    const hash = hashPin(pin, salt);
-    const thisMonth = currentMonthYear();
-
-    await q(
-      `INSERT INTO student_pins 
-       (student_id, pin_hash, pin_salt, last_changed_at, change_count_this_month, month_year)
-       VALUES (?, ?, ?, NOW(), 1, ?)`,
-      [sid, hash, salt, thisMonth]
-    );
-
-    await logPinHistory(sid, "create", "student", req);
-
-    res.status(201).json({
-      success: true,
-      message: "PIN created successfully ✅",
-      changesRemaining: MAX_CHANGES_PER_MONTH - 1
-    });
-  } catch (err) {
-    console.error("Create PIN error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ CHANGE PIN (requires old PIN, monthly limit applied)
-// ============================================================
-router.post("/pin/change", async (req, res) => {
-  try {
-    const { studentId, oldPin, newPin, confirmPin } = req.body;
-
-    if (!studentId || !oldPin || !newPin || !confirmPin) {
-      return res.status(400).json({ success: false, message: "All fields required" });
-    }
-
-    const sid = parseInt(studentId);
-
-    if (newPin !== confirmPin) {
-      return res.status(400).json({ success: false, message: "New PIN and Confirm PIN do not match" });
-    }
-
-    const pinErr = validatePin(newPin);
-    if (pinErr) return res.status(400).json({ success: false, message: pinErr });
-
-    if (oldPin === newPin) {
-      return res.status(400).json({ success: false, message: "New PIN must be different from old PIN" });
-    }
-
-    const rows = await q(`SELECT * FROM student_pins WHERE student_id = ?`, [sid]);
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "No PIN set. Please create one first." });
-    }
-
-    const pinRec = rows[0];
-
-    // Lock check
-    if (pinRec.locked_until && new Date(pinRec.locked_until) > new Date()) {
-      const mins = Math.ceil((new Date(pinRec.locked_until) - new Date()) / 60000);
-      return res.status(423).json({
-        success: false,
-        message: `Account temporarily locked. Try again in ${mins} minute(s).`,
-        lockedUntil: pinRec.locked_until
-      });
-    }
-
-    // Old PIN verify
-    const oldHash = hashPin(oldPin, pinRec.pin_salt);
-    if (!safeCompareHex(oldHash, pinRec.pin_hash)) {
-      const newFailed = (pinRec.failed_attempts || 0) + 1;
-      let lockUntil = null;
-      let msg = "Old PIN is incorrect";
-
-      if (newFailed >= MAX_FAILED_ATTEMPTS) {
-        lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
-        msg = "Too many failed attempts. Account locked for 30 minutes.";
-      } else {
-        msg = `Old PIN is incorrect. ${MAX_FAILED_ATTEMPTS - newFailed} attempts remaining.`;
-      }
-
-      await q(
-        `UPDATE student_pins SET failed_attempts = ?, locked_until = ? WHERE student_id = ?`,
-        [newFailed, lockUntil, sid]
-      );
-
-      return res.status(401).json({ success: false, message: msg, lockedUntil: lockUntil });
-    }
-
-    // Monthly limit check
-    const thisMonth = currentMonthYear();
-    let changesUsed = pinRec.change_count_this_month || 0;
-    if (pinRec.month_year !== thisMonth) changesUsed = 0;
-
-    if (changesUsed >= MAX_CHANGES_PER_MONTH) {
-      return res.status(429).json({
-        success: false,
-        message: `You can change PIN max ${MAX_CHANGES_PER_MONTH} times per month. Limit reached for ${thisMonth}.`,
-        changesUsed,
-        changesRemaining: 0
-      });
-    }
-
-    // Update PIN
-    const newSalt = generatePinSalt();
-    const newHash = hashPin(newPin, newSalt);
-
-    await q(
-      `UPDATE student_pins 
-       SET pin_hash = ?, pin_salt = ?, last_changed_at = NOW(),
-           change_count_this_month = ?, month_year = ?,
-           failed_attempts = 0, locked_until = NULL
-       WHERE student_id = ?`,
-      [newHash, newSalt, changesUsed + 1, thisMonth, sid]
-    );
-
-    await logPinHistory(sid, "change", "student", req);
-
-    const remaining = MAX_CHANGES_PER_MONTH - (changesUsed + 1);
-
-    res.json({
-      success: true,
-      message: "PIN changed successfully ✅",
-      changesRemaining: remaining,
-      maxChangesPerMonth: MAX_CHANGES_PER_MONTH
-    });
-  } catch (err) {
-    console.error("Change PIN error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ VERIFY PIN — Login flow me use hoga
-// ============================================================
-router.post("/pin/verify", async (req, res) => {
-  try {
-    const { studentId, pin } = req.body;
-    if (!studentId || !pin) {
-      return res.status(400).json({ success: false, message: "Student ID and PIN required" });
-    }
-
-    const sid = parseInt(studentId);
-    const rows = await q(`SELECT * FROM student_pins WHERE student_id = ?`, [sid]);
-
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "No PIN set for this student" });
-    }
-
-    const pinRec = rows[0];
-
-    if (pinRec.locked_until && new Date(pinRec.locked_until) > new Date()) {
-      const mins = Math.ceil((new Date(pinRec.locked_until) - new Date()) / 60000);
-      return res.status(423).json({
-        success: false,
-        message: `Account temporarily locked. Try again in ${mins} minute(s).`,
-        lockedUntil: pinRec.locked_until
-      });
-    }
-
-    const hash = hashPin(String(pin), pinRec.pin_salt);
-    if (!safeCompareHex(hash, pinRec.pin_hash)) {
-      const newFailed = (pinRec.failed_attempts || 0) + 1;
-      let lockUntil = null;
-      let msg = "Incorrect PIN";
-
-      if (newFailed >= MAX_FAILED_ATTEMPTS) {
-        lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
-        msg = "Too many failed attempts. Locked for 30 minutes.";
-      } else {
-        msg = `Incorrect PIN. ${MAX_FAILED_ATTEMPTS - newFailed} attempts left.`;
-      }
-
-      await q(
-        `UPDATE student_pins SET failed_attempts = ?, locked_until = ? WHERE student_id = ?`,
-        [newFailed, lockUntil, sid]
-      );
-
-      return res.status(401).json({ success: false, message: msg, lockedUntil: lockUntil });
-    }
-
-    await q(
-      `UPDATE student_pins SET failed_attempts = 0, locked_until = NULL WHERE student_id = ?`,
-      [sid]
-    );
-
-    const thisMonth = currentMonthYear();
-    const needsChange = pinRec.month_year !== thisMonth;
-
-    res.json({
-      success: true,
-      verified: true,
-      message: "PIN verified ✅",
-      needsChange,
-      lastChangedAt: pinRec.last_changed_at
-    });
-  } catch (err) {
-    console.error("Verify PIN error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ FORGOT PIN — Step 1: OTP bhejo registered email pe
-// ============================================================
-router.post("/pin/forgot/request-otp", async (req, res) => {
-  try {
-    const { studentId } = req.body;
-    if (!studentId) return res.status(400).json({ success: false, message: "Student ID required" });
-
-    const sid = parseInt(studentId);
-    const stu = await q(`SELECT id, name, email_id FROM Nstudent WHERE id = ?`, [sid]);
-    if (!stu.length) return res.status(404).json({ success: false, message: "Student not found" });
-
-    const student = stu[0];
-    if (!student.email_id) {
-      return res.status(400).json({ success: false, message: "No email registered. Contact admin." });
-    }
-
-    // Check if PIN exists
-    const pinExists = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
-    if (!pinExists.length) {
-      return res.status(404).json({
-        success: false,
-        message: "No PIN set. Please create PIN first (dashboard se)."
-      });
-    }
-
-    const otp = genPinOTP();
-    const expiresAt = new Date(Date.now() + PIN_OTP_EXPIRY_MS);
-
-    await q(`DELETE FROM student_pin_reset_otps WHERE student_id = ?`, [sid]);
-    await q(
-      `INSERT INTO student_pin_reset_otps (student_id, otp, expires_at) VALUES (?, ?, ?)`,
-      [sid, otp, expiresAt]
-    );
-
-    // Mask email for response
-    const [namePart, domain] = String(student.email_id).split("@");
-    const maskedEmail = namePart.substring(0, 2) + "***@" + domain;
-
-    // Send email via Brevo
-    if (BREVO_API_KEY) {
-      try {
-        const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "api-key": BREVO_API_KEY
-          },
-          body: JSON.stringify({
-            sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
-            to: [{ email: student.email_id }],
-            subject: "🔐 PIN Reset OTP — GSSS Shilla",
-            htmlContent: `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"></head>
-<body style="margin:0; padding:0; background:#f1f5f9; font-family:Arial,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
-<tr><td align="center">
-<table width="520" cellpadding="0" cellspacing="0" style="background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 4px 18px rgba(0,0,0,0.08);">
-<tr><td style="background: linear-gradient(135deg, #5b6bc0 0%, #7c4d9e 100%); padding: 32px 24px; text-align:center;">
-<img src="${SCHOOL_LOGO_URL}" alt="GSSS" width="80" height="80" style="border-radius:50%; background:#fff; padding:6px; margin-bottom:12px;">
-<h1 style="color:#fff; font-size:22px; margin:8px 0 2px;">GSSS SHILLA</h1>
-<p style="color:#e0e7ff; font-size:13px; margin:0;">PIN Reset Verification</p>
-</td></tr>
-<tr><td style="padding: 32px 28px;">
-<h2 style="color:#1e293b; font-size:18px; margin:0 0 8px;">Hello ${student.name},</h2>
-<p style="color:#64748b; font-size:14px; line-height:1.6; margin:0 0 20px;">
-Someone requested to reset your 6-digit portal PIN. Use the OTP below to proceed.
-</p>
-<table width="100%" cellpadding="0" cellspacing="0">
-<tr><td align="center" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px dashed #6366f1; border-radius: 12px; padding: 20px;">
-<p style="margin:0 0 8px; color:#6366f1; font-size:12px; font-weight:600; text-transform:uppercase;">Your OTP Code</p>
-<div style="font-size:36px; font-weight:800; letter-spacing:10px; color:#1e1b4b;">${otp}</div>
-</td></tr>
-</table>
-<p style="color:#94a3b8; font-size:12px; margin:20px 0 0; line-height:1.6;">
-⏱ Valid for <strong>10 minutes</strong>.<br>
-If you didn't request this, please ignore this email — your PIN is safe.
-</p>
-</td></tr>
-<tr><td style="background:#f8fafc; padding: 16px 24px; text-align:center; border-top:1px solid #e2e8f0;">
-<p style="margin:0; color:#94a3b8; font-size:11px;">© ${new Date().getFullYear()} GSSS SHILLA · Automated email</p>
-</td></tr>
-</table>
-</td></tr>
-</table>
-</body></html>`,
-            textContent: `Your PIN Reset OTP: ${otp}\nValid for 10 minutes.`
-          })
-        });
-
-        if (!resp.ok) {
-          const errBody = await resp.text();
-          console.error("Brevo PIN OTP error:", resp.status, errBody);
-          // Don't fail — OTP saved in DB, admin can check logs
-        }
-      } catch (emailErr) {
-        console.error("PIN OTP email error:", emailErr.message);
-      }
-    } else {
-      console.log(`📧 PIN OTP for student ${sid}: ${otp}`);
-    }
-
-    res.json({
-      success: true,
-      message: `OTP sent to ${maskedEmail} ✅`,
-      maskedEmail,
-      expiresInMinutes: 10
-    });
-  } catch (err) {
-    console.error("PIN forgot OTP error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ FORGOT PIN — Step 2: OTP verify + naya PIN set
-// ============================================================
-router.post("/pin/forgot/reset", async (req, res) => {
-  try {
-    const { studentId, otp, newPin, confirmPin } = req.body;
-
-    if (!studentId || !otp || !newPin || !confirmPin) {
-      return res.status(400).json({ success: false, message: "All fields required" });
-    }
-
-    const sid = parseInt(studentId);
-
-    if (newPin !== confirmPin) {
-      return res.status(400).json({ success: false, message: "New PIN and Confirm PIN do not match" });
-    }
-
-    const pinErr = validatePin(newPin);
-    if (pinErr) return res.status(400).json({ success: false, message: pinErr });
-
-    const rows = await q(
-      `SELECT * FROM student_pin_reset_otps 
-       WHERE student_id = ? AND expires_at > NOW() 
-       ORDER BY id DESC LIMIT 1`,
-      [sid]
-    );
-
-    if (!rows.length) {
-      return res.status(400).json({ success: false, message: "OTP expired or not found. Please request a new one." });
-    }
-
-    const rec = rows[0];
-
-    if (rec.attempts >= PIN_OTP_MAX_ATTEMPTS) {
-      await q(`DELETE FROM student_pin_reset_otps WHERE id = ?`, [rec.id]);
-      return res.status(400).json({ success: false, message: "Too many wrong attempts. Request a new OTP." });
-    }
-
-    if (String(rec.otp) !== String(otp).trim()) {
-      await q(`UPDATE student_pin_reset_otps SET attempts = attempts + 1 WHERE id = ?`, [rec.id]);
-      return res.status(400).json({
-        success: false,
-        message: `Incorrect OTP. ${PIN_OTP_MAX_ATTEMPTS - rec.attempts - 1} attempts left.`
-      });
-    }
-
-    await q(`UPDATE student_pin_reset_otps SET verified = 1 WHERE id = ?`, [rec.id]);
-
-    // Reset PIN
-    const pinRows = await q(`SELECT * FROM student_pins WHERE student_id = ?`, [sid]);
-    const thisMonth = currentMonthYear();
-    const salt = generatePinSalt();
-    const hash = hashPin(newPin, salt);
-
-    if (!pinRows.length) {
-      await q(
-        `INSERT INTO student_pins 
-         (student_id, pin_hash, pin_salt, last_changed_at, change_count_this_month, month_year)
-         VALUES (?, ?, ?, NOW(), 1, ?)`,
-        [sid, hash, salt, thisMonth]
-      );
-    } else {
-      const pinRec = pinRows[0];
-      let changesUsed = pinRec.change_count_this_month || 0;
-      if (pinRec.month_year !== thisMonth) changesUsed = 0;
-
-      if (changesUsed >= MAX_CHANGES_PER_MONTH) {
-        return res.status(429).json({
-          success: false,
-          message: `Monthly limit reached (${MAX_CHANGES_PER_MONTH}/month). Contact admin to reset.`,
-          code: "MONTHLY_LIMIT_REACHED"
-        });
-      }
-
-      await q(
-        `UPDATE student_pins 
-         SET pin_hash = ?, pin_salt = ?, last_changed_at = NOW(),
-             change_count_this_month = ?, month_year = ?,
-             failed_attempts = 0, locked_until = NULL
-         WHERE student_id = ?`,
-        [hash, salt, changesUsed + 1, thisMonth, sid]
-      );
-    }
-
-    await q(`DELETE FROM student_pin_reset_otps WHERE student_id = ?`, [sid]);
-    await logPinHistory(sid, "reset_by_student", "student", req);
-
-    res.json({ success: true, message: "PIN reset successfully ✅ Please login with your new PIN." });
-  } catch (err) {
-    console.error("PIN reset error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ ADMIN — Reset kisi bhi student ka PIN (monthly counter refresh)
-// ============================================================
-router.post("/pin/admin/reset", async (req, res) => {
-  try {
-    const { studentId, newPin, adminKey } = req.body;
-
-    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ success: false, message: "Unauthorized" });
-    }
-
-    if (!studentId || !newPin) {
-      return res.status(400).json({ success: false, message: "studentId and newPin required" });
-    }
-
-    const pinErr = validatePin(newPin);
-    if (pinErr) return res.status(400).json({ success: false, message: pinErr });
-
-    const sid = parseInt(studentId);
-    const stu = await q(`SELECT id, name FROM Nstudent WHERE id = ?`, [sid]);
-    if (!stu.length) return res.status(404).json({ success: false, message: "Student not found" });
-
-    const salt = generatePinSalt();
-    const hash = hashPin(newPin, salt);
-    const thisMonth = currentMonthYear();
-
-    const existing = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
-    if (existing.length) {
-      await q(
-        `UPDATE student_pins 
-         SET pin_hash = ?, pin_salt = ?, last_changed_at = NOW(),
-             change_count_this_month = 0, month_year = ?,
-             failed_attempts = 0, locked_until = NULL
-         WHERE student_id = ?`,
-        [hash, salt, thisMonth, sid]
-      );
-    } else {
-      await q(
-        `INSERT INTO student_pins 
-         (student_id, pin_hash, pin_salt, last_changed_at, change_count_this_month, month_year)
-         VALUES (?, ?, ?, NOW(), 0, ?)`,
-        [sid, hash, salt, thisMonth]
-      );
-    }
-
-    await logPinHistory(sid, "reset_by_admin", "admin", req);
-
-    res.json({
-      success: true,
-      message: `PIN reset by admin ✅ (month counter refreshed to 0)`
-    });
-  } catch (err) {
-    console.error("Admin PIN reset error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ ADMIN — Unlock a locked student
-// ============================================================
-router.post("/pin/admin/unlock", async (req, res) => {
-  try {
-    const { studentId, adminKey } = req.body;
-    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ success: false, message: "Unauthorized" });
-    }
-
-    const sid = parseInt(studentId);
-    await q(
-      `UPDATE student_pins SET failed_attempts = 0, locked_until = NULL WHERE student_id = ?`,
-      [sid]
-    );
-
-    await logPinHistory(sid, "admin_unlock", "admin", req);
-    res.json({ success: true, message: "Account unlocked ✅" });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ ADMIN — PIN change history of a student
-// ============================================================
-router.get("/pin/admin/history/:studentId", async (req, res) => {
-  try {
-    const { adminKey } = req.query;
-    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ success: false, message: "Unauthorized" });
-    }
-
-    const sid = parseInt(req.params.studentId);
-    const rows = await q(
-      `SELECT id, action, changed_by, ip_address, user_agent, created_at 
-       FROM student_pin_history WHERE student_id = ? 
-       ORDER BY created_at DESC LIMIT 100`,
-      [sid]
-    );
-
-    res.json({ success: true, data: rows });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ ADMIN — All students ka PIN status (with monthly change alerts)
-// ============================================================
-router.get("/pin/admin/all-status", async (req, res) => {
-  try {
-    const { adminKey, filter } = req.query;
-    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ success: false, message: "Unauthorized" });
-    }
-
-    const thisMonth = currentMonthYear();
-
-    let whereClause = "";
-    if (filter === "no_pin") whereClause = "WHERE p.id IS NULL";
-    else if (filter === "locked") whereClause = "WHERE p.locked_until IS NOT NULL AND p.locked_until > NOW()";
-    else if (filter === "needs_change") whereClause = "WHERE p.id IS NOT NULL AND p.month_year != ?";
-    else if (filter === "limit_reached") whereClause = "WHERE p.change_count_this_month >= ?";
-
-    const params = [];
-    if (filter === "needs_change") params.push(thisMonth);
-    if (filter === "limit_reached") params.push(MAX_CHANGES_PER_MONTH);
-
-    const rows = await q(
-      `SELECT n.id, n.student_id, n.name, n.class, n.email_id, n.mobile_number,
-              p.last_changed_at, p.change_count_this_month, p.month_year,
-              p.locked_until, p.failed_attempts,
-              CASE 
-                WHEN p.id IS NULL THEN 'no_pin'
-                WHEN p.locked_until IS NOT NULL AND p.locked_until > NOW() THEN 'locked'
-                WHEN p.month_year != ? THEN 'needs_change'
-                WHEN p.change_count_this_month >= ? THEN 'limit_reached'
-                ELSE 'ok'
-              END AS pin_status
-       FROM Nstudent n
-       LEFT JOIN student_pins p ON p.student_id = n.id
-       ${whereClause}
-       ORDER BY n.class, n.name
-       LIMIT 500`,
-      filter === "needs_change" || filter === "limit_reached"
-        ? params
-        : [thisMonth, MAX_CHANGES_PER_MONTH]
-    );
-
-    res.json({
-      success: true,
-      monthYear: thisMonth,
-      maxChangesPerMonth: MAX_CHANGES_PER_MONTH,
-      count: rows.length,
-      data: rows
-    });
-  } catch (err) {
-    console.error("Admin all-status error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ ADMIN — Dashboard summary (counts)
-// ============================================================
-router.get("/pin/admin/summary", async (req, res) => {
-  try {
-    const { adminKey } = req.query;
-    const ADMIN_KEY = process.env.ADMIN_PIN_KEY || "GSSS_ADMIN_2026";
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ success: false, message: "Unauthorized" });
-    }
-
-    const thisMonth = currentMonthYear();
-
-    const totalStudents = (await q(`SELECT COUNT(*) AS c FROM Nstudent`))[0].c;
-    const totalPins    = (await q(`SELECT COUNT(*) AS c FROM student_pins`))[0].c;
-    const locked       = (await q(`SELECT COUNT(*) AS c FROM student_pins WHERE locked_until IS NOT NULL AND locked_until > NOW()`))[0].c;
-    const needsChange  = (await q(`SELECT COUNT(*) AS c FROM student_pins WHERE month_year != ?`, [thisMonth]))[0].c;
-    const limitReached = (await q(`SELECT COUNT(*) AS c FROM student_pins WHERE change_count_this_month >= ? AND month_year = ?`, [MAX_CHANGES_PER_MONTH, thisMonth]))[0].c;
-
-    res.json({
-      success: true,
-      monthYear: thisMonth,
-      stats: {
-        totalStudents,
-        totalPins,
-        noPin: totalStudents - totalPins,
-        locked,
-        needsChange,
-        limitReached
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// ✅ END PIN SYSTEM
-// ============================================================
-
 module.exports = router;
-
-
-
