@@ -1509,6 +1509,141 @@ router.post("/verify-login", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error. Please try again." });
   }
 });
-    
+    // ============================================================
+// ✅ RECOVER CREDENTIAL (Email or Student ID)
+// ============================================================
+router.post("/recover-credential", async (req, res) => {
+  try {
+    const { recoverType } = req.body;
+
+    // ---- Validation ----
+    if (!recoverType || !["email", "studentId"].includes(recoverType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid recovery type"
+      });
+    }
+
+    // ========== RECOVER EMAIL ==========
+    if (recoverType === "email") {
+      const { class: cls, studentId, apaarId, dob, motherName } = req.body;
+
+      if (!cls || !studentId || !apaarId || !dob || !motherName) {
+        return res.status(400).json({
+          success: false,
+          message: "All fields required"
+        });
+      }
+
+      if (!/^\d{12}$/.test(String(apaarId).replace(/\s/g, ""))) {
+        return res.status(400).json({
+          success: false,
+          message: "APAAR ID must be 12 digits"
+        });
+      }
+
+      const rows = await q(
+        `SELECT id, name, father_name, class, student_id, email_id
+         FROM Nstudent 
+         WHERE class = ? 
+           AND LOWER(student_id) = LOWER(?)
+           AND apaar_id = ?
+           AND DATE(dob) = DATE(?)
+           AND LOWER(mother_name) = LOWER(?)
+         LIMIT 1`,
+        [
+          cls,
+          String(studentId).trim(),
+          String(apaarId).replace(/\s/g, "").trim(),
+          dob,
+          String(motherName).trim()
+        ]
+      );
+
+      if (!rows.length) {
+        return res.status(401).json({
+          success: false,
+          message: "No matching record found. Please check your details."
+        });
+      }
+
+      const s = rows[0];
+
+      // Only return safe fields
+      return res.json({
+        success: true,
+        student: {
+          class: s.class,
+          name: s.name,
+          fatherName: s.father_name,
+          email: s.email_id
+        }
+      });
+    }
+
+    // ========== RECOVER STUDENT ID ==========
+    if (recoverType === "studentId") {
+      const { class: cls, email, aadharNumber, dob, fatherName } = req.body;
+
+      if (!cls || !email || !aadharNumber || !dob || !fatherName) {
+        return res.status(400).json({
+          success: false,
+          message: "All fields required"
+        });
+      }
+
+      const aadhaar = String(aadharNumber).replace(/[\s-]/g, "");
+      if (!/^\d{12}$/.test(aadhaar)) {
+        return res.status(400).json({
+          success: false,
+          message: "Aadhaar must be 12 digits"
+        });
+      }
+
+      const rows = await q(
+        `SELECT id, name, father_name, class, student_id, email_id
+         FROM Nstudent 
+         WHERE class = ?
+           AND LOWER(email_id) = LOWER(?)
+           AND aadhar_number = ?
+           AND DATE(dob) = DATE(?)
+           AND LOWER(father_name) = LOWER(?)
+         LIMIT 1`,
+        [
+          cls,
+          String(email).trim(),
+          aadhaar,
+          dob,
+          String(fatherName).trim()
+        ]
+      );
+
+      if (!rows.length) {
+        return res.status(401).json({
+          success: false,
+          message: "No matching record found. Please check your details."
+        });
+      }
+
+      const s = rows[0];
+
+      return res.json({
+        success: true,
+        student: {
+          class: s.class,
+          name: s.name,
+          fatherName: s.father_name,
+          studentId: s.student_id
+        }
+      });
+    }
+
+    return res.status(400).json({ success: false, message: "Unknown recovery type" });
+
+  } catch (err) {
+    console.error("❌ recover-credential error:", err.message);
+    res.status(500).json({ success: false, message: "Server error. Please try again." });
+  }
+});
 
 module.exports = router;
