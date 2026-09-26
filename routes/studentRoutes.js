@@ -1429,25 +1429,86 @@ router.get("/:id/pdf", async (req, res) => {
 // ============================================================
 // ✅ STUDENT LOGIN VERIFY
 // ============================================================
+// ============================================================
+// ✅ STUDENT LOGIN VERIFY (Email + Student ID)
+// ============================================================
 router.post("/verify-login", async (req, res) => {
   try {
-    const { class: cls, studentId, apaarId, dob } = req.body;
-    if (!cls || !studentId || !apaarId || !dob) return res.status(400).json({ success: false, message: "All fields required" });
-    if (!/^\d{12}$/.test(apaarId)) return res.status(400).json({ success: false, message: "APAAR ID must be 12 digits" });
+    const { email, studentId } = req.body;
 
+    // ---- Validation ----
+    if (!email || !studentId) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and Student ID are required"
+      });
+    }
+
+    const emailClean = String(email).toLowerCase().trim();
+    const sidClean = String(studentId).trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClean)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address"
+      });
+    }
+
+    if (sidClean.length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: "Student ID must be at least 3 characters"
+      });
+    }
+
+    // ---- DB Lookup: Email + Student ID (case-insensitive) ----
     const rows = await q(
-      `SELECT * FROM Nstudent WHERE class = ? AND student_id = ? AND apaar_id = ? AND DATE(dob) = DATE(?) LIMIT 1`,
-      [cls, studentId, apaarId, dob]
+      `SELECT * FROM Nstudent 
+       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
+       LIMIT 1`,
+      [emailClean, sidClean.toLowerCase()]
     );
-    if (!rows.length) return res.status(401).json({ success: false, message: "Invalid credentials" });
+
+    if (!rows.length) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or Student ID. Please check your details."
+      });
+    }
 
     const s = revertStatusIfExpired(rows[0]);
-    const token = Buffer.from(`${s.id}-${Date.now()}`).toString("base64");
-    const safeStudent = { ...s };
-    for (const k of Object.keys(safeStudent)) if (k.endsWith("_pid")) delete safeStudent[k];
 
-    res.json({ success: true, message: "Login successful ✅", student: safeStudent, token });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+    // ---- Block inactive/suspended students (optional) ----
+    if (s.status && s.status.toLowerCase() === "inactive") {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is inactive. Please contact the school office."
+      });
+    }
+
+    // ---- Generate session token ----
+    const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
+
+    // ---- Remove sensitive internal fields before sending ----
+    const safeStudent = { ...s };
+    for (const k of Object.keys(safeStudent)) {
+      if (k.endsWith("_pid")) delete safeStudent[k];
+      if (k === "aadhar_number") delete safeStudent[k];  // optional
+    }
+
+    res.json({
+      success: true,
+      message: "Login successful ✅",
+      student: safeStudent,
+      token,
+      loginTime: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error("❌ Verify-login error:", err.message);
+    res.status(500).json({ success: false, message: "Server error. Please try again." });
+  }
 });
+    
 
 module.exports = router;
