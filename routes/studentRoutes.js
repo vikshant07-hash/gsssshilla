@@ -1318,6 +1318,83 @@ router.post(
 // ============================================================
 // ✅ STUDENT LOGIN VERIFY (Email + Student ID) — Legacy
 // ============================================================
+// ============================================================
+// ✅ CHECK EMAIL — Student verify (step 1)
+// ============================================================
+router.post("/check-email", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: "Valid email required" });
+    }
+    const emailClean = String(email).toLowerCase().trim();
+
+    const rows = await q(
+      `SELECT id FROM Nstudent WHERE LOWER(email_id) = ? LIMIT 1`,
+      [emailClean]
+    );
+
+    if (!rows.length) {
+      return res.json({
+        success: true,
+        exists: false,
+        message: "Email not registered"
+      });
+    }
+
+    return res.json({
+      success: true,
+      exists: true,
+      message: "Email verified"
+    });
+  } catch (err) {
+    console.error("check-email error:", err.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ============================================================
+// ✅ CHECK STUDENT ID — Match with email (step 2)
+// ============================================================
+router.post("/check-student-id", async (req, res) => {
+  try {
+    const { email, studentId } = req.body;
+    if (!email || !studentId) {
+      return res.status(400).json({ success: false, message: "Email and Student ID required" });
+    }
+
+    const emailClean = String(email).toLowerCase().trim();
+    const sidClean = String(studentId).trim();
+
+    if (sidClean.length < 3) {
+      return res.status(400).json({ success: false, message: "Student ID must be at least 3 characters" });
+    }
+
+    const rows = await q(
+      `SELECT id FROM Nstudent 
+       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
+       LIMIT 1`,
+      [emailClean, sidClean.toLowerCase()]
+    );
+
+    if (!rows.length) {
+      return res.json({
+        success: true,
+        matches: false,
+        message: "Student ID does not match this email"
+      });
+    }
+
+    return res.json({
+      success: true,
+      matches: true,
+      message: "Identity verified"
+    });
+  } catch (err) {
+    console.error("check-student-id error:", err.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
 router.post("/verify-login", async (req, res) => {
   try {
     const { email, studentId } = req.body;
