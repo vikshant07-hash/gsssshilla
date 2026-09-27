@@ -457,6 +457,77 @@ router.get('/csrf-token', (req, res) => {
     const csrfToken = uuidv4();
     req.session.csrfToken = csrfToken;
     res.json({ success: true, token: csrfToken });
+    
+});
+
+
+// ============================================================
+// CHECK USERNAME — PUBLIC
+// ============================================================
+router.post('/check-username', async (req, res) => {
+    const { username } = req.body;
+
+    if (!username || String(username).trim().length < 3) {
+        return res.status(400).json({
+            success: false,
+            exists: false,
+            message: 'User ID must be at least 3 characters'
+        });
+    }
+
+    try {
+        const admin = findAdminByUsername(username);
+
+        if (!admin) {
+            return res.json({
+                success: true,
+                exists: false,
+                message: 'User ID not found'
+            });
+        }
+
+        const key = `user_${normalizeKey(username)}`;
+        const attempt = loginAttempts.get(key);
+        const now = Date.now();
+        const isBlocked = attempt && attempt.blockUntil && now < attempt.blockUntil;
+
+        if (isBlocked) {
+            const remainingMs = attempt.blockUntil - now;
+            const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+            const remainingHours = Math.floor(remainingMs / (60 * 60 * 1000));
+
+            let timeMessage = '';
+            if (remainingHours >= 1) {
+                const mins = Math.ceil((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+                timeMessage = remainingHours + 'h ' + mins + 'm';
+            } else {
+                timeMessage = remainingMinutes + 'm';
+            }
+
+            return res.json({
+                success: true,
+                exists: true,
+                blocked: true,
+                timeMessage: timeMessage,
+                message: 'Account locked. Try again after ' + timeMessage + '.'
+            });
+        }
+
+        return res.json({
+            success: true,
+            exists: true,
+            blocked: false,
+            message: 'User ID verified'
+        });
+
+    } catch (error) {
+        console.error('❌ Check username error:', error);
+        res.status(500).json({
+            success: false,
+            exists: false,
+            message: 'Server error. Please try again.'
+        });
+    }
 });
 
 // 3. LOGIN - Public
