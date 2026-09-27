@@ -129,6 +129,11 @@ app.use("/api/attendance", attendanceRoutes);
 const routes = require('./routes/routes');
 
 app.use('/api', routes);
+
+const notificationsRouter = require("./routes/notifications");
+app.use("/api/notifications", notificationsRouter);
+
+
 // ============================================================
 // 🟢 FILE MANAGER ROUTES
 // ============================================================
