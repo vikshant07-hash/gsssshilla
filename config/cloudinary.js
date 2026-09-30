@@ -101,16 +101,19 @@ const facultyStorage = new CloudinaryStorage({
   }
 });
 
-// STUDENT
+// ✅ STUDENT — UPDATED: PDFs ab "raw" type me upload honge
+// Ye change SIRF student ke liye hai. Baaki sab storages untouched hain.
 const studentStorage = new CloudinaryStorage({
   cloudinary,
   params: (req, file) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     const originalName = file.originalname.split(".")[0].replace(/\s+/g, "-").substring(0, 30);
+    const isPdf = file.mimetype === "application/pdf";
     return {
       folder: process.env.CLOUDINARY_STUDENT_FOLDER || "school/students",
-      resource_type: "auto",
-      allowed_formats: ["jpg", "jpeg", "png", "webp", "pdf"],
+      resource_type: isPdf ? "raw" : "image",
+      format: isPdf ? "pdf" : undefined,
+      allowed_formats: isPdf ? ["pdf"] : ["jpg", "jpeg", "png", "webp"],
       public_id: `${file.fieldname}-${originalName}-${uniqueSuffix}`
     };
   }
