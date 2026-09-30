@@ -19,17 +19,16 @@ const { cloudinary, uploadStudent } = require("../config/cloudinary");
 const PIN_LENGTH = 6;
 const MAX_CHANGES_PER_MONTH = 3;
 const MAX_FAILED_ATTEMPTS = 5;
-const LOCK_DURATION_MS = 30 * 60 * 1000;     // 30 minutes
-const PIN_OTP_EXPIRY_MS = 10 * 60 * 1000;    // 10 minutes
+const LOCK_DURATION_MS = 30 * 60 * 1000;
+const PIN_OTP_EXPIRY_MS = 10 * 60 * 1000;
 const PIN_OTP_MAX_ATTEMPTS = 5;
-const PIN_OTP_RESEND_COOLDOWN_MS = 30 * 1000; // 30 sec cooldown between resends
+const PIN_OTP_RESEND_COOLDOWN_MS = 30 * 1000;
 
 function currentMonthYear() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-// ✅ FIX: Calculates remaining lock minutes correctly (timezone-safe)
 function calcRemainingLockMins(lockedUntil) {
   if (!lockedUntil) return 0;
   const lockTime = new Date(lockedUntil).getTime();
@@ -226,6 +225,143 @@ function validateVerhoeff(num) {
   const reversed = String(num).split("").reverse().map(Number);
   for (let i = 0; i < reversed.length; i++) c = d[c][p[i % 8][reversed[i]]];
   return c === 0;
+}
+
+// ============================================================
+// ✅ UNIQUENESS CHECK HELPER (SESSION-WISE)
+// ============================================================
+/**
+ * Ek session me uniqueness check karta hai:
+ *  - student_id (GLOBAL unique — har session me alag student ID)
+ *  - admission_number (GLOBAL unique — ek hi admission number sab jagah)
+ *  - apaar_id (GLOBAL unique)
+ *  - aadhar_number (GLOBAL unique)
+ *  - email_id (GLOBAL unique, max 1 student per email)
+ *  - roll_number + class + session (ek class me ek roll number ek hi session me)
+ *
+ * @param {Object} params - { studentId, admissionNumber, apaarId, aadharNumber, emailId, mobileNumber, class, rollNumber, session, excludeId }
+ * @returns {Object|null} - null if OK, else { field, message, code, existing }
+ */
+async function checkUniqueness({
+  studentId,
+  admissionNumber,
+  apaarId,
+  aadharNumber,
+  emailId,
+  class: cls,
+  rollNumber,
+  session,
+  excludeId
+}) {
+  const excludeSql = excludeId ? "AND id != ?" : "";
+  const excludeParams = excludeId ? [excludeId] : [];
+
+  // 1. Student ID — Global unique
+  if (studentId) {
+    const rows = await q(
+      `SELECT id, name, class, session FROM Nstudent WHERE LOWER(student_id) = LOWER(?) ${excludeSql} LIMIT 1`,
+      [studentId, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "studentId",
+        message: `Student ID "${studentId}" already exists${rows[0].session ? ` (Class ${rows[0].class}, Session ${rows[0].session})` : ""} — ${rows[0].name}`,
+        code: "STUDENT_ID_DUPLICATE",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 2. Admission Number — Global unique
+  if (admissionNumber) {
+    const rows = await q(
+      `SELECT id, name, class, session FROM Nstudent WHERE LOWER(admission_number) = LOWER(?) ${excludeSql} LIMIT 1`,
+      [admissionNumber, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "admissionNumber",
+        message: `Admission Number "${admissionNumber}" already exists${rows[0].session ? ` (Class ${rows[0].class}, Session ${rows[0].session})` : ""} — ${rows[0].name}`,
+        code: "ADMISSION_NUMBER_DUPLICATE",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 3. APAAR ID — Global unique
+  if (apaarId) {
+    const cleaned = String(apaarId).replace(/\s/g, "");
+    const rows = await q(
+      `SELECT id, name, student_id, class, session FROM Nstudent WHERE apaar_id = ? ${excludeSql} LIMIT 1`,
+      [cleaned, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "apaarId",
+        message: `APAAR ID "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        code: "APAAR_ALREADY_REGISTERED",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 4. Aadhaar Number — Global unique
+  if (aadharNumber) {
+    const cleaned = normalizeAadhaar(aadharNumber);
+    const rows = await q(
+      `SELECT id, name, student_id, class, session FROM Nstudent WHERE aadhar_number = ? ${excludeSql} LIMIT 1`,
+      [cleaned, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "aadharNumber",
+        message: `Aadhaar "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        code: "AADHAAR_ALREADY_REGISTERED",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 5. Email — Global unique (max 1 student)
+  if (emailId) {
+    const cleaned = String(emailId).toLowerCase().trim();
+    const rows = await q(
+      `SELECT id, name, student_id, class, session FROM Nstudent WHERE LOWER(email_id) = ? ${excludeSql} LIMIT 1`,
+      [cleaned, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "emailId",
+        message: `Email "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        code: "EMAIL_ALREADY_REGISTERED",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 6. Roll Number + Class + Session — SESSION-WISE UNIQUE
+  //    Ek session me ek class me ek roll number ek hi baar
+  if (rollNumber && cls && session) {
+    const rows = await q(
+      `SELECT id, name, student_id, class, roll_number, session FROM Nstudent 
+       WHERE LOWER(roll_number) = LOWER(?) 
+         AND LOWER(class) = LOWER(?) 
+         AND session = ?
+         ${excludeSql} 
+       LIMIT 1`,
+      [rollNumber, cls, session, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "rollNumber",
+        message: `Roll Number "${rollNumber}" already assigned in Class ${cls} (Session ${session}) — ${rows[0].name} (${rows[0].student_id})`,
+        code: "ROLL_NUMBER_DUPLICATE",
+        existing: rows[0]
+      };
+    }
+  }
+
+  return null;
 }
 
 // ============================================================
@@ -1012,13 +1148,7 @@ router.post("/verify-aadhaar", async (req, res) => {
 });
 
 // ============================================================
-// ✅ PDF PROXY — Cloudinary /raw/ PDF view fix
-// ============================================================
-// ============================================================
-// ✅ PDF PROXY — Cloudinary /raw/ PDF view fix + fallback
-// ============================================================
-// ============================================================
-// ✅ PDF PROXY — Cloudinary PDF view fix (proper headers)
+// ✅ PDF PROXY — Cloudinary PDF view fix (proper headers + inline)
 // ============================================================
 router.get("/proxy-pdf", async (req, res) => {
   try {
@@ -1076,40 +1206,56 @@ router.get("/proxy-pdf", async (req, res) => {
 
     const remoteRes = result.stream;
 
-    // ✅ STEP 1: URL se file extension nikalo
+    // ✅ URL se extension nikalo
     const urlLower = usedUrl.toLowerCase().split("?")[0];
     const isPdf = urlLower.endsWith(".pdf");
     const isImage = /\.(jpg|jpeg|png|webp|gif|bmp|svg)$/i.test(urlLower);
 
-    // ✅ STEP 2: Cloudinary ke content-type ko ignore karo — khud decide karo
-    // Kyunki Cloudinary PDFs ko "application/octet-stream" bhejta hai
+    // ✅ URL se filename nikalo
+    let filename = "document";
+    try {
+      const urlObj = new URL(usedUrl);
+      const pathParts = urlObj.pathname.split("/");
+      let lastPart = pathParts[pathParts.length - 1];
+      if (lastPart && lastPart.length > 0) {
+        filename = lastPart.split("?")[0];
+        if (isPdf && !filename.toLowerCase().endsWith(".pdf")) filename += ".pdf";
+        if (isImage && !/\.(jpg|jpeg|png|webp|gif|bmp|svg)$/i.test(filename)) filename += ".jpg";
+      }
+    } catch (e) {
+      filename = isPdf ? "document.pdf" : "image.jpg";
+    }
+
+    // ✅ Content-Type decide karo
     let contentType;
     if (isPdf) {
       contentType = "application/pdf";
     } else if (isImage) {
-      // Image extension ke hisaab se content-type
       if (urlLower.endsWith(".png")) contentType = "image/png";
       else if (urlLower.endsWith(".webp")) contentType = "image/webp";
       else if (urlLower.endsWith(".gif")) contentType = "image/gif";
       else if (urlLower.endsWith(".svg")) contentType = "image/svg+xml";
       else contentType = "image/jpeg";
     } else {
-      // Fallback: Cloudinary ka content-type use karo, warna octet-stream
       contentType = remoteRes.headers["content-type"] || "application/octet-stream";
     }
 
-    // ✅ STEP 3: Content-Length bhi pass karo (agar Cloudinary ne diya hai)
     const contentLength = remoteRes.headers["content-length"];
 
-    // ✅ STEP 4: Headers set karo — PDF inline dikhega, image inline dikhega
+    // ✅ Clear any default headers
+    res.removeHeader("Content-Type");
+    res.removeHeader("Content-Disposition");
+
+    // ✅ Set proper headers for inline view
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Disposition", "inline"); // "inline" = browser me dikhega, "attachment" = download
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("X-Content-Type-Options", "nosniff"); // ✅ Important for PDF
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Accept-Ranges", "bytes");
     if (contentLength) res.setHeader("Content-Length", contentLength);
 
-    // ✅ STEP 5: Stream pipe karo
+    // ✅ Stream pipe karo
     remoteRes.pipe(res);
 
   } catch (err) {
@@ -1117,6 +1263,7 @@ router.get("/proxy-pdf", async (req, res) => {
     if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
   }
 });
+
 // ============================================================
 // ✅ GET ALL
 // ============================================================
@@ -1262,6 +1409,39 @@ router.get("/search/:query", async (req, res) => {
 });
 
 // ============================================================
+// ✅ CHECK UNIQUENESS (live, frontend ke liye)
+// ============================================================
+router.post("/check-uniqueness", async (req, res) => {
+  try {
+    const {
+      studentId, admissionNumber, apaarId, aadharNumber, emailId,
+      class: cls, rollNumber, session, excludeId
+    } = req.body;
+
+    const conflict = await checkUniqueness({
+      studentId, admissionNumber, apaarId, aadharNumber, emailId,
+      class: cls, rollNumber, session,
+      excludeId: excludeId ? Number(excludeId) : null
+    });
+
+    if (conflict) {
+      return res.status(409).json({
+        success: false,
+        available: false,
+        field: conflict.field,
+        code: conflict.code,
+        message: conflict.message,
+        existing: conflict.existing || null
+      });
+    }
+
+    return res.json({ success: true, available: true, message: "All fields unique ✅" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
 // ✅ ADD STUDENT
 // ============================================================
 router.post(
@@ -1289,21 +1469,51 @@ router.post(
         return res.status(400).json({ success: false, message: "Email verification expired. Please verify again.", code: "OTP_EXPIRED" });
       }
 
-      const emailDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ?`, [email]);
-      if (emailDup.length >= EMAIL_MAX_STUDENTS) {
-        return res.status(409).json({ success: false, message: `Email already registered with ${emailDup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
-      }
-      const mobileDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ?`, [mobile]);
-      if (mobileDup.length >= MOBILE_MAX_STUDENTS) {
-        return res.status(409).json({ success: false, message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED" });
+      // ✅ SESSION-WISE UNIQUENESS CHECK
+      const conflict = await checkUniqueness({
+        studentId: req.body.studentId,
+        admissionNumber: req.body.admissionNumber,
+        apaarId: req.body.apaarId,
+        aadharNumber: req.body.aadharNumber,
+        emailId: email,
+        class: req.body.class,
+        rollNumber: req.body.rollNumber,
+        session: req.body.session,
+        excludeId: null
+      });
+
+      if (conflict) {
+        // Agar files upload ho gayi hain to cleanup
+        if (req.files) {
+          for (const f of DOC_FIELDS) {
+            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
+            }
+          }
+        }
+        return res.status(409).json({
+          success: false,
+          field: conflict.field,
+          code: conflict.code,
+          message: conflict.message,
+          existing: conflict.existing || null
+        });
       }
 
-      const apaarVal = String(req.body.apaarId || "").replace(/\s/g, "");
-      if (apaarVal) {
-        const apaarDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ?`, [apaarVal]);
-        if (apaarDup.length > 0) {
-          return res.status(409).json({ success: false, message: `APAAR ID already registered with ${apaarDup[0].name}`, code: "APAAR_ALREADY_REGISTERED" });
+      // Mobile limit check
+      const mobileDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ?`, [mobile]);
+      if (mobileDup.length >= MOBILE_MAX_STUDENTS) {
+        if (req.files) {
+          for (const f of DOC_FIELDS) {
+            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
+            }
+          }
         }
+        return res.status(409).json({
+          success: false, field: "mobileNumber",
+          message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED"
+        });
       }
 
       const requiredDocs = getRequiredDocs(category);
@@ -1314,6 +1524,13 @@ router.post(
         }
       }
       if (missing.length) {
+        if (req.files) {
+          for (const f of DOC_FIELDS) {
+            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
+            }
+          }
+        }
         return res.status(400).json({ success: false, message: `Missing required documents: ${missing.join(", ")}`, category, requiredDocuments: requiredDocs });
       }
 
@@ -1372,7 +1589,9 @@ router.post(
       });
     } catch (err) {
       console.error("❌ Add Student Error:", err);
-      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
+      if (err.code === "ER_DUP_ENTRY") {
+        return res.status(400).json({ success: false, message: "Duplicate entry — Student ID / Admission Number / Roll Number already exists in this session" });
+      }
       res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -1508,11 +1727,11 @@ router.post("/verify-login", async (req, res) => {
     }
 
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
-const safeStudent = { ...s };
-for (const k of Object.keys(safeStudent)) {
-  if (k.endsWith("_pid")) delete safeStudent[k];
-}
-    
+    const safeStudent = { ...s };
+    for (const k of Object.keys(safeStudent)) {
+      if (k.endsWith("_pid")) delete safeStudent[k];
+    }
+
     res.json({
       success: true,
       message: "Login successful ✅",
@@ -1742,9 +1961,9 @@ router.post("/verify-login-pin", async (req, res) => {
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
 
     const safeStudent = { ...s };
-for (const k of Object.keys(safeStudent)) {
-  if (k.endsWith("_pid")) delete safeStudent[k];
-}
+    for (const k of Object.keys(safeStudent)) {
+      if (k.endsWith("_pid")) delete safeStudent[k];
+    }
 
     res.json({
       success: true,
@@ -2045,13 +2264,11 @@ router.post("/pin/verify", async (req, res) => {
 
 // ============================================================
 // ✅ FORGOT PIN — Step 1: Verify identity + send OTP
-// SECURITY: Requires Student ID + APAAR ID + Aadhaar Number
 // ============================================================
 router.post("/pin/forgot/request-otp", async (req, res) => {
   try {
     const { studentId, apaarId, aadharNumber } = req.body;
 
-    // ---- Validation ----
     if (!studentId || !apaarId || !aadharNumber) {
       return res.status(400).json({
         success: false,
@@ -2084,7 +2301,6 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
       });
     }
 
-    // ---- Verify all 3 fields match the same student ----
     const rows = await q(
       `SELECT id, name, email_id, student_id, apaar_id, aadhar_number
        FROM Nstudent 
@@ -2096,7 +2312,6 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     );
 
     if (!rows.length) {
-      // Security: don't reveal which field was wrong
       return res.status(401).json({
         success: false,
         message: "Details do not match our records. Please check Student ID, APAAR ID and Aadhaar Number."
@@ -2112,7 +2327,6 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
       });
     }
 
-    // ---- Check if PIN exists ----
     const pinExists = await q(`SELECT locked_until FROM student_pins WHERE student_id = ?`, [student.id]);
     if (!pinExists.length) {
       return res.status(404).json({
@@ -2121,7 +2335,6 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
       });
     }
 
-    // ---- Check if account locked ----
     const lockMins = calcRemainingLockMins(pinExists[0].locked_until);
     if (lockMins > 0) {
       return res.status(423).json({
@@ -2130,7 +2343,6 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
       });
     }
 
-    // ---- Rate limit: check recent OTP ----
     const recentOtp = await q(
       `SELECT id, created_at FROM student_pin_reset_otps 
        WHERE student_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 30 SECOND)
@@ -2147,7 +2359,6 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
       }
     }
 
-    // ---- Generate OTP ----
     const otp = genPinOTP();
     const expiresAt = new Date(Date.now() + PIN_OTP_EXPIRY_MS);
 
@@ -2157,11 +2368,9 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
       [student.id, otp, expiresAt]
     );
 
-    // ---- Mask email ----
     const [namePart, domain] = String(student.email_id).split("@");
     const maskedEmail = namePart.substring(0, 2) + "***@" + domain;
 
-    // ---- Send email ----
     if (BREVO_API_KEY) {
       try {
         const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -2542,7 +2751,6 @@ router.get("/pin/admin/summary", async (req, res) => {
 
 // ============================================================
 // ✅✅✅ BACKUP & RESTORE SYSTEM ✅✅✅
-// (NEW — added without touching existing code)
 // ============================================================
 const BACKUP_DIR = path.join(__dirname, "..", "backups");
 const MAX_BACKUPS = 10;
@@ -2553,13 +2761,11 @@ if (!fs.existsSync(BACKUP_DIR)) {
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
 
-// Multer for backup upload (memory storage, 100 MB max)
 const backupUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 
-// Simple auth placeholder — replace with real middleware if needed
 const verifyBackupAuth = (req, res, next) => {
   const token = req.query.token || (req.headers.authorization || "").replace("Bearer ", "");
   if (!token) return res.status(401).json({ success: false, message: "Auth required" });
@@ -2672,7 +2878,6 @@ async function restoreBackupData(data, mode = "merge") {
   return stats;
 }
 
-// --- Route: List all backups ---
 router.get("/backup/list", verifyBackupAuth, async (req, res) => {
   try {
     const files = fs.readdirSync(BACKUP_DIR)
@@ -2699,7 +2904,6 @@ router.get("/backup/list", verifyBackupAuth, async (req, res) => {
   }
 });
 
-// --- Route: Create manual backup ---
 router.post("/backup/create", verifyBackupAuth, async (req, res) => {
   try {
     const result = await createBackup("manual");
@@ -2716,7 +2920,6 @@ router.post("/backup/create", verifyBackupAuth, async (req, res) => {
   }
 });
 
-// --- Route: Download backup file ---
 router.get("/backup/download/:filename", async (req, res) => {
   try {
     const filename = req.params.filename;
@@ -2734,7 +2937,6 @@ router.get("/backup/download/:filename", async (req, res) => {
   }
 });
 
-// --- Route: Delete backup ---
 router.delete("/backup/:filename", verifyBackupAuth, async (req, res) => {
   try {
     const filename = req.params.filename;
@@ -2753,7 +2955,6 @@ router.delete("/backup/:filename", verifyBackupAuth, async (req, res) => {
   }
 });
 
-// --- Route: Restore from server-side backup ---
 router.post("/backup/restore/:filename", verifyBackupAuth, async (req, res) => {
   try {
     const filename = req.params.filename;
@@ -2788,7 +2989,6 @@ router.post("/backup/restore/:filename", verifyBackupAuth, async (req, res) => {
   }
 });
 
-// --- Route: Upload & Restore ---
 router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("backupFile"), async (req, res) => {
   try {
     if (!req.file) {
@@ -2828,7 +3028,6 @@ router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("bac
   }
 });
 
-// --- Cron: Daily 2 AM IST auto-backup ---
 cron.schedule("0 2 * * *", async () => {
   console.log("[Cron] Running daily 2 AM backup...");
   try {
@@ -2874,14 +3073,19 @@ router.put(
       const newEmail = String(req.body.emailId || existing.email_id || "").toLowerCase().trim();
       const newMobile = String(req.body.mobileNumber || existing.mobile_number || "").trim();
       const newApaar = String(req.body.apaarId || existing.apaar_id || "").replace(/\s/g, "");
+      const newAadhaar = req.body.aadharNumber !== undefined
+        ? normalizeAadhaar(req.body.aadharNumber)
+        : existing.aadhar_number;
+      const newStudentId = String(req.body.studentId || existing.student_id || "").trim();
+      const newAdmissionNumber = String(req.body.admissionNumber || existing.admission_number || "").trim();
+      const newClass = String(req.body.class || existing.class || "").trim();
+      const newRollNumber = String(req.body.rollNumber || existing.roll_number || "").trim();
+      const newSession = String(req.body.session || existing.session || "").trim();
 
       const emailChanged = newEmail !== (existing.email_id || "").toLowerCase().trim();
       const mobileChanged = newMobile !== (existing.mobile_number || "").trim();
-      const apaarChanged = newApaar !== (existing.apaar_id || "").replace(/\s/g, "").trim();
 
       if (emailChanged) {
-        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? AND id != ?`, [newEmail, id]);
-        if (dup.length >= EMAIL_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Email already registered with ${dup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
         const v = await q(`SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`, [newEmail]);
         if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified", code: "EMAIL_NOT_VERIFIED" });
       }
@@ -2889,9 +3093,36 @@ router.put(
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? AND id != ?`, [newMobile, id]);
         if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile limit reached`, code: "MOBILE_LIMIT_REACHED" });
       }
-      if (apaarChanged && newApaar) {
-        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ? AND id != ?`, [newApaar, id]);
-        if (dup.length > 0) return res.status(409).json({ success: false, message: `APAAR ID already registered`, code: "APAAR_ALREADY_REGISTERED" });
+
+      // ✅ SESSION-WISE UNIQUENESS CHECK (update ke waqt bhi)
+      const conflict = await checkUniqueness({
+        studentId: newStudentId !== existing.student_id ? newStudentId : null,
+        admissionNumber: newAdmissionNumber !== existing.admission_number ? newAdmissionNumber : null,
+        apaarId: newApaar !== (existing.apaar_id || "").replace(/\s/g, "") ? newApaar : null,
+        aadharNumber: newAadhaar !== existing.aadhar_number ? newAadhaar : null,
+        emailId: emailChanged ? newEmail : null,
+        class: newClass,
+        rollNumber: newRollNumber,
+        session: newSession,
+        excludeId: Number(id)
+      });
+
+      if (conflict) {
+        // Cleanup newly uploaded files
+        if (req.files) {
+          for (const f of DOC_FIELDS) {
+            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
+            }
+          }
+        }
+        return res.status(409).json({
+          success: false,
+          field: conflict.field,
+          code: conflict.code,
+          message: conflict.message,
+          existing: conflict.existing || null
+        });
       }
 
       const finalCategory = req.body.category || existing.category;
