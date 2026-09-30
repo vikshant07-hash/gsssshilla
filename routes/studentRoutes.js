@@ -1014,49 +1014,82 @@ router.post("/verify-aadhaar", async (req, res) => {
 // ============================================================
 // ✅ PDF PROXY — Cloudinary /raw/ PDF view fix
 // ============================================================
+// ============================================================
+// ✅ PDF PROXY — Cloudinary /raw/ PDF view fix + fallback
+// ============================================================
 router.get("/proxy-pdf", async (req, res) => {
   try {
-    const { url } = req.query;
+    let { url } = req.query;
     if (!url) return res.status(400).json({ success: false, message: "URL required" });
-    if (!url.includes("res.cloudinary.com")) return res.status(400).json({ success: false, message: "Only Cloudinary URLs allowed" });
+    if (!url.includes("res.cloudinary.com")) {
+      return res.status(400).json({ success: false, message: "Only Cloudinary URLs allowed" });
+    }
 
-    const client = url.startsWith("https") ? https : http;
-    client.get(url, (remoteRes) => {
-      if ([301, 302, 307, 308].includes(remoteRes.statusCode) && remoteRes.headers.location) {
-        remoteRes.resume();
-        return res.redirect(remoteRes.headers.location);
-      }
-      if (remoteRes.statusCode !== 200) {
-        remoteRes.resume();
-        return res.status(remoteRes.statusCode).json({
-          success: false,
-          message: `Cloudinary returned ${remoteRes.statusCode}`
-        });
-      }
+    try { url = decodeURIComponent(url); } catch (e) {}
 
-      let contentType = remoteRes.headers["content-type"] || "";
-      const urlLower = url.toLowerCase();
-      if (urlLower.endsWith(".pdf") || contentType.includes("pdf")) {
-        contentType = "application/pdf";
-      } else if (!contentType) {
-        contentType = "application/octet-stream";
-      }
+    // ✅ Fallback: /raw/ ⇄ /image/ try karo
+    const tryUrls = [url];
+    if (url.includes("/raw/upload/")) {
+      tryUrls.push(url.replace("/raw/upload/", "/image/upload/"));
+    }
+    if (url.includes("/image/upload/")) {
+      tryUrls.push(url.replace("/image/upload/", "/raw/upload/"));
+    }
 
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Disposition", "inline");
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      remoteRes.pipe(res);
-    }).on("error", (err) => {
-      console.error("❌ Proxy PDF error:", err.message);
-      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+    const tryFetch = (targetUrl) => new Promise((resolve) => {
+      const client = targetUrl.startsWith("https") ? https : http;
+      const req2 = client.get(targetUrl, (remoteRes) => {
+        if ([301, 302, 307, 308].includes(remoteRes.statusCode) && remoteRes.headers.location) {
+          remoteRes.resume();
+          return resolve({ redirect: remoteRes.headers.location });
+        }
+        if (remoteRes.statusCode !== 200) {
+          remoteRes.resume();
+          return resolve({ status: remoteRes.statusCode });
+        }
+        resolve({ stream: remoteRes });
+      });
+      req2.on("error", (err) => resolve({ error: err.message }));
+      req2.setTimeout(15000, () => { req2.destroy(); resolve({ error: "timeout" }); });
     });
+
+    let result = null;
+    let usedUrl = null;
+    for (const u of tryUrls) {
+      result = await tryFetch(u);
+      if (result.stream || result.redirect) { usedUrl = u; break; }
+      console.log(`[Proxy PDF] Failed for ${u}: ${result.status || result.error}`);
+    }
+
+    if (result?.redirect) return res.redirect(result.redirect);
+
+    if (!result?.stream) {
+      return res.status(404).json({
+        success: false,
+        message: `File not found on Cloudinary. URL may be invalid or file deleted.`,
+        triedUrls: tryUrls
+      });
+    }
+
+    const remoteRes = result.stream;
+    let contentType = remoteRes.headers["content-type"] || "";
+    const urlLower = usedUrl.toLowerCase();
+    if (urlLower.endsWith(".pdf") || contentType.includes("pdf")) {
+      contentType = "application/pdf";
+    } else if (!contentType) {
+      contentType = "application/octet-stream";
+    }
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    remoteRes.pipe(res);
   } catch (err) {
     console.error("❌ Proxy catch error:", err.message);
     if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
   }
 });
-
 // ============================================================
 // ✅ GET ALL
 // ============================================================
