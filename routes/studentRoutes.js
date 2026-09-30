@@ -6,6 +6,9 @@ const https = require("https");
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
+const fs = require("fs");
+const cron = require("node-cron");
+const multer = require("multer");
 
 const db = require("../config/db");
 const { cloudinary, uploadStudent } = require("../config/cloudinary");
@@ -1316,9 +1319,6 @@ router.post(
 );
 
 // ============================================================
-// ✅ STUDENT LOGIN VERIFY (Email + Student ID) — Legacy
-// ============================================================
-// ============================================================
 // ✅ CHECK EMAIL — Student verify (step 1)
 // ============================================================
 router.post("/check-email", async (req, res) => {
@@ -1395,6 +1395,7 @@ router.post("/check-student-id", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 router.post("/verify-login", async (req, res) => {
   try {
     const { email, studentId } = req.body;
@@ -2478,6 +2479,307 @@ router.get("/pin/admin/summary", async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+// ============================================================
+// ✅✅✅ BACKUP & RESTORE SYSTEM ✅✅✅
+// (NEW — added without touching existing code)
+// ============================================================
+const BACKUP_DIR = path.join(__dirname, "..", "backups");
+const MAX_BACKUPS = 10;
+const RETENTION_DAYS = 10;
+const BACKUP_TABLE = "Nstudent";
+
+if (!fs.existsSync(BACKUP_DIR)) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+}
+
+// Multer for backup upload (memory storage, 100 MB max)
+const backupUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }
+});
+
+// Simple auth placeholder — replace with real middleware if needed
+const verifyBackupAuth = (req, res, next) => {
+  const token = req.query.token || (req.headers.authorization || "").replace("Bearer ", "");
+  if (!token) return res.status(401).json({ success: false, message: "Auth required" });
+  next();
+};
+
+async function createBackup(type = "auto") {
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const filename = `backup_${type}_${timestamp}.json`;
+  const filepath = path.join(BACKUP_DIR, filename);
+
+  const students = await q(`SELECT * FROM ${BACKUP_TABLE}`);
+
+  const backupData = {
+    version: "1.0",
+    type: type,
+    createdAt: now.toISOString(),
+    stats: { students: students.length },
+    tables: { [BACKUP_TABLE]: students }
+  };
+
+  fs.writeFileSync(filepath, JSON.stringify(backupData, null, 2));
+  await cleanupOldBackups();
+
+  const stat = fs.statSync(filepath);
+  return { filename, filepath, size: stat.size, stats: backupData.stats };
+}
+
+async function cleanupOldBackups() {
+  try {
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith("backup_") && f.endsWith(".json"))
+      .map(f => {
+        const fullPath = path.join(BACKUP_DIR, f);
+        return { name: f, path: fullPath, mtime: fs.statSync(fullPath).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+
+    const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (const file of files) {
+      if (file.mtime < cutoff) {
+        try { fs.unlinkSync(file.path); console.log(`[Backup] Deleted old: ${file.name}`); } catch (e) {}
+      }
+    }
+
+    const remaining = files.filter(f => f.mtime >= cutoff);
+    if (remaining.length > MAX_BACKUPS) {
+      for (let i = MAX_BACKUPS; i < remaining.length; i++) {
+        try { fs.unlinkSync(remaining[i].path); console.log(`[Backup] Deleted excess: ${remaining[i].name}`); } catch (e) {}
+      }
+    }
+  } catch (err) { console.error("[Backup] Cleanup error:", err.message); }
+}
+
+async function restoreBackupData(data, mode = "merge") {
+  if (!data || !data.tables || !data.tables[BACKUP_TABLE]) {
+    throw new Error("Invalid backup file — missing table data");
+  }
+  const students = data.tables[BACKUP_TABLE];
+  if (!Array.isArray(students)) throw new Error("Invalid backup — students must be array");
+
+  const stats = { inserted: 0, updated: 0, skipped: 0, total: students.length };
+
+  if (mode === "replace") {
+    await q(`DELETE FROM ${BACKUP_TABLE}`);
+  }
+
+  const colsResult = await q(`SHOW COLUMNS FROM ${BACKUP_TABLE}`);
+  const validColumns = colsResult.map(c => c.Field);
+
+  for (const student of students) {
+    if (!student.student_id) { stats.skipped++; continue; }
+
+    const existing = await q(
+      `SELECT id FROM ${BACKUP_TABLE} WHERE student_id = ? LIMIT 1`,
+      [student.student_id]
+    );
+
+    const entries = Object.entries(student).filter(([k]) =>
+      validColumns.includes(k) && k !== "id"
+    );
+
+    if (existing.length > 0) {
+      if (mode === "merge") {
+        if (entries.length === 0) { stats.skipped++; continue; }
+        const setSql = entries.map(([k]) => `${k} = ?`).join(", ");
+        const values = entries.map(([, v]) => v);
+        await q(
+          `UPDATE ${BACKUP_TABLE} SET ${setSql} WHERE student_id = ?`,
+          [...values, student.student_id]
+        );
+        stats.updated++;
+      } else {
+        stats.skipped++;
+      }
+    } else {
+      if (entries.length === 0) { stats.skipped++; continue; }
+      const cols = entries.map(([k]) => k);
+      const vals = entries.map(([, v]) => v);
+      const ph = cols.map(() => "?").join(",");
+      await q(
+        `INSERT INTO ${BACKUP_TABLE} (${cols.join(",")}) VALUES (${ph})`,
+        vals
+      );
+      stats.inserted++;
+    }
+  }
+
+  return stats;
+}
+
+// --- Route: List all backups ---
+router.get("/backup/list", verifyBackupAuth, async (req, res) => {
+  try {
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith("backup_") && f.endsWith(".json"))
+      .map(f => {
+        const fullPath = path.join(BACKUP_DIR, f);
+        const stat = fs.statSync(fullPath);
+        let meta = {};
+        try { meta = JSON.parse(fs.readFileSync(fullPath, "utf8")); } catch (e) {}
+        return {
+          filename: f,
+          size: stat.size,
+          createdAt: meta.createdAt || stat.mtime.toISOString(),
+          type: meta.type || "auto",
+          stats: meta.stats || {}
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json({ success: true, backups: files, count: files.length });
+  } catch (err) {
+    console.error("[Backup] List error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// --- Route: Create manual backup ---
+router.post("/backup/create", verifyBackupAuth, async (req, res) => {
+  try {
+    const result = await createBackup("manual");
+    res.json({
+      success: true,
+      message: "Backup created ✅",
+      filename: result.filename,
+      size: result.size,
+      stats: result.stats
+    });
+  } catch (err) {
+    console.error("[Backup] Create error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// --- Route: Download backup file ---
+router.get("/backup/download/:filename", async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
+        filename.includes("..") || filename.includes("/")) {
+      return res.status(400).json({ success: false, message: "Invalid filename" });
+    }
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, message: "Backup not found" });
+    }
+    res.download(filepath, filename);
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// --- Route: Delete backup ---
+router.delete("/backup/:filename", verifyBackupAuth, async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
+        filename.includes("..") || filename.includes("/")) {
+      return res.status(400).json({ success: false, message: "Invalid filename" });
+    }
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, message: "Backup not found" });
+    }
+    fs.unlinkSync(filepath);
+    res.json({ success: true, message: "Backup deleted ✅" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// --- Route: Restore from server-side backup ---
+router.post("/backup/restore/:filename", verifyBackupAuth, async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
+        filename.includes("..") || filename.includes("/")) {
+      return res.status(400).json({ success: false, message: "Invalid filename" });
+    }
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, message: "Backup not found" });
+    }
+    const data = JSON.parse(fs.readFileSync(filepath, "utf8"));
+    const mode = req.body.mode === "replace" ? "replace" : "merge";
+
+    try { await createBackup("auto-prebak"); console.log("[Backup] Safety backup created before restore"); }
+    catch (e) { console.warn("[Backup] Safety backup failed:", e.message); }
+
+    const stats = await restoreBackupData(data, mode);
+
+    res.json({
+      success: true,
+      message: `Restore complete ✅ (${mode} mode)`,
+      mode,
+      inserted: stats.inserted,
+      updated: stats.updated,
+      skipped: stats.skipped,
+      total: stats.total
+    });
+  } catch (err) {
+    console.error("[Backup] Restore error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// --- Route: Upload & Restore ---
+router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("backupFile"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "No file uploaded" });
+    }
+    let data;
+    try {
+      data = JSON.parse(req.file.buffer.toString("utf8"));
+    } catch (e) {
+      return res.status(400).json({ success: false, message: "Invalid JSON file" });
+    }
+    if (!data.tables || !data.tables[BACKUP_TABLE]) {
+      return res.status(400).json({
+        success: false,
+        message: `Backup file must contain "${BACKUP_TABLE}" table data`
+      });
+    }
+    const mode = req.body.mode === "replace" ? "replace" : "merge";
+
+    try { await createBackup("auto-prebak"); console.log("[Backup] Safety backup created before upload-restore"); }
+    catch (e) { console.warn("[Backup] Safety backup failed:", e.message); }
+
+    const stats = await restoreBackupData(data, mode);
+
+    res.json({
+      success: true,
+      message: `Restore complete ✅ (${mode} mode)`,
+      mode,
+      inserted: stats.inserted,
+      updated: stats.updated,
+      skipped: stats.skipped,
+      total: stats.total
+    });
+  } catch (err) {
+    console.error("[Backup] Upload-restore error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// --- Cron: Daily 2 AM IST auto-backup ---
+cron.schedule("0 2 * * *", async () => {
+  console.log("[Cron] Running daily 2 AM backup...");
+  try {
+    const result = await createBackup("auto");
+    console.log(`[Cron] Backup created: ${result.filename} (${result.stats.students} students)`);
+  } catch (err) {
+    console.error("[Cron] Backup failed:", err.message);
+  }
+}, { timezone: "Asia/Kolkata" });
+
+console.log("✅ Backup system loaded — daily cron at 2:00 AM IST");
 
 // ============================================================
 // ✅ GET SINGLE (must be LAST among GET routes)
