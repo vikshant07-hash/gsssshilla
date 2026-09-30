@@ -1017,6 +1017,9 @@ router.post("/verify-aadhaar", async (req, res) => {
 // ============================================================
 // ✅ PDF PROXY — Cloudinary /raw/ PDF view fix + fallback
 // ============================================================
+// ============================================================
+// ✅ PDF PROXY — Cloudinary PDF view fix (proper headers)
+// ============================================================
 router.get("/proxy-pdf", async (req, res) => {
   try {
     let { url } = req.query;
@@ -1027,7 +1030,7 @@ router.get("/proxy-pdf", async (req, res) => {
 
     try { url = decodeURIComponent(url); } catch (e) {}
 
-    // ✅ Fallback: /raw/ ⇄ /image/ try karo
+    // Fallback: /raw/ ⇄ /image/ try karo
     const tryUrls = [url];
     if (url.includes("/raw/upload/")) {
       tryUrls.push(url.replace("/raw/upload/", "/image/upload/"));
@@ -1072,19 +1075,43 @@ router.get("/proxy-pdf", async (req, res) => {
     }
 
     const remoteRes = result.stream;
-    let contentType = remoteRes.headers["content-type"] || "";
-    const urlLower = usedUrl.toLowerCase();
-    if (urlLower.endsWith(".pdf") || contentType.includes("pdf")) {
+
+    // ✅ STEP 1: URL se file extension nikalo
+    const urlLower = usedUrl.toLowerCase().split("?")[0];
+    const isPdf = urlLower.endsWith(".pdf");
+    const isImage = /\.(jpg|jpeg|png|webp|gif|bmp|svg)$/i.test(urlLower);
+
+    // ✅ STEP 2: Cloudinary ke content-type ko ignore karo — khud decide karo
+    // Kyunki Cloudinary PDFs ko "application/octet-stream" bhejta hai
+    let contentType;
+    if (isPdf) {
       contentType = "application/pdf";
-    } else if (!contentType) {
-      contentType = "application/octet-stream";
+    } else if (isImage) {
+      // Image extension ke hisaab se content-type
+      if (urlLower.endsWith(".png")) contentType = "image/png";
+      else if (urlLower.endsWith(".webp")) contentType = "image/webp";
+      else if (urlLower.endsWith(".gif")) contentType = "image/gif";
+      else if (urlLower.endsWith(".svg")) contentType = "image/svg+xml";
+      else contentType = "image/jpeg";
+    } else {
+      // Fallback: Cloudinary ka content-type use karo, warna octet-stream
+      contentType = remoteRes.headers["content-type"] || "application/octet-stream";
     }
 
+    // ✅ STEP 3: Content-Length bhi pass karo (agar Cloudinary ne diya hai)
+    const contentLength = remoteRes.headers["content-length"];
+
+    // ✅ STEP 4: Headers set karo — PDF inline dikhega, image inline dikhega
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Content-Disposition", "inline"); // "inline" = browser me dikhega, "attachment" = download
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Content-Type-Options", "nosniff"); // ✅ Important for PDF
+    if (contentLength) res.setHeader("Content-Length", contentLength);
+
+    // ✅ STEP 5: Stream pipe karo
     remoteRes.pipe(res);
+
   } catch (err) {
     console.error("❌ Proxy catch error:", err.message);
     if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
