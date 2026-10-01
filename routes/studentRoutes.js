@@ -322,7 +322,7 @@ async function checkUniqueness({
     }
   }
 
-  // ✅ Roll + Class + Session — SESSION-WISE
+  // ✅ Roll + Class + Session — SESSION-WISE UNIQUE
   if (rollNumber && cls && session) {
     const rows = await q(
       `SELECT id, name, student_id FROM Nstudent 
@@ -540,7 +540,7 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
   <tr><td style="padding: 40px 36px;">
     <h2 style="color:#1e293b; font-size:22px; margin:0 0 12px;">🎉 Welcome, ${s.name}!</h2>
     <p style="color:#475569; font-size:15px; line-height:1.7; margin:0 0 24px;">
-      Congratulations! Your registration at <b>Govt. Sr. Sec. School Shilla</b> has been completed successfully.
+      Congratulations! Your registration at <b>Govt. Sr. Sec. School Shilla</b> has been completed successfully. We're delighted to welcome you to our school family.
     </p>
 
     <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px solid #c7d2fe; border-radius: 14px; margin-bottom: 24px;">
@@ -559,6 +559,9 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
     <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1.5px solid #f59e0b; border-radius: 14px; margin-bottom: 24px;">
       <tr><td style="padding: 20px 24px;">
         <p style="margin:0 0 14px; color:#92400e; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.2px;">🔐 Your Login Credentials</p>
+        <p style="margin:0 0 12px; color:#78350f; font-size:13px; line-height:1.6;">
+          Use these credentials to log in to your student portal:
+        </p>
         <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
           <tr><td style="padding: 7px 0; color:#78350f; width:40%;">APAAR ID:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800; font-family: monospace; letter-spacing: 2px;">${s.apaar_id}</td></tr>
           <tr><td style="padding: 7px 0; color:#78350f;">Date of Birth:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800;">${s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-"}</td></tr>
@@ -582,19 +585,32 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4; border:1.5px solid #86efac; border-radius:14px; margin-bottom: 24px;">
       <tr><td style="padding: 16px 20px;">
         <p style="margin:0; color:#166534; font-size:13px; line-height:1.6;">
-          📎 <b>Attachment:</b> Your <b>Provisional Registration Form</b> is attached with this email.
+          📎 <b>Attachment:</b> Your <b>Provisional Registration Form</b> is attached with this email. Please download and save it for your records.
         </p>
       </td></tr>
     </table>
 
     <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e2e8f0; padding-top:20px;">
       <tr><td>
+        <p style="margin:0 0 8px; color:#64748b; font-size:12px; line-height:1.6;">
+          <b style="color:#1e293b;">Need help?</b> Contact the school office:
+        </p>
         <p style="margin:0; color:#64748b; font-size:12px; line-height:1.7;">
-          <b style="color:#1e293b;">Need help?</b> Contact the school office:<br>
-          📞 +91 9805444375 · 📧 info@gssshilla.in · 🌐 ${SCHOOL_WEBSITE}
+          📞 +91 9805444375<br>
+          📧 info@gssshilla.in<br>
+          🌐 ${SCHOOL_WEBSITE}
         </p>
       </td></tr>
     </table>
+  </td></tr>
+
+  <tr><td style="background:#f8fafc; padding: 24px; text-align:center; border-top:1px solid #e2e8f0;">
+    <p style="margin:0 0 6px; color:#94a3b8; font-size:11px; letter-spacing:0.5px;">
+      This is an automated email from GSSS Shilla Student Management System
+    </p>
+    <p style="margin:0; color:#94a3b8; font-size:11px;">
+      © ${new Date().getFullYear()} Govt. Sr. Sec. School Shilla · All rights reserved
+    </p>
   </td></tr>
 </table>
 </td></tr>
@@ -814,10 +830,13 @@ async function generateWelcomePDF(student) {
         doc.font("Helvetica").fontSize(9.5).fillColor("#78350f")
            .text("Use these details to login to your student portal:", ML + 14, y + 30);
 
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f").text("APAAR ID:", ML + 14, y + 50);
-        doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b").text(s.apaar_id || "—", ML + 90, y + 50);
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f")
+           .text("APAAR ID:", ML + 14, y + 50);
+        doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b")
+           .text(s.apaar_id || "—", ML + 90, y + 50);
 
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f").text("Date of Birth:", ML + 14, y + 68);
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f")
+           .text("Date of Birth:", ML + 14, y + 68);
         doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b")
            .text(s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—", ML + 90, y + 68);
 
@@ -830,12 +849,16 @@ async function generateWelcomePDF(student) {
         const sigW = 180;
         const sigX = pageW - MR - sigW;
         if (sigBuf) {
-          try { doc.image(sigBuf, sigX + 40, y - 10, { fit: [100, 45], align: "center" }); } catch (e) {}
+          try {
+            doc.image(sigBuf, sigX + 40, y - 10, { fit: [100, 45], align: "center" });
+          } catch (e) {}
         }
         const lineY = y + 40;
         doc.moveTo(sigX + 20, lineY).lineTo(sigX + sigW - 20, lineY).lineWidth(0.7).strokeColor("#64748b").stroke();
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a").text("Principal", sigX, lineY + 6, { width: sigW, align: "center" });
-        doc.font("Helvetica").fontSize(8.5).fillColor("#475569").text("Govt. Sr. Sec. School Shilla", sigX, lineY + 20, { width: sigW, align: "center" });
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
+           .text("Principal", sigX, lineY + 6, { width: sigW, align: "center" });
+        doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
+           .text("Govt. Sr. Sec. School Shilla", sigX, lineY + 20, { width: sigW, align: "center" });
       }
 
       doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
@@ -1422,8 +1445,11 @@ router.post(
 
       (async () => {
         try {
+          console.log(`📧 Generating welcome PDF for ${savedStudent.name}...`);
           const pdfBuffer = await generateWelcomePDF(savedStudent);
+          console.log(`📧 Sending welcome email to ${savedStudent.email_id}...`);
           await sendRegistrationSuccessEmail(savedStudent, pdfBuffer);
+          console.log(`✅ Welcome email sent to ${savedStudent.email_id}`);
         } catch (emailErr) {
           console.error("❌ Welcome email error:", emailErr.message);
         }
@@ -1437,7 +1463,9 @@ router.post(
       });
     } catch (err) {
       console.error("❌ Add Student Error:", err);
-      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
+      if (err.code === "ER_DUP_ENTRY") {
+        return res.status(400).json({ success: false, message: "Duplicate entry — Student ID / Admission Number / Roll Number already exists in this session" });
+      }
       res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -1454,10 +1482,26 @@ router.post("/check-email", async (req, res) => {
     }
     const emailClean = String(email).toLowerCase().trim();
 
-    const rows = await q(`SELECT id FROM Nstudent WHERE LOWER(email_id) = ? LIMIT 1`, [emailClean]);
-    if (!rows.length) return res.json({ success: true, exists: false, message: "Email not registered" });
-    return res.json({ success: true, exists: true, message: "Email verified" });
+    const rows = await q(
+      `SELECT id FROM Nstudent WHERE LOWER(email_id) = ? LIMIT 1`,
+      [emailClean]
+    );
+
+    if (!rows.length) {
+      return res.json({
+        success: true,
+        exists: false,
+        message: "Email not registered"
+      });
+    }
+
+    return res.json({
+      success: true,
+      exists: true,
+      message: "Email verified"
+    });
   } catch (err) {
+    console.error("check-email error:", err.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -1480,13 +1524,27 @@ router.post("/check-student-id", async (req, res) => {
     }
 
     const rows = await q(
-      `SELECT id FROM Nstudent WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? LIMIT 1`,
+      `SELECT id FROM Nstudent 
+       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
+       LIMIT 1`,
       [emailClean, sidClean.toLowerCase()]
     );
 
-    if (!rows.length) return res.json({ success: true, matches: false, message: "Student ID does not match this email" });
-    return res.json({ success: true, matches: true, message: "Identity verified" });
+    if (!rows.length) {
+      return res.json({
+        success: true,
+        matches: false,
+        message: "Student ID does not match this email"
+      });
+    }
+
+    return res.json({
+      success: true,
+      matches: true,
+      message: "Identity verified"
+    });
   } catch (err) {
+    console.error("check-student-id error:", err.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -1496,41 +1554,58 @@ router.post("/verify-login", async (req, res) => {
     const { email, studentId } = req.body;
 
     if (!email || !studentId) {
-      return res.status(400).json({ success: false, message: "Email and Student ID are required" });
+      return res.status(400).json({
+        success: false,
+        message: "Email and Student ID are required"
+      });
     }
 
     const emailClean = String(email).toLowerCase().trim();
     const sidClean = String(studentId).trim();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClean)) {
-      return res.status(400).json({ success: false, message: "Please enter a valid email address" });
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address"
+      });
     }
 
     if (sidClean.length < 3) {
-      return res.status(400).json({ success: false, message: "Student ID must be at least 3 characters" });
+      return res.status(400).json({
+        success: false,
+        message: "Student ID must be at least 3 characters"
+      });
     }
 
     const rows = await q(
-      `SELECT * FROM Nstudent WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? LIMIT 1`,
+      `SELECT * FROM Nstudent 
+       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
+       LIMIT 1`,
       [emailClean, sidClean.toLowerCase()]
     );
 
     if (!rows.length) {
-      return res.status(401).json({ success: false, message: "Invalid email or Student ID. Please check your details." });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or Student ID. Please check your details."
+      });
     }
 
     const s = revertStatusIfExpired(rows[0]);
 
     if (s.status && s.status.toLowerCase() === "inactive") {
-      return res.status(403).json({ success: false, message: "Your account is inactive. Please contact the school office." });
+      return res.status(403).json({
+        success: false,
+        message: "Your account is inactive. Please contact the school office."
+      });
     }
 
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
-    const safeStudent = { ...s };
-    for (const k of Object.keys(safeStudent)) {
-      if (k.endsWith("_pid")) delete safeStudent[k];
-    }
-
+const safeStudent = { ...s };
+for (const k of Object.keys(safeStudent)) {
+  if (k.endsWith("_pid")) delete safeStudent[k];
+}
+    
     res.json({
       success: true,
       message: "Login successful ✅",
@@ -1538,6 +1613,7 @@ router.post("/verify-login", async (req, res) => {
       token,
       loginTime: new Date().toISOString()
     });
+
   } catch (err) {
     console.error("❌ Verify-login error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
@@ -1552,18 +1628,27 @@ router.post("/recover-credential", async (req, res) => {
     const { recoverType } = req.body;
 
     if (!recoverType || !["email", "studentId"].includes(recoverType)) {
-      return res.status(400).json({ success: false, message: "Invalid recovery type" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid recovery type"
+      });
     }
 
     if (recoverType === "email") {
       const { class: cls, studentId, apaarId, dob, motherName } = req.body;
 
       if (!cls || !studentId || !apaarId || !dob || !motherName) {
-        return res.status(400).json({ success: false, message: "All fields required" });
+        return res.status(400).json({
+          success: false,
+          message: "All fields required"
+        });
       }
 
       if (!/^\d{12}$/.test(String(apaarId).replace(/\s/g, ""))) {
-        return res.status(400).json({ success: false, message: "APAAR ID must be 12 digits" });
+        return res.status(400).json({
+          success: false,
+          message: "APAAR ID must be 12 digits"
+        });
       }
 
       const rows = await q(
@@ -1575,17 +1660,32 @@ router.post("/recover-credential", async (req, res) => {
            AND DATE(dob) = DATE(?)
            AND LOWER(mother_name) = LOWER(?)
          LIMIT 1`,
-        [cls, String(studentId).trim(), String(apaarId).replace(/\s/g, "").trim(), dob, String(motherName).trim()]
+        [
+          cls,
+          String(studentId).trim(),
+          String(apaarId).replace(/\s/g, "").trim(),
+          dob,
+          String(motherName).trim()
+        ]
       );
 
       if (!rows.length) {
-        return res.status(401).json({ success: false, message: "No matching record found. Please check your details." });
+        return res.status(401).json({
+          success: false,
+          message: "No matching record found. Please check your details."
+        });
       }
 
       const s = rows[0];
+
       return res.json({
         success: true,
-        student: { class: s.class, name: s.name, fatherName: s.father_name, email: s.email_id }
+        student: {
+          class: s.class,
+          name: s.name,
+          fatherName: s.father_name,
+          email: s.email_id
+        }
       });
     }
 
@@ -1593,12 +1693,18 @@ router.post("/recover-credential", async (req, res) => {
       const { class: cls, email, aadharNumber, dob, fatherName } = req.body;
 
       if (!cls || !email || !aadharNumber || !dob || !fatherName) {
-        return res.status(400).json({ success: false, message: "All fields required" });
+        return res.status(400).json({
+          success: false,
+          message: "All fields required"
+        });
       }
 
       const aadhaar = String(aadharNumber).replace(/[\s-]/g, "");
       if (!/^\d{12}$/.test(aadhaar)) {
-        return res.status(400).json({ success: false, message: "Aadhaar must be 12 digits" });
+        return res.status(400).json({
+          success: false,
+          message: "Aadhaar must be 12 digits"
+        });
       }
 
       const rows = await q(
@@ -1610,21 +1716,37 @@ router.post("/recover-credential", async (req, res) => {
            AND DATE(dob) = DATE(?)
            AND LOWER(father_name) = LOWER(?)
          LIMIT 1`,
-        [cls, String(email).trim(), aadhaar, dob, String(fatherName).trim()]
+        [
+          cls,
+          String(email).trim(),
+          aadhaar,
+          dob,
+          String(fatherName).trim()
+        ]
       );
 
       if (!rows.length) {
-        return res.status(401).json({ success: false, message: "No matching record found. Please check your details." });
+        return res.status(401).json({
+          success: false,
+          message: "No matching record found. Please check your details."
+        });
       }
 
       const s = rows[0];
+
       return res.json({
         success: true,
-        student: { class: s.class, name: s.name, fatherName: s.father_name, studentId: s.student_id }
+        student: {
+          class: s.class,
+          name: s.name,
+          fatherName: s.father_name,
+          studentId: s.student_id
+        }
       });
     }
 
     return res.status(400).json({ success: false, message: "Unknown recovery type" });
+
   } catch (err) {
     console.error("❌ recover-credential error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
@@ -1713,9 +1835,9 @@ router.post("/verify-login-pin", async (req, res) => {
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
 
     const safeStudent = { ...s };
-    for (const k of Object.keys(safeStudent)) {
-      if (k.endsWith("_pid")) delete safeStudent[k];
-    }
+for (const k of Object.keys(safeStudent)) {
+  if (k.endsWith("_pid")) delete safeStudent[k];
+}
 
     res.json({
       success: true,
@@ -1781,6 +1903,7 @@ router.get("/pin/status/:studentId", async (req, res) => {
       monthYear: thisMonth
     });
   } catch (err) {
+    console.error("PIN status error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -1808,7 +1931,10 @@ router.post("/pin/create", async (req, res) => {
 
     const existing = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
     if (existing.length) {
-      return res.status(409).json({ success: false, message: "PIN already exists. Use 'Change PIN' instead." });
+      return res.status(409).json({
+        success: false,
+        message: "PIN already exists. Use 'Change PIN' instead."
+      });
     }
 
     const salt = generatePinSalt();
@@ -1830,6 +1956,7 @@ router.post("/pin/create", async (req, res) => {
       changesRemaining: MAX_CHANGES_PER_MONTH - 1
     });
   } catch (err) {
+    console.error("Create PIN error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -1932,6 +2059,7 @@ router.post("/pin/change", async (req, res) => {
       maxChangesPerMonth: MAX_CHANGES_PER_MONTH
     });
   } catch (err) {
+    console.error("Change PIN error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2003,6 +2131,7 @@ router.post("/pin/verify", async (req, res) => {
       lastChangedAt: pinRec.last_changed_at
     });
   } catch (err) {
+    console.error("Verify PIN error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2015,7 +2144,10 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     const { studentId, apaarId, aadharNumber } = req.body;
 
     if (!studentId || !apaarId || !aadharNumber) {
-      return res.status(400).json({ success: false, message: "Student ID, APAAR ID and Aadhaar Number are required" });
+      return res.status(400).json({
+        success: false,
+        message: "Student ID, APAAR ID and Aadhaar Number are required"
+      });
     }
 
     const sidClean = String(studentId).trim();
@@ -2023,15 +2155,24 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     const aadhaarClean = String(aadharNumber).replace(/[\s-]/g, "").trim();
 
     if (sidClean.length < 3) {
-      return res.status(400).json({ success: false, message: "Student ID must be at least 3 characters" });
+      return res.status(400).json({
+        success: false,
+        message: "Student ID must be at least 3 characters"
+      });
     }
 
     if (!/^\d{12}$/.test(apaarClean)) {
-      return res.status(400).json({ success: false, message: "APAAR ID must be exactly 12 digits" });
+      return res.status(400).json({
+        success: false,
+        message: "APAAR ID must be exactly 12 digits"
+      });
     }
 
     if (!/^\d{12}$/.test(aadhaarClean)) {
-      return res.status(400).json({ success: false, message: "Aadhaar Number must be exactly 12 digits" });
+      return res.status(400).json({
+        success: false,
+        message: "Aadhaar Number must be exactly 12 digits"
+      });
     }
 
     const rows = await q(
@@ -2045,23 +2186,35 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(401).json({ success: false, message: "Details do not match our records." });
+      return res.status(401).json({
+        success: false,
+        message: "Details do not match our records. Please check Student ID, APAAR ID and Aadhaar Number."
+      });
     }
 
     const student = rows[0];
 
     if (!student.email_id) {
-      return res.status(400).json({ success: false, message: "No email registered. Please contact the school office." });
+      return res.status(400).json({
+        success: false,
+        message: "No email registered. Please contact the school office."
+      });
     }
 
     const pinExists = await q(`SELECT locked_until FROM student_pins WHERE student_id = ?`, [student.id]);
     if (!pinExists.length) {
-      return res.status(404).json({ success: false, message: "No PIN set for this student." });
+      return res.status(404).json({
+        success: false,
+        message: "No PIN set for this student. Please contact the school office."
+      });
     }
 
     const lockMins = calcRemainingLockMins(pinExists[0].locked_until);
     if (lockMins > 0) {
-      return res.status(423).json({ success: false, message: `Account is currently locked. Try again in ${lockMins} minute(s).` });
+      return res.status(423).json({
+        success: false,
+        message: `Account is currently locked. Try again in ${lockMins} minute(s).`
+      });
     }
 
     const recentOtp = await q(
@@ -2073,7 +2226,10 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     if (recentOtp.length) {
       const waitSec = Math.ceil((30 * 1000 - (Date.now() - new Date(recentOtp[0].created_at).getTime())) / 1000);
       if (waitSec > 0) {
-        return res.status(429).json({ success: false, message: `Please wait ${waitSec} second(s) before requesting a new OTP.` });
+        return res.status(429).json({
+          success: false,
+          message: `Please wait ${waitSec} second(s) before requesting a new OTP.`
+        });
       }
     }
 
@@ -2126,8 +2282,11 @@ Someone requested to reset your 6-digit portal PIN. Use the OTP below to proceed
 </table>
 <p style="color:#94a3b8; font-size:12px; margin:20px 0 0; line-height:1.6;">
 ⏱ Valid for <strong>10 minutes</strong>.<br>
-If you didn't request this, please ignore this email.
+If you didn't request this, please ignore this email — your PIN is safe.
 </p>
+</td></tr>
+<tr><td style="background:#f8fafc; padding: 16px 24px; text-align:center; border-top:1px solid #e2e8f0;">
+<p style="margin:0; color:#94a3b8; font-size:11px;">© ${new Date().getFullYear()} GSSS SHILLA · Automated email</p>
 </td></tr>
 </table>
 </td></tr>
@@ -2136,10 +2295,16 @@ If you didn't request this, please ignore this email.
             textContent: `Your PIN Reset OTP: ${otp}\nValid for 10 minutes.`
           })
         });
-        if (!resp.ok) console.error("Brevo PIN OTP error:", resp.status);
+
+        if (!resp.ok) {
+          const errBody = await resp.text();
+          console.error("Brevo PIN OTP error:", resp.status, errBody);
+        }
       } catch (emailErr) {
         console.error("PIN OTP email error:", emailErr.message);
       }
+    } else {
+      console.log(`📧 PIN OTP for student ${student.id}: ${otp}`);
     }
 
     res.json({
@@ -2149,7 +2314,9 @@ If you didn't request this, please ignore this email.
       studentName: student.name,
       expiresInMinutes: 10
     });
+
   } catch (err) {
+    console.error("PIN forgot OTP error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
   }
 });
@@ -2223,7 +2390,7 @@ router.post("/pin/forgot/reset", async (req, res) => {
       if (changesUsed >= MAX_CHANGES_PER_MONTH) {
         return res.status(429).json({
           success: false,
-          message: `Monthly limit reached (${MAX_CHANGES_PER_MONTH}/month).`,
+          message: `Monthly limit reached (${MAX_CHANGES_PER_MONTH}/month). Contact admin to reset.`,
           code: "MONTHLY_LIMIT_REACHED"
         });
       }
@@ -2243,6 +2410,7 @@ router.post("/pin/forgot/reset", async (req, res) => {
 
     res.json({ success: true, message: "PIN reset successfully ✅ Please login with your new PIN." });
   } catch (err) {
+    console.error("PIN reset error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2293,8 +2461,13 @@ router.post("/pin/admin/reset", async (req, res) => {
     }
 
     await logPinHistory(sid, "reset_by_admin", "admin", req);
-    res.json({ success: true, message: `PIN reset by admin ✅` });
+
+    res.json({
+      success: true,
+      message: `PIN reset by admin ✅ (month counter refreshed to 0)`
+    });
   } catch (err) {
+    console.error("Admin PIN reset error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2409,6 +2582,7 @@ router.get("/pin/admin/all-status", async (req, res) => {
       data: rows
     });
   } catch (err) {
+    console.error("Admin all-status error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2435,7 +2609,14 @@ router.get("/pin/admin/summary", async (req, res) => {
     res.json({
       success: true,
       monthYear: thisMonth,
-      stats: { totalStudents, totalPins, noPin: totalStudents - totalPins, locked, needsChange, limitReached }
+      stats: {
+        totalStudents,
+        totalPins,
+        noPin: totalStudents - totalPins,
+        locked,
+        needsChange,
+        limitReached
+      }
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -2443,7 +2624,7 @@ router.get("/pin/admin/summary", async (req, res) => {
 });
 
 // ============================================================
-// ✅ BACKUP SYSTEM
+// ✅ BACKUP & RESTORE SYSTEM
 // ============================================================
 const BACKUP_DIR = path.join(__dirname, "..", "backups");
 const MAX_BACKUPS = 10;
@@ -2486,7 +2667,7 @@ async function createBackup(type = "auto") {
   await cleanupOldBackups();
 
   const stat = fs.statSync(filepath);
-  console.log(`[Backup] Created: ${filename} (${students.length} students)`);
+  console.log(`[Backup] Created: ${filename} (${students.length} students, ${(stat.size / 1024).toFixed(2)} KB)`);
 
   return { filename, filepath, size: stat.size, stats: backupData.stats };
 }
@@ -2575,26 +2756,16 @@ async function restoreBackupData(data, mode = "merge") {
 }
 
 // ============================================================
-// ✅✅✅ PROFESSIONAL TABLE PDF — One Row Per Student
+// ✅ PROFESSIONAL TABLE PDF
 // ============================================================
 router.get("/list-pdf", async (req, res) => {
   try {
     const {
-      class: cls,
-      gender,
-      stream,
-      category,
-      status,
-      session,
-      search,
-      includePhoto = "true",
-      includeSignature = "true",
-      includeReason = "false",
-      reason = "",
-      title = "STUDENT LIST"
+      class: cls, gender, stream, category, status, session, search,
+      includePhoto = "true", includeSignature = "true",
+      includeReason = "false", reason = "", title = "STUDENT LIST", columns
     } = req.query;
 
-    // ---- WHERE clause ----
     const where = [];
     const params = [];
     if (cls)      { where.push("class = ?"); params.push(cls); }
@@ -2613,16 +2784,12 @@ router.get("/list-pdf", async (req, res) => {
     const students = await q(
       `SELECT * FROM Nstudent ${whereSql}
        ORDER BY FIELD(class,'Nursery','LKG','UKG','1','2','3','4','5','6','7','8','9','10','11','12') ASC,
-                CAST(roll_number AS UNSIGNED) ASC, name ASC
-       LIMIT 5000`,
+                CAST(roll_number AS UNSIGNED) ASC, name ASC LIMIT 5000`,
       params
     );
 
-    if (!students.length) {
-      return res.status(404).json({ success: false, message: "No students found for these filters" });
-    }
+    if (!students.length) return res.status(404).json({ success: false, message: "No students found" });
 
-    // ---- Filter summary ----
     const filterParts = [];
     if (cls) filterParts.push(`Class: ${cls}`);
     if (session) filterParts.push(`Session: ${session}`);
@@ -2633,169 +2800,111 @@ router.get("/list-pdf", async (req, res) => {
     if (search) filterParts.push(`Search: "${search}"`);
     const filterSummary = filterParts.length ? filterParts.join("  •  ") : "All Students";
 
-    // ---- Group by class ----
+    const requestedCols = columns
+      ? columns.split(",").map(c => c.trim()).filter(Boolean)
+      : ["sl","studentId","admissionNumber","name","fatherName","class","rollNumber","session","gender","category","mobile"];
+
+    const needPhotos = includePhoto === "true";
+    const needSigs = includeSignature === "true";
+    const hasPhotoCol = requestedCols.includes("photo");
+    const hasSigCol = requestedCols.includes("signature");
+
+    const columnCount = requestedCols.length;
+    const hasMedia = hasPhotoCol || hasSigCol || needPhotos || needSigs;
+    const useCardLayout = hasMedia || columnCount > 9;
+
     const grouped = {};
     const classOrder = ["Nursery","LKG","UKG","1","2","3","4","5","6","7","8","9","10","11","12"];
     classOrder.forEach(c => { grouped[c] = []; });
     grouped["Other"] = [];
-
     students.forEach(s => {
       const key = String(s.class || "Other");
       if (grouped[key]) grouped[key].push(s);
       else grouped["Other"].push(s);
     });
 
-    const needPhotos = includePhoto === "true";
-    const needSigs = includeSignature === "true";
-
-    // ---- Fetch images ----
-    const photoMap = {};
-    const sigMap = {};
-
-    if (needPhotos || needSigs) {
-      console.log(`[List PDF] Fetching images for ${students.length} students...`);
+    const photoMap = {}, sigMap = {};
+    if (needPhotos || needSigs || hasPhotoCol || hasSigCol) {
       await Promise.all(students.map(async (s) => {
-        if (needPhotos && s.student_photo_url) {
+        if ((needPhotos || hasPhotoCol) && s.student_photo_url) {
           try { photoMap[s.id] = await fetchImageBuffer(s.student_photo_url); } catch (e) {}
         }
-        if (needSigs && s.signature_url) {
+        if ((needSigs || hasSigCol) && s.signature_url) {
           try { sigMap[s.id] = await fetchImageBuffer(s.signature_url); } catch (e) {}
         }
       }));
     }
 
-    // ---- School logo ----
     const schoolLogo = await fetchImageBuffer(SCHOOL_LOGO_URL);
 
-    // ---- PDF Setup ----
     res.setHeader("Content-Type", "application/pdf");
     const safeTitle = String(title).replace(/[^a-zA-Z0-9-_]/g, "_").substring(0, 50);
     res.setHeader("Content-Disposition", `inline; filename="${safeTitle}.pdf"`);
 
-    const PAGE_W = 842;
-    const PAGE_H = 595;
-    const MARGIN = 20;
+    const PAGE_W = 842, PAGE_H = 595, MARGIN = 20;
     const CONTENT_W = PAGE_W - MARGIN * 2;
-
-    const HEADER_H = 76;
-    const FILTER_BAND_H = 18;
-    const FOOTER_H = 28;
-
+    const HEADER_H = 76, FILTER_BAND_H = 18, FOOTER_H = 28;
     const BODY_TOP = HEADER_H + FILTER_BAND_H + 4;
     const BODY_BOTTOM = PAGE_H - FOOTER_H - 4;
-    const BODY_H = BODY_BOTTOM - BODY_TOP;
 
     const doc = new PDFDocument({
-      size: "A4",
-      layout: "landscape",
+      size: "A4", layout: "landscape",
       margins: { top: 0, bottom: 0, left: 0, right: 0 },
-      bufferPages: true,
-      autoFirstPage: false
+      bufferPages: true, autoFirstPage: false
     });
 
     doc.pipe(res);
-
     let pageNum = 0;
 
-    // ============================================================
-    // Header (with logo + school name + title)
-    // ============================================================
     const drawPageHeader = (pageTitle) => {
-      // Navy band
       doc.rect(0, 0, PAGE_W, HEADER_H).fill("#0d1b2a");
-      // Gold line at bottom
       doc.rect(0, HEADER_H - 3, PAGE_W, 3).fill("#c9972b");
-
-      // Logo circle (top-left)
       if (schoolLogo) {
         try {
           doc.save();
-          doc.circle(MARGIN + 26, 38, 26).fill("#ffffff");
-          doc.circle(MARGIN + 26, 38, 25).lineWidth(1.5).strokeColor("#c9972b").stroke();
+          doc.circle(MARGIN + 24, 36, 24).fill("#ffffff");
+          doc.circle(MARGIN + 24, 36, 23).lineWidth(1.5).strokeColor("#c9972b").stroke();
           doc.restore();
-          doc.image(schoolLogo, MARGIN + 4, 16, { fit: [44, 44], align: "center", valign: "center" });
+          doc.image(schoolLogo, MARGIN + 2, 14, { fit: [44, 44], align: "center", valign: "center" });
         } catch (e) {}
       }
-
-      // School name (centered)
       doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff")
-         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN + 60, 12, {
-           width: PAGE_W - MARGIN * 2 - 60,
-           align: "center",
-           characterSpacing: 1.2
-         });
-
+         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN + 60, 10, { width: PAGE_W - MARGIN * 2 - 60, align: "center", characterSpacing: 1.2 });
       doc.font("Helvetica").fontSize(8).fillColor("#c9972b")
-         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN + 60, 32, {
-           width: PAGE_W - MARGIN * 2 - 60,
-           align: "center",
-           characterSpacing: 0.5
-         });
-
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN + 60, 30, { width: PAGE_W - MARGIN * 2 - 60, align: "center", characterSpacing: 0.5 });
       doc.font("Helvetica-Bold").fontSize(12).fillColor("#ffffff")
-         .text(String(pageTitle || title).toUpperCase(), MARGIN + 60, 48, {
-           width: PAGE_W - MARGIN * 2 - 60,
-           align: "center",
-           characterSpacing: 1.5
-         });
-
-      // Filter band
-      const summaryY = HEADER_H;
-      doc.rect(0, summaryY, PAGE_W, FILTER_BAND_H).fill("#f1f5f9");
+         .text(String(pageTitle || title).toUpperCase(), MARGIN + 60, 48, { width: PAGE_W - MARGIN * 2 - 60, align: "center", characterSpacing: 1.5 });
+      doc.rect(0, HEADER_H, PAGE_W, FILTER_BAND_H).fill("#f1f5f9");
       doc.font("Helvetica").fontSize(8).fillColor("#334155")
-         .text(filterSummary, MARGIN, summaryY + 5, { width: PAGE_W - MARGIN * 2 - 160, align: "left" });
-
-      // Total count on right
+         .text(filterSummary, MARGIN, HEADER_H + 5, { width: PAGE_W - MARGIN * 2 - 160, align: "left" });
       doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
-         .text(`Total: ${students.length}`, PAGE_W - MARGIN - 150, summaryY + 5, { width: 150, align: "right" });
+         .text(`Total: ${students.length}`, PAGE_W - MARGIN - 150, HEADER_H + 5, { width: 150, align: "right" });
     };
 
-    // ============================================================
-    // Footer
-    // ============================================================
     const drawPageFooter = () => {
-      const fy = PAGE_H - FOOTER_H + 2;
-
-      doc.strokeColor("#c9972b").lineWidth(1)
-         .moveTo(MARGIN, fy - 4).lineTo(PAGE_W - MARGIN, fy - 4).stroke();
-
-      // Left: Print date
+      const fy = PAGE_H - FOOTER_H + 4;
+      doc.strokeColor("#c9972b").lineWidth(1).moveTo(MARGIN, fy - 4).lineTo(PAGE_W - MARGIN, fy - 4).stroke();
       doc.font("Helvetica").fontSize(7).fillColor("#64748b")
-         .text(
-           `Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
-           MARGIN, fy + 3, { width: 220, align: "left" }
-         );
-
-      // Right: Page num
-      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a")
-         .text(`Page ${pageNum}`, PAGE_W - MARGIN - 100, fy + 3, { width: 100, align: "right" });
-
-      // Center text
-      doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-         .text("GSSS SHILLA — OFFICIAL DOCUMENT", MARGIN, fy + 14, {
-           width: PAGE_W - MARGIN * 2,
-           align: "center",
-           characterSpacing: 0.5
-         });
+         .text(`Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`, MARGIN, fy + 3, { width: 220, align: "left" });
+      const cx = (PAGE_W - 360) / 2;
+      doc.strokeColor("#94a3b8").lineWidth(0.5).moveTo(cx, fy + 10).lineTo(cx + 100, fy + 10).stroke();
+      doc.font("Helvetica").fontSize(6.5).fillColor("#475569").text("Class Teacher", cx, fy + 12, { width: 100, align: "center" });
+      doc.strokeColor("#94a3b8").lineWidth(0.5).moveTo(cx + 140, fy + 10).lineTo(cx + 240, fy + 10).stroke();
+      doc.font("Helvetica").fontSize(6.5).fillColor("#475569").text("Principal", cx + 140, fy + 12, { width: 100, align: "center" });
+      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a").text(`Page ${pageNum}`, PAGE_W - MARGIN - 100, fy + 3, { width: 100, align: "right" });
     };
 
-    // ============================================================
-    // Watermark
-    // ============================================================
     const drawWatermark = () => {
       if (!schoolLogo) return;
       try {
         doc.save();
-        doc.opacity(0.05);
-        const size = 380;
-        doc.image(schoolLogo, (PAGE_W - size) / 2, (PAGE_H - size) / 2, { width: size, height: size });
+        doc.opacity(0.12);
+        const size = 340;
+        doc.image(schoolLogo, (PAGE_W - size) / 2, (PAGE_H - size) / 2 - 20, { width: size, height: size });
         doc.restore();
       } catch (e) {}
     };
 
-    // ============================================================
-    // Add new page
-    // ============================================================
     const addPage = (pageTitle) => {
       doc.addPage();
       pageNum++;
@@ -2803,305 +2912,252 @@ router.get("/list-pdf", async (req, res) => {
       drawPageHeader(pageTitle);
     };
 
-    // ============================================================
-    // Table setup — dynamic columns based on options
-    // ============================================================
-    // Column definitions
-    const COLS = [];
-    COLS.push({ key: "sl",     label: "#",           width: 28,  align: "center" });
-    if (needPhotos) {
-      COLS.push({ key: "photo", label: "PHOTO",       width: 44,  align: "center" });
-    }
-    COLS.push({ key: "studentId", label: "STUDENT ID", width: 78,  align: "left" });
-    COLS.push({ key: "admissionNumber", label: "ADM. NO", width: 68, align: "left" });
-    COLS.push({ key: "name",   label: "STUDENT NAME", width: 128, align: "left" });
-    COLS.push({ key: "fatherName", label: "FATHER'S NAME", width: 120, align: "left" });
-    COLS.push({ key: "motherName", label: "MOTHER'S NAME", width: 110, align: "left" });
-    COLS.push({ key: "dob",    label: "DOB",          width: 68,  align: "center" });
-    COLS.push({ key: "gender", label: "GENDER",       width: 48,  align: "center" });
-    COLS.push({ key: "category", label: "CATEGORY",   width: 55,  align: "center" });
-    COLS.push({ key: "stream", label: "STREAM",       width: 68,  align: "center" });
-    COLS.push({ key: "rollNumber", label: "ROLL",     width: 42,  align: "center" });
-    COLS.push({ key: "session", label: "SESSION",     width: 58,  align: "center" });
-    COLS.push({ key: "mobile", label: "MOBILE",       width: 78,  align: "left" });
-    COLS.push({ key: "status", label: "STATUS",       width: 55,  align: "center" });
-    if (needSigs) {
-      COLS.push({ key: "signature", label: "SIGNATURE", width: 62, align: "center" });
-    }
+    const COLUMN_LABELS = {
+      sl: "#", studentId: "STUDENT ID", admissionNumber: "ADM. NO", name: "STUDENT NAME",
+      fatherName: "FATHER'S NAME", motherName: "MOTHER'S NAME", class: "CLASS", rollNumber: "ROLL",
+      session: "SESSION", gender: "GENDER", category: "CATEGORY", stream: "STREAM",
+      dob: "DOB", mobile: "MOBILE", email: "EMAIL", aadhar: "AADHAAR", apaar: "APAAR ID",
+      status: "STATUS", address: "ADDRESS", photo: "PHOTO", signature: "SIGNATURE"
+    };
+    const COLUMN_WIDTHS = {
+      sl: 26, studentId: 76, admissionNumber: 66, name: 128, fatherName: 118, motherName: 108,
+      class: 42, rollNumber: 40, session: 58, gender: 46, category: 54, stream: 66,
+      dob: 62, mobile: 76, email: 130, aadhar: 96, apaar: 92, status: 54, address: 160,
+      photo: 44, signature: 58
+    };
 
-    // Scale to fit content width
-    const totalColW = COLS.reduce((s, c) => s + c.width, 0);
-    const scale = CONTENT_W / totalColW;
-    COLS.forEach(c => { c.scaledW = c.width * scale; });
+    const ALL_COLS_ORDERED = ["sl","photo","studentId","admissionNumber","name","fatherName","motherName",
+      "class","rollNumber","session","gender","category","stream","dob","mobile","email","aadhar","apaar","status","address","signature"];
 
-    // Row heights
-    const ROW_H = needPhotos || needSigs ? 48 : 22;
-    const TABLE_HEADER_H = 24;
+    let activeCols = ALL_COLS_ORDERED.filter(c => requestedCols.includes(c));
+    if (needPhotos && !activeCols.includes("photo")) {
+      const nameIdx = activeCols.indexOf("name");
+      if (nameIdx >= 0) activeCols.splice(nameIdx + 1, 0, "photo");
+      else activeCols.splice(1, 0, "photo");
+    }
+    if (needSigs && !activeCols.includes("signature")) activeCols.push("signature");
+    if (!activeCols.length) activeCols = ["sl","studentId","name"];
+
+    const totalW = activeCols.reduce((s, c) => s + (COLUMN_WIDTHS[c] || 70), 0);
+    const scale = CONTENT_W / totalW;
+    const colWidths = {};
+    activeCols.forEach(c => { colWidths[c] = (COLUMN_WIDTHS[c] || 70) * scale; });
+
+    const ROW_H = 22;
+    const TABLE_HEADER_H = 26;
     const SECTION_TITLE_H = 22;
+    const STUDENT_GAP = 3;
 
-    // ============================================================
-    // Draw table header row (dark navy with white text)
-    // ============================================================
+    const drawSectionTitle = (y, className, count, isContd = false) => {
+      doc.rect(MARGIN, y, CONTENT_W, SECTION_TITLE_H - 2).fill("#1e3a8a");
+      doc.rect(MARGIN, y, 6, SECTION_TITLE_H - 2).fill("#c9972b");
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#ffffff")
+         .text(`CLASS: ${className}${isContd ? " (contd.)" : ""}`, MARGIN + 14, y + 5, { width: CONTENT_W - 200, align: "left", characterSpacing: 1.2 });
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#c9972b")
+         .text(isContd ? `continued...` : `${count} Student${count > 1 ? "s" : ""}`, MARGIN, y + 5, { width: CONTENT_W - 14, align: "right" });
+      return y + SECTION_TITLE_H;
+    };
+
     const drawTableHeader = (y) => {
-      // Bold outer border top handled by outer rect at end
       let x = MARGIN;
-
-      // Header background
       doc.rect(MARGIN, y, CONTENT_W, TABLE_HEADER_H).fill("#0d1b2a");
-
-      COLS.forEach((c, i) => {
-        // Label
-        doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#ffffff")
-           .text(c.label, x + 3, y + 8, {
-             width: c.scaledW - 6,
-             align: "center",
-             lineBreak: false,
-             ellipsis: true
-           });
-
-        // Column separator (gold inside header)
-        if (i < COLS.length - 1) {
-          doc.strokeColor("#c9972b").lineWidth(0.6)
-             .moveTo(x + c.scaledW, y + 2)
-             .lineTo(x + c.scaledW, y + TABLE_HEADER_H - 2)
-             .stroke();
+      activeCols.forEach((c, i) => {
+        const w = colWidths[c];
+        doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff")
+           .text(COLUMN_LABELS[c] || c.toUpperCase(), x + 2, y + 9, { width: w - 4, align: "center", lineBreak: false, ellipsis: true });
+        if (i < activeCols.length - 1) {
+          doc.strokeColor("#c9972b").lineWidth(0.6).moveTo(x + w, y + 3).lineTo(x + w, y + TABLE_HEADER_H - 3).stroke();
         }
-
-        x += c.scaledW;
+        x += w;
       });
-
-      // Bold bottom border of header
-      doc.strokeColor("#c9972b").lineWidth(1.5)
-         .moveTo(MARGIN, y + TABLE_HEADER_H)
-         .lineTo(MARGIN + CONTENT_W, y + TABLE_HEADER_H)
-         .stroke();
-
+      doc.strokeColor("#c9972b").lineWidth(1.5).moveTo(MARGIN, y + TABLE_HEADER_H).lineTo(MARGIN + CONTENT_W, y + TABLE_HEADER_H).stroke();
       return y + TABLE_HEADER_H;
     };
 
-    // ============================================================
-    // Draw one student row
-    // ============================================================
-    const drawStudentRow = (s, y, idx) => {
-      let x = MARGIN;
-
-      // Alternating row background
-      if (idx % 2 === 1) {
-        doc.rect(MARGIN, y, CONTENT_W, ROW_H).fill("#f8fafc");
-      } else {
-        doc.rect(MARGIN, y, CONTENT_W, ROW_H).fill("#ffffff");
+    const getCellValue = (s, key, idx) => {
+      switch (key) {
+        case "sl": return String(idx + 1);
+        case "studentId": return s.student_id || "—";
+        case "admissionNumber": return s.admission_number || "—";
+        case "name": return s.name || "—";
+        case "fatherName": return s.father_name || "—";
+        case "motherName": return s.mother_name || "—";
+        case "class": return s.class || "—";
+        case "rollNumber": return s.roll_number || "—";
+        case "session": return s.session || "—";
+        case "gender": return s.gender || "—";
+        case "category": return s.category || "—";
+        case "stream": return s.stream || "Non-Spec.";
+        case "dob": return s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }) : "—";
+        case "mobile": return s.mobile_number || "—";
+        case "email": return s.email_id || "—";
+        case "aadhar": return s.aadhar_number || "—";
+        case "apaar": return s.apaar_id || "—";
+        case "status": return s.status || "Active";
+        case "address": return s.address || "—";
+        default: return "";
       }
+    };
 
-      // Row content
-      COLS.forEach((c, i) => {
-        // Vertical cell separator (light gray 2px gap feel)
-        if (i > 0) {
-          doc.strokeColor("#cbd5e1").lineWidth(1)
-             .moveTo(x, y)
-             .lineTo(x, y + ROW_H)
-             .stroke();
-        }
-
-        const cellX = x + 4;
-        const cellW = c.scaledW - 8;
-        const centerY = y + (ROW_H / 2);
-
-        if (c.key === "sl") {
-          doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0d1b2a")
-             .text(String(idx + 1), x, centerY - 5, { width: c.scaledW, align: "center" });
-        } else if (c.key === "photo") {
-          const PHOTO_W = 34;
-          const PHOTO_H = 40;
-          const px = x + (c.scaledW - PHOTO_W) / 2;
-          const py = y + (ROW_H - PHOTO_H) / 2;
-          doc.rect(px, py, PHOTO_W, PHOTO_H).fillAndStroke("#f1f5f9", "#c9972b");
-          if (photoMap[s.id]) {
-            try {
-              doc.image(photoMap[s.id], px + 1.5, py + 1.5, {
-                fit: [PHOTO_W - 3, PHOTO_H - 3],
-                align: "center",
-                valign: "center"
-              });
-            } catch (e) {
-              doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-                 .text("N/A", px, centerY - 3, { width: PHOTO_W, align: "center" });
-            }
-          } else {
-            doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-               .text("N/A", px, centerY - 3, { width: PHOTO_W, align: "center" });
-          }
-        } else if (c.key === "signature") {
-          const SIG_W = 48;
-          const SIG_H = 22;
-          const px = x + (c.scaledW - SIG_W) / 2;
-          const py = y + (ROW_H - SIG_H) / 2;
-          doc.rect(px, py, SIG_W, SIG_H).fillAndStroke("#fef8ed", "#c9972b");
-          if (sigMap[s.id]) {
-            try {
-              doc.image(sigMap[s.id], px + 1.5, py + 1.5, {
-                fit: [SIG_W - 3, SIG_H - 3],
-                align: "center",
-                valign: "center"
-              });
-            } catch (e) {
-              doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-                 .text("N/A", px, centerY - 3, { width: SIG_W, align: "center" });
-            }
-          } else {
-            doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-               .text("N/A", px, centerY - 3, { width: SIG_W, align: "center" });
-          }
+    const drawSimpleRow = (s, y, idx) => {
+      let x = MARGIN;
+      doc.rect(MARGIN, y, CONTENT_W, ROW_H).fill(idx % 2 === 1 ? "#f8fafc" : "#ffffff");
+      activeCols.forEach((c, i) => {
+        const w = colWidths[c];
+        if (c === "photo" && photoMap[s.id]) {
+          try { doc.image(photoMap[s.id], x + (w - 18) / 2, y + 2, { fit: [18, 18] }); } catch (e) {}
+        } else if (c === "signature" && sigMap[s.id]) {
+          try { doc.image(sigMap[s.id], x + (w - 30) / 2, y + 4, { fit: [30, 14] }); } catch (e) {}
         } else {
-          // Regular text cell
-          let value = "";
-          switch (c.key) {
-            case "studentId": value = s.student_id || "-"; break;
-            case "admissionNumber": value = s.admission_number || "-"; break;
-            case "name": value = s.name || "-"; break;
-            case "fatherName": value = s.father_name || "-"; break;
-            case "motherName": value = s.mother_name || "-"; break;
-            case "dob": value = s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }) : "-"; break;
-            case "gender": value = s.gender || "-"; break;
-            case "category": value = s.category || "-"; break;
-            case "stream": value = s.stream || "Non-Spec."; break;
-            case "rollNumber": value = s.roll_number || "-"; break;
-            case "session": value = s.session || "-"; break;
-            case "mobile": value = s.mobile_number || "-"; break;
-            case "status": value = s.status || "Active"; break;
-          }
-
-          const isName = c.key === "name";
-          doc.font(isName ? "Helvetica-Bold" : "Helvetica").fontSize(isName ? 8.5 : 8).fillColor("#1a2332")
-             .text(String(value), cellX, centerY - 5, {
-               width: cellW,
-               align: c.align,
-               lineBreak: false,
-               ellipsis: true
-             });
+          const value = getCellValue(s, c, idx);
+          const isName = c === "name";
+          const align = ["sl","class","rollNumber","gender","category","stream","dob","session","status"].includes(c) ? "center" : "left";
+          doc.font(isName ? "Helvetica-Bold" : "Helvetica").fontSize(isName ? 8 : 7.5).fillColor("#0d1b2a")
+             .text(String(value), x + 3, y + (ROW_H / 2) - 4, { width: w - 6, align, lineBreak: false, ellipsis: true });
         }
-
-        x += c.scaledW;
+        if (i > 0) {
+          doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(x, y).lineTo(x, y + ROW_H).stroke();
+        }
+        x += w;
       });
-
-      // Horizontal bottom separator (2px)
-      doc.strokeColor("#cbd5e1").lineWidth(1)
-         .moveTo(MARGIN, y + ROW_H)
-         .lineTo(MARGIN + CONTENT_W, y + ROW_H)
-         .stroke();
-
+      doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(MARGIN, y + ROW_H).lineTo(MARGIN + CONTENT_W, y + ROW_H).stroke();
       return y + ROW_H;
     };
 
-    // ============================================================
-    // Draw outer bold border of table block
-    // ============================================================
-    const drawTableOuterBorder = (topY, bottomY) => {
-      doc.strokeColor("#0d1b2a").lineWidth(2)
-         .rect(MARGIN, topY, CONTENT_W, bottomY - topY)
-         .stroke();
+    const drawCardRow = (s, y, idx) => {
+      const CARD_H = ROW_H * 2 + STUDENT_GAP;
+      doc.rect(MARGIN, y, CONTENT_W, CARD_H).fill(idx % 2 === 1 ? "#f8fafc" : "#ffffff");
+
+      let x = MARGIN;
+      let photoStartX = null, photoCellW = 0, sigStartX = null, sigCellW = 0;
+
+      activeCols.forEach((c) => {
+        const w = colWidths[c];
+        if (c === "photo") { photoStartX = x; photoCellW = w; }
+        else if (c === "signature") { sigStartX = x; sigCellW = w; }
+        x += w;
+      });
+
+      const fields = activeCols.filter(c => c !== "photo" && c !== "signature");
+      const halfCount = Math.ceil(fields.length / 2);
+      const topFields = fields.slice(0, halfCount);
+      const bottomFields = fields.slice(halfCount);
+
+      const topY = y;
+      const botY = y + ROW_H + STUDENT_GAP;
+
+      let xTop = MARGIN;
+      topFields.forEach((c) => {
+        const w = colWidths[c];
+        const value = getCellValue(s, c, idx);
+        const isName = c === "name";
+        const align = ["sl","class","rollNumber","gender","category","stream","dob","session","status"].includes(c) ? "center" : "left";
+        doc.font(isName ? "Helvetica-Bold" : "Helvetica").fontSize(isName ? 9 : 8).fillColor("#0d1b2a")
+           .text(String(value), xTop + 4, topY + (ROW_H / 2) - 5, { width: w - 8, align, lineBreak: false, ellipsis: true });
+        if (xTop > MARGIN) {
+          doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(xTop, topY + 2).lineTo(xTop, topY + ROW_H - 2).stroke();
+        }
+        xTop += w;
+      });
+
+      let xBot = MARGIN;
+      bottomFields.forEach((c) => {
+        const w = colWidths[c];
+        const value = getCellValue(s, c, idx);
+        const align = ["sl","class","rollNumber","gender","category","stream","dob","session","status"].includes(c) ? "center" : "left";
+        doc.font("Helvetica").fontSize(8).fillColor("#0d1b2a")
+           .text(String(value), xBot + 4, botY + (ROW_H / 2) - 5, { width: w - 8, align, lineBreak: false, ellipsis: true });
+        if (xBot > MARGIN) {
+          doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(xBot, botY + 2).lineTo(xBot, botY + ROW_H - 2).stroke();
+        }
+        xBot += w;
+      });
+
+      doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(MARGIN, y + ROW_H + STUDENT_GAP / 2).lineTo(MARGIN + CONTENT_W, y + ROW_H + STUDENT_GAP / 2).stroke();
+
+      if (photoStartX !== null) {
+        const PHOTO_W = Math.min(photoCellW - 8, 34);
+        const PHOTO_H = Math.min(CARD_H - 8, 44);
+        const px = photoStartX + (photoCellW - PHOTO_W) / 2;
+        const py = y + (CARD_H - PHOTO_H) / 2;
+        doc.rect(px, py, PHOTO_W, PHOTO_H).fillAndStroke("#f1f5f9", "#c9972b");
+        if (photoMap[s.id]) {
+          try { doc.image(photoMap[s.id], px + 1.5, py + 1.5, { fit: [PHOTO_W - 3, PHOTO_H - 3], align: "center", valign: "center" }); } catch (e) {}
+        }
+        doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(photoStartX, y).lineTo(photoStartX, y + CARD_H).stroke();
+        doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(photoStartX + photoCellW, y).lineTo(photoStartX + photoCellW, y + CARD_H).stroke();
+      }
+
+      if (sigStartX !== null) {
+        const SIG_W = Math.min(sigCellW - 8, 46);
+        const SIG_H = Math.min(CARD_H - 12, 30);
+        const sx = sigStartX + (sigCellW - SIG_W) / 2;
+        const sy = y + (CARD_H - SIG_H) / 2;
+        doc.rect(sx, sy, SIG_W, SIG_H).fillAndStroke("#fef8ed", "#c9972b");
+        if (sigMap[s.id]) {
+          try { doc.image(sigMap[s.id], sx + 1.5, sy + 1.5, { fit: [SIG_W - 3, SIG_H - 3], align: "center", valign: "center" }); } catch (e) {}
+        }
+        doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(sigStartX, y).lineTo(sigStartX, y + CARD_H).stroke();
+        doc.strokeColor("#cbd5e1").lineWidth(0.5).moveTo(sigStartX + sigCellW, y).lineTo(sigStartX + sigCellW, y + CARD_H).stroke();
+      }
+
+      doc.strokeColor("#e2e8f0").lineWidth(0.5).rect(MARGIN, y, CONTENT_W, CARD_H).stroke();
+      return y + CARD_H + STUDENT_GAP;
     };
 
-    // ============================================================
-    // Main rendering
-    // ============================================================
-    let cursorY = BODY_TOP;
-    let classList = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
-    let globalSerial = 0;
+    const drawTableOuterBorder = (topY, bottomY) => {
+      doc.strokeColor("#0d1b2a").lineWidth(2).rect(MARGIN, topY, CONTENT_W, bottomY - topY).stroke();
+    };
 
-    // Start first page
+    let cursorY = BODY_TOP;
+    const classList = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
+    let globalIdx = 0;
+
     addPage(title);
 
-    classList.forEach((className, classIdx) => {
+    classList.forEach((className) => {
       const classStudents = grouped[className];
-
-      // Need to keep section title + table header + at least one row on the page
-      const minNeeded = SECTION_TITLE_H + TABLE_HEADER_H + ROW_H + 6;
+      const rowH = useCardLayout ? (ROW_H * 2 + STUDENT_GAP) : ROW_H;
+      const minNeeded = SECTION_TITLE_H + TABLE_HEADER_H + rowH + 6;
       if (cursorY + minNeeded > BODY_BOTTOM) {
         drawPageFooter();
         addPage(title);
         cursorY = BODY_TOP;
       }
 
-      // ---- Section Title Bar ----
-      const sectionY = cursorY;
-      doc.rect(MARGIN, sectionY, CONTENT_W, SECTION_TITLE_H - 2).fill("#1e3a8a");
-      doc.rect(MARGIN, sectionY, 6, SECTION_TITLE_H - 2).fill("#c9972b");
-
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff")
-         .text(`CLASS: ${className}`, MARGIN + 14, sectionY + 5, {
-           width: CONTENT_W - 200,
-           align: "left",
-           characterSpacing: 1.2
-         });
-
-      // ✅ Student count on the SAME row, right-aligned
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
-         .text(`${classStudents.length} Student${classStudents.length > 1 ? "s" : ""}`, MARGIN, sectionY + 5, {
-           width: CONTENT_W - 14,
-           align: "right"
-         });
-
-      cursorY += SECTION_TITLE_H;
-
-      // Table start position
+      cursorY = drawSectionTitle(cursorY, className, classStudents.length);
       const tableTop = cursorY;
-      let rowY = drawTableHeader(cursorY);
-      let tableContinued = false;
-      let tableTopForBorder = tableTop;
+      cursorY = drawTableHeader(cursorY);
+      const tableTopForBorder = tableTop;
 
-      // ---- Rows ----
       for (let i = 0; i < classStudents.length; i++) {
         const s = classStudents[i];
+        const rH = useCardLayout ? (ROW_H * 2 + STUDENT_GAP) : ROW_H;
 
-        // Check space for next row
-        if (rowY + ROW_H > BODY_BOTTOM) {
-          // Close the outer border for current table chunk
-          drawTableOuterBorder(tableTopForBorder, rowY);
-
-          // Footer + new page
+        if (cursorY + rH > BODY_BOTTOM) {
+          drawTableOuterBorder(tableTopForBorder, cursorY);
           drawPageFooter();
           addPage(title);
           cursorY = BODY_TOP;
-
-          // Continued section header
-          const contY = cursorY;
-          doc.rect(MARGIN, contY, CONTENT_W, SECTION_TITLE_H - 2).fill("#1e3a8a");
-          doc.rect(MARGIN, contY, 6, SECTION_TITLE_H - 2).fill("#c9972b");
-          doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff")
-             .text(`CLASS: ${className} (contd.)`, MARGIN + 14, contY + 5, {
-               width: CONTENT_W - 200, align: "left", characterSpacing: 1.2
-             });
-          doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
-             .text(`continued...`, MARGIN, contY + 5, {
-               width: CONTENT_W - 14, align: "right"
-             });
-
-          cursorY += SECTION_TITLE_H;
-          tableTopForBorder = cursorY;
-          rowY = drawTableHeader(cursorY);
+          cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
+          cursorY = drawTableHeader(cursorY);
         }
 
-        rowY = drawStudentRow(s, rowY, globalSerial);
-        globalSerial++;
+        if (useCardLayout) cursorY = drawCardRow(s, cursorY, globalIdx);
+        else cursorY = drawSimpleRow(s, cursorY, globalIdx);
+        globalIdx++;
       }
 
-      // Close outer border for this section's table
-      drawTableOuterBorder(tableTopForBorder, rowY);
-
-      // Advance cursor with a gap before next section
-      cursorY = rowY + 6;
+      drawTableOuterBorder(tableTopForBorder, cursorY);
+      cursorY += 8;
     });
 
-    // Final footer
     drawPageFooter();
-
     doc.end();
 
   } catch (err) {
     console.error("❌ List PDF error:", err.message);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, message: err.message });
-    }
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -3117,156 +3173,78 @@ router.get("/backup/list", verifyBackupAuth, async (req, res) => {
         const stat = fs.statSync(fullPath);
         let meta = {};
         try { meta = JSON.parse(fs.readFileSync(fullPath, "utf8")); } catch (e) {}
-        return {
-          filename: f,
-          size: stat.size,
-          createdAt: meta.createdAt || stat.mtime.toISOString(),
-          type: meta.type || "auto",
-          stats: meta.stats || {}
-        };
+        return { filename: f, size: stat.size, createdAt: meta.createdAt || stat.mtime.toISOString(), type: meta.type || "auto", stats: meta.stats || {} };
       })
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
     res.json({ success: true, backups: files, count: files.length });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 router.post("/backup/create", verifyBackupAuth, async (req, res) => {
   try {
     const result = await createBackup("manual");
-    res.json({
-      success: true,
-      message: `Backup created ✅ (${result.stats.students} students)`,
-      filename: result.filename,
-      size: result.size,
-      stats: result.stats
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+    res.json({ success: true, message: `Backup created ✅ (${result.stats.students} students)`, filename: result.filename, size: result.size, stats: result.stats });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 router.get("/backup/download/:filename", verifyBackupAuth, async (req, res) => {
   try {
     const filename = req.params.filename;
-    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
-        filename.includes("..") || filename.includes("/")) {
-      return res.status(400).json({ success: false, message: "Invalid filename" });
-    }
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") || filename.includes("..") || filename.includes("/")) return res.status(400).json({ success: false, message: "Invalid" });
     const filepath = path.join(BACKUP_DIR, filename);
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({ success: false, message: "Backup not found" });
-    }
+    if (!fs.existsSync(filepath)) return res.status(404).json({ success: false, message: "Not found" });
     res.download(filepath, filename);
-  } catch (err) {
-    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
-  }
+  } catch (err) { if (!res.headersSent) res.status(500).json({ success: false, message: err.message }); }
 });
 
 router.delete("/backup/:filename", verifyBackupAuth, async (req, res) => {
   try {
     const filename = req.params.filename;
-    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
-        filename.includes("..") || filename.includes("/")) {
-      return res.status(400).json({ success: false, message: "Invalid filename" });
-    }
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") || filename.includes("..") || filename.includes("/")) return res.status(400).json({ success: false, message: "Invalid" });
     const filepath = path.join(BACKUP_DIR, filename);
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({ success: false, message: "Backup not found" });
-    }
+    if (!fs.existsSync(filepath)) return res.status(404).json({ success: false, message: "Not found" });
     fs.unlinkSync(filepath);
-    res.json({ success: true, message: "Backup deleted ✅" });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+    res.json({ success: true, message: "Deleted ✅" });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 router.post("/backup/restore/:filename", verifyBackupAuth, async (req, res) => {
   try {
     const filename = req.params.filename;
-    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
-        filename.includes("..") || filename.includes("/")) {
-      return res.status(400).json({ success: false, message: "Invalid filename" });
-    }
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") || filename.includes("..") || filename.includes("/")) return res.status(400).json({ success: false, message: "Invalid" });
     const filepath = path.join(BACKUP_DIR, filename);
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({ success: false, message: "Backup not found" });
-    }
+    if (!fs.existsSync(filepath)) return res.status(404).json({ success: false, message: "Not found" });
     const data = JSON.parse(fs.readFileSync(filepath, "utf8"));
     const mode = req.body.mode === "replace" ? "replace" : "merge";
-
     try { await createBackup("prebak"); } catch (e) {}
-
     const stats = await restoreBackupData(data, mode);
-
-    res.json({
-      success: true,
-      message: `Restore complete ✅ (${mode} mode) — ${stats.inserted} inserted, ${stats.updated} updated`,
-      mode,
-      inserted: stats.inserted,
-      updated: stats.updated,
-      skipped: stats.skipped,
-      total: stats.total
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+    res.json({ success: true, message: `Restore ✅ (${mode} mode)`, mode, inserted: stats.inserted, updated: stats.updated, skipped: stats.skipped, total: stats.total });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("backupFile"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "No file uploaded" });
-    }
+    if (!req.file) return res.status(400).json({ success: false, message: "No file" });
     let data;
-    try {
-      data = JSON.parse(req.file.buffer.toString("utf8"));
-    } catch (e) {
-      return res.status(400).json({ success: false, message: "Invalid JSON file" });
-    }
-    if (!data.tables || !data.tables[BACKUP_TABLE]) {
-      return res.status(400).json({
-        success: false,
-        message: `Backup file must contain "${BACKUP_TABLE}" table data`
-      });
-    }
+    try { data = JSON.parse(req.file.buffer.toString("utf8")); } catch (e) { return res.status(400).json({ success: false, message: "Invalid JSON" }); }
+    if (!data.tables || !data.tables[BACKUP_TABLE]) return res.status(400).json({ success: false, message: `Need "${BACKUP_TABLE}" data` });
     const mode = req.body.mode === "replace" ? "replace" : "merge";
-
     try { await createBackup("prebak"); } catch (e) {}
-
     const stats = await restoreBackupData(data, mode);
-
-    res.json({
-      success: true,
-      message: `Restore complete ✅ (${mode} mode) — ${stats.inserted} inserted, ${stats.updated} updated`,
-      mode,
-      inserted: stats.inserted,
-      updated: stats.updated,
-      skipped: stats.skipped,
-      total: stats.total
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+    res.json({ success: true, message: `Restore ✅ (${mode} mode)`, mode, inserted: stats.inserted, updated: stats.updated, skipped: stats.skipped, total: stats.total });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-// Cron: 2 AM IST daily backup
 cron.schedule("0 2 * * *", async () => {
-  console.log("[Cron] Running daily 2 AM backup...");
-  try {
-    const result = await createBackup("auto");
-    console.log(`[Cron] Backup created: ${result.filename} (${result.stats.students} students)`);
-  } catch (err) {
-    console.error("[Cron] Backup failed:", err.message);
-  }
+  console.log("[Cron] Daily 2 AM backup...");
+  try { const result = await createBackup("auto"); console.log(`[Cron] Backup: ${result.filename}`); }
+  catch (err) { console.error("[Cron] Failed:", err.message); }
 }, { timezone: "Asia/Kolkata" });
 
 console.log("✅ Backup system loaded — daily cron at 2:00 AM IST");
 
 // ============================================================
-// ✅ GET SINGLE (LAST among GET routes)
+// ✅ GET SINGLE (LAST among GET)
 // ============================================================
 router.get("/:id", async (req, res) => {
   try {
@@ -3282,127 +3260,111 @@ router.get("/:id", async (req, res) => {
 // ============================================================
 // ✅ UPDATE
 // ============================================================
-router.put(
-  "/:id",
-  studentUploadFields,
-  validateUploadedFiles,
-  async (req, res) => {
-    try {
-      const id = req.params.id;
-      if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
+router.put("/:id", studentUploadFields, validateUploadedFiles, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
 
-      const existingRows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
-      if (!existingRows.length) return res.status(404).json({ success: false, message: "Not found" });
-      const existing = existingRows[0];
+    const existingRows = await q("SELECT * FROM Nstudent WHERE id = ?", [id]);
+    if (!existingRows.length) return res.status(404).json({ success: false, message: "Not found" });
+    const existing = existingRows[0];
 
-      const newEmail = String(req.body.emailId || existing.email_id || "").toLowerCase().trim();
-      const newMobile = String(req.body.mobileNumber || existing.mobile_number || "").trim();
-      const newApaar = String(req.body.apaarId || existing.apaar_id || "").replace(/\s/g, "");
-      const newAadhaar = req.body.aadharNumber !== undefined
-        ? normalizeAadhaar(req.body.aadharNumber)
-        : existing.aadhar_number;
-      const newStudentId = String(req.body.studentId || existing.student_id || "").trim();
-      const newAdmissionNumber = String(req.body.admissionNumber || existing.admission_number || "").trim();
-      const newClass = String(req.body.class || existing.class || "").trim();
-      const newRollNumber = String(req.body.rollNumber || existing.roll_number || "").trim();
-      const newSession = String(req.body.session || existing.session || "").trim();
+    const newEmail = String(req.body.emailId || existing.email_id || "").toLowerCase().trim();
+    const newMobile = String(req.body.mobileNumber || existing.mobile_number || "").trim();
+    const newApaar = String(req.body.apaarId || existing.apaar_id || "").replace(/\s/g, "");
+    const newAadhaar = req.body.aadharNumber !== undefined ? normalizeAadhaar(req.body.aadharNumber) : existing.aadhar_number;
+    const newStudentId = String(req.body.studentId || existing.student_id || "").trim();
+    const newAdmissionNumber = String(req.body.admissionNumber || existing.admission_number || "").trim();
+    const newClass = String(req.body.class || existing.class || "").trim();
+    const newRollNumber = String(req.body.rollNumber || existing.roll_number || "").trim();
+    const newSession = String(req.body.session || existing.session || "").trim();
 
-      const emailChanged = newEmail !== (existing.email_id || "").toLowerCase().trim();
-      const mobileChanged = newMobile !== (existing.mobile_number || "").trim();
+    const emailChanged = newEmail !== (existing.email_id || "").toLowerCase().trim();
+    const mobileChanged = newMobile !== (existing.mobile_number || "").trim();
 
-      if (emailChanged) {
-        const v = await q(`SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`, [newEmail]);
-        if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified", code: "EMAIL_NOT_VERIFIED" });
-      }
-      if (mobileChanged) {
-        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? AND id != ?`, [newMobile, id]);
-        if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile limit reached`, code: "MOBILE_LIMIT_REACHED" });
-      }
+    if (emailChanged) {
+      const v = await q(`SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`, [newEmail]);
+      if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified", code: "EMAIL_NOT_VERIFIED" });
+    }
+    if (mobileChanged) {
+      const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? AND id != ?`, [newMobile, id]);
+      if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile limit reached`, code: "MOBILE_LIMIT_REACHED" });
+    }
 
-      // ✅ UNIQUENESS CHECK
-      const conflict = await checkUniqueness({
-        studentId: newStudentId !== existing.student_id ? newStudentId : null,
-        admissionNumber: newAdmissionNumber !== existing.admission_number ? newAdmissionNumber : null,
-        apaarId: newApaar !== (existing.apaar_id || "").replace(/\s/g, "") ? newApaar : null,
-        aadharNumber: newAadhaar !== existing.aadhar_number ? newAadhaar : null,
-        emailId: emailChanged ? newEmail : null,
-        class: newClass,
-        rollNumber: newRollNumber,
-        session: newSession,
-        excludeId: Number(id)
-      });
+    const conflict = await checkUniqueness({
+      studentId: newStudentId !== existing.student_id ? newStudentId : null,
+      admissionNumber: newAdmissionNumber !== existing.admission_number ? newAdmissionNumber : null,
+      apaarId: newApaar !== (existing.apaar_id || "").replace(/\s/g, "") ? newApaar : null,
+      aadharNumber: newAadhaar !== existing.aadhar_number ? newAadhaar : null,
+      emailId: emailChanged ? newEmail : null,
+      class: newClass, rollNumber: newRollNumber, session: newSession,
+      excludeId: Number(id)
+    });
 
-      if (conflict) {
-        if (req.files) {
-          for (const f of DOC_FIELDS) {
-            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
-              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
-            }
+    if (conflict) {
+      if (req.files) {
+        for (const f of DOC_FIELDS) {
+          if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+            try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
           }
         }
-        return res.status(409).json({
-          success: false,
-          field: conflict.field,
-          code: conflict.code,
-          message: conflict.message,
-          existing: conflict.existing || null
-        });
       }
-
-      const finalCategory = req.body.category || existing.category;
-      const needsCaste = CASTE_REQUIRED_CATEGORIES.includes(finalCategory);
-      const hasNewCaste = req.files?.casteCertificate?.[0];
-      const hasOldCaste = existing.caste_certificate_url;
-      if (needsCaste && !hasNewCaste && !hasOldCaste) {
-        return res.status(400).json({ success: false, message: `Caste Certificate required for ${finalCategory}` });
-      }
-
-      if (req.body.aadharNumber !== undefined) {
-        const a = normalizeAadhaar(req.body.aadharNumber);
-        if (!/^\d{12}$/.test(a) || !hasValidAadhaarStart(a) || !validateVerhoeff(a)) {
-          return res.status(400).json({ success: false, message: "Invalid Aadhaar number" });
-        }
-        req.body.aadharNumber = a;
-      }
-      if (req.body.apaarId !== undefined) {
-        const pa = String(req.body.apaarId).replace(/\s/g, "");
-        if (!/^\d{12}$/.test(pa)) return res.status(400).json({ success: false, message: "APAAR must be 12 digits" });
-        req.body.apaarId = pa;
-      }
-
-      const newFiles = extractFiles(req.files);
-      if (!needsCaste && newFiles.caste_certificate_url) {
-        const dp = newFiles.caste_certificate_pid;
-        if (dp) try { await cloudinary.uploader.destroy(dp); } catch (e) {}
-        delete newFiles.caste_certificate_url;
-        delete newFiles.caste_certificate_pid;
-      }
-      for (const f of DOC_FIELDS) {
-        const snake = toSnake(f);
-        const newPid = newFiles[`${snake}_pid`];
-        const oldPid = existing[`${snake}_pid`];
-        if (newPid && oldPid) await destroyAsset(oldPid, existing[`${snake}_url`]);
-      }
-
-      const cleanBody = { ...req.body };
-      delete cleanBody.emailVerified;
-
-      const data = { ...pickBody(cleanBody), ...newFiles };
-      const cols = Object.keys(data);
-      if (!cols.length) return res.json({ success: true, message: "No changes", data: existing });
-
-      const setSql = cols.map(c => `${c} = ?`).join(", ");
-      await q(`UPDATE Nstudent SET ${setSql} WHERE id = ?`, [...Object.values(data), id]);
-
-      const updated = (await q("SELECT * FROM Nstudent WHERE id = ?", [id]))[0];
-      res.json({ success: true, message: "Student updated ✅", data: revertStatusIfExpired(updated), student: revertStatusIfExpired(updated) });
-    } catch (err) {
-      console.error("❌ Update error:", err);
-      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Duplicate entry" });
-      res.status(500).json({ success: false, message: err.message });
+      return res.status(409).json({ success: false, field: conflict.field, code: conflict.code, message: conflict.message, existing: conflict.existing || null });
     }
+
+    const finalCategory = req.body.category || existing.category;
+    const needsCaste = CASTE_REQUIRED_CATEGORIES.includes(finalCategory);
+    const hasNewCaste = req.files?.casteCertificate?.[0];
+    const hasOldCaste = existing.caste_certificate_url;
+    if (needsCaste && !hasNewCaste && !hasOldCaste) {
+      return res.status(400).json({ success: false, message: `Caste Certificate required for ${finalCategory}` });
+    }
+
+    if (req.body.aadharNumber !== undefined) {
+      const a = normalizeAadhaar(req.body.aadharNumber);
+      if (!/^\d{12}$/.test(a) || !hasValidAadhaarStart(a) || !validateVerhoeff(a)) {
+        return res.status(400).json({ success: false, message: "Invalid Aadhaar number" });
+      }
+      req.body.aadharNumber = a;
+    }
+    if (req.body.apaarId !== undefined) {
+      const pa = String(req.body.apaarId).replace(/\s/g, "");
+      if (!/^\d{12}$/.test(pa)) return res.status(400).json({ success: false, message: "APAAR must be 12 digits" });
+      req.body.apaarId = pa;
+    }
+
+    const newFiles = extractFiles(req.files);
+    if (!needsCaste && newFiles.caste_certificate_url) {
+      const dp = newFiles.caste_certificate_pid;
+      if (dp) try { await cloudinary.uploader.destroy(dp); } catch (e) {}
+      delete newFiles.caste_certificate_url;
+      delete newFiles.caste_certificate_pid;
+    }
+    for (const f of DOC_FIELDS) {
+      const snake = toSnake(f);
+      const newPid = newFiles[`${snake}_pid`];
+      const oldPid = existing[`${snake}_pid`];
+      if (newPid && oldPid) await destroyAsset(oldPid, existing[`${snake}_url`]);
+    }
+
+    const cleanBody = { ...req.body };
+    delete cleanBody.emailVerified;
+
+    const data = { ...pickBody(cleanBody), ...newFiles };
+    const cols = Object.keys(data);
+    if (!cols.length) return res.json({ success: true, message: "No changes", data: existing });
+
+    const setSql = cols.map(c => `${c} = ?`).join(", ");
+    await q(`UPDATE Nstudent SET ${setSql} WHERE id = ?`, [...Object.values(data), id]);
+
+    const updated = (await q("SELECT * FROM Nstudent WHERE id = ?", [id]))[0];
+    res.json({ success: true, message: "Student updated ✅", data: revertStatusIfExpired(updated), student: revertStatusIfExpired(updated) });
+  } catch (err) {
+    console.error("❌ Update error:", err);
+    if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Duplicate entry" });
+    res.status(500).json({ success: false, message: err.message });
   }
-);
+});
 
 // ============================================================
 // ✅ DELETE
@@ -3424,7 +3386,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ============================================================
-// ✅ STUDENT PDF (single admission record)
+// ✅ STUDENT PDF
 // ============================================================
 router.get("/:id/pdf", async (req, res) => {
   try {
