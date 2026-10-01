@@ -6,9 +6,9 @@ const https = require("https");
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
-const fs = require("fs");                 // ✅ ADD
-const cron = require("node-cron");        // ✅ ADD
-const multer = require("multer");         // ✅ ADD
+const fs = require("fs");
+const cron = require("node-cron");
+const multer = require("multer");
 
 const db = require("../config/db");
 const { cloudinary, uploadStudent } = require("../config/cloudinary");
@@ -19,17 +19,16 @@ const { cloudinary, uploadStudent } = require("../config/cloudinary");
 const PIN_LENGTH = 6;
 const MAX_CHANGES_PER_MONTH = 3;
 const MAX_FAILED_ATTEMPTS = 5;
-const LOCK_DURATION_MS = 30 * 60 * 1000;     // 30 minutes
-const PIN_OTP_EXPIRY_MS = 10 * 60 * 1000;    // 10 minutes
+const LOCK_DURATION_MS = 30 * 60 * 1000;
+const PIN_OTP_EXPIRY_MS = 10 * 60 * 1000;
 const PIN_OTP_MAX_ATTEMPTS = 5;
-const PIN_OTP_RESEND_COOLDOWN_MS = 30 * 1000; // 30 sec cooldown between resends
+const PIN_OTP_RESEND_COOLDOWN_MS = 30 * 1000;
 
 function currentMonthYear() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-// ✅ FIX: Calculates remaining lock minutes correctly (timezone-safe)
 function calcRemainingLockMins(lockedUntil) {
   if (!lockedUntil) return 0;
   const lockTime = new Date(lockedUntil).getTime();
@@ -1319,10 +1318,7 @@ router.post(
 );
 
 // ============================================================
-// ✅ STUDENT LOGIN VERIFY (Email + Student ID) — Legacy
-// ============================================================
-// ============================================================
-// ✅ CHECK EMAIL — Student verify (step 1)
+// ✅ CHECK EMAIL
 // ============================================================
 router.post("/check-email", async (req, res) => {
   try {
@@ -1338,18 +1334,10 @@ router.post("/check-email", async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.json({
-        success: true,
-        exists: false,
-        message: "Email not registered"
-      });
+      return res.json({ success: true, exists: false, message: "Email not registered" });
     }
 
-    return res.json({
-      success: true,
-      exists: true,
-      message: "Email verified"
-    });
+    return res.json({ success: true, exists: true, message: "Email verified" });
   } catch (err) {
     console.error("check-email error:", err.message);
     res.status(500).json({ success: false, message: "Server error" });
@@ -1357,7 +1345,7 @@ router.post("/check-email", async (req, res) => {
 });
 
 // ============================================================
-// ✅ CHECK STUDENT ID — Match with email (step 2)
+// ✅ CHECK STUDENT ID
 // ============================================================
 router.post("/check-student-id", async (req, res) => {
   try {
@@ -1374,87 +1362,61 @@ router.post("/check-student-id", async (req, res) => {
     }
 
     const rows = await q(
-      `SELECT id FROM Nstudent 
-       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
-       LIMIT 1`,
+      `SELECT id FROM Nstudent WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? LIMIT 1`,
       [emailClean, sidClean.toLowerCase()]
     );
 
     if (!rows.length) {
-      return res.json({
-        success: true,
-        matches: false,
-        message: "Student ID does not match this email"
-      });
+      return res.json({ success: true, matches: false, message: "Student ID does not match this email" });
     }
 
-    return res.json({
-      success: true,
-      matches: true,
-      message: "Identity verified"
-    });
+    return res.json({ success: true, matches: true, message: "Identity verified" });
   } catch (err) {
     console.error("check-student-id error:", err.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 router.post("/verify-login", async (req, res) => {
   try {
     const { email, studentId } = req.body;
 
     if (!email || !studentId) {
-      return res.status(400).json({
-        success: false,
-        message: "Email and Student ID are required"
-      });
+      return res.status(400).json({ success: false, message: "Email and Student ID are required" });
     }
 
     const emailClean = String(email).toLowerCase().trim();
     const sidClean = String(studentId).trim();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClean)) {
-      return res.status(400).json({
-        success: false,
-        message: "Please enter a valid email address"
-      });
+      return res.status(400).json({ success: false, message: "Please enter a valid email address" });
     }
 
     if (sidClean.length < 3) {
-      return res.status(400).json({
-        success: false,
-        message: "Student ID must be at least 3 characters"
-      });
+      return res.status(400).json({ success: false, message: "Student ID must be at least 3 characters" });
     }
 
     const rows = await q(
-      `SELECT * FROM Nstudent 
-       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
-       LIMIT 1`,
+      `SELECT * FROM Nstudent WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? LIMIT 1`,
       [emailClean, sidClean.toLowerCase()]
     );
 
     if (!rows.length) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or Student ID. Please check your details."
-      });
+      return res.status(401).json({ success: false, message: "Invalid email or Student ID. Please check your details." });
     }
 
     const s = revertStatusIfExpired(rows[0]);
 
     if (s.status && s.status.toLowerCase() === "inactive") {
-      return res.status(403).json({
-        success: false,
-        message: "Your account is inactive. Please contact the school office."
-      });
+      return res.status(403).json({ success: false, message: "Your account is inactive. Please contact the school office." });
     }
 
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
-const safeStudent = { ...s };
-for (const k of Object.keys(safeStudent)) {
-  if (k.endsWith("_pid")) delete safeStudent[k];
-}
-    
+    const safeStudent = { ...s };
+    for (const k of Object.keys(safeStudent)) {
+      if (k.endsWith("_pid")) delete safeStudent[k];
+    }
+
     res.json({
       success: true,
       message: "Login successful ✅",
@@ -1462,7 +1424,6 @@ for (const k of Object.keys(safeStudent)) {
       token,
       loginTime: new Date().toISOString()
     });
-
   } catch (err) {
     console.error("❌ Verify-login error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
@@ -1470,34 +1431,25 @@ for (const k of Object.keys(safeStudent)) {
 });
 
 // ============================================================
-// ✅ RECOVER CREDENTIAL (Email or Student ID)
+// ✅ RECOVER CREDENTIAL
 // ============================================================
 router.post("/recover-credential", async (req, res) => {
   try {
     const { recoverType } = req.body;
 
     if (!recoverType || !["email", "studentId"].includes(recoverType)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid recovery type"
-      });
+      return res.status(400).json({ success: false, message: "Invalid recovery type" });
     }
 
     if (recoverType === "email") {
       const { class: cls, studentId, apaarId, dob, motherName } = req.body;
 
       if (!cls || !studentId || !apaarId || !dob || !motherName) {
-        return res.status(400).json({
-          success: false,
-          message: "All fields required"
-        });
+        return res.status(400).json({ success: false, message: "All fields required" });
       }
 
       if (!/^\d{12}$/.test(String(apaarId).replace(/\s/g, ""))) {
-        return res.status(400).json({
-          success: false,
-          message: "APAAR ID must be 12 digits"
-        });
+        return res.status(400).json({ success: false, message: "APAAR ID must be 12 digits" });
       }
 
       const rows = await q(
@@ -1509,32 +1461,17 @@ router.post("/recover-credential", async (req, res) => {
            AND DATE(dob) = DATE(?)
            AND LOWER(mother_name) = LOWER(?)
          LIMIT 1`,
-        [
-          cls,
-          String(studentId).trim(),
-          String(apaarId).replace(/\s/g, "").trim(),
-          dob,
-          String(motherName).trim()
-        ]
+        [cls, String(studentId).trim(), String(apaarId).replace(/\s/g, "").trim(), dob, String(motherName).trim()]
       );
 
       if (!rows.length) {
-        return res.status(401).json({
-          success: false,
-          message: "No matching record found. Please check your details."
-        });
+        return res.status(401).json({ success: false, message: "No matching record found. Please check your details." });
       }
 
       const s = rows[0];
-
       return res.json({
         success: true,
-        student: {
-          class: s.class,
-          name: s.name,
-          fatherName: s.father_name,
-          email: s.email_id
-        }
+        student: { class: s.class, name: s.name, fatherName: s.father_name, email: s.email_id }
       });
     }
 
@@ -1542,18 +1479,12 @@ router.post("/recover-credential", async (req, res) => {
       const { class: cls, email, aadharNumber, dob, fatherName } = req.body;
 
       if (!cls || !email || !aadharNumber || !dob || !fatherName) {
-        return res.status(400).json({
-          success: false,
-          message: "All fields required"
-        });
+        return res.status(400).json({ success: false, message: "All fields required" });
       }
 
       const aadhaar = String(aadharNumber).replace(/[\s-]/g, "");
       if (!/^\d{12}$/.test(aadhaar)) {
-        return res.status(400).json({
-          success: false,
-          message: "Aadhaar must be 12 digits"
-        });
+        return res.status(400).json({ success: false, message: "Aadhaar must be 12 digits" });
       }
 
       const rows = await q(
@@ -1565,37 +1496,21 @@ router.post("/recover-credential", async (req, res) => {
            AND DATE(dob) = DATE(?)
            AND LOWER(father_name) = LOWER(?)
          LIMIT 1`,
-        [
-          cls,
-          String(email).trim(),
-          aadhaar,
-          dob,
-          String(fatherName).trim()
-        ]
+        [cls, String(email).trim(), aadhaar, dob, String(fatherName).trim()]
       );
 
       if (!rows.length) {
-        return res.status(401).json({
-          success: false,
-          message: "No matching record found. Please check your details."
-        });
+        return res.status(401).json({ success: false, message: "No matching record found. Please check your details." });
       }
 
       const s = rows[0];
-
       return res.json({
         success: true,
-        student: {
-          class: s.class,
-          name: s.name,
-          fatherName: s.father_name,
-          studentId: s.student_id
-        }
+        student: { class: s.class, name: s.name, fatherName: s.father_name, studentId: s.student_id }
       });
     }
 
     return res.status(400).json({ success: false, message: "Unknown recovery type" });
-
   } catch (err) {
     console.error("❌ recover-credential error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
@@ -1603,7 +1518,7 @@ router.post("/recover-credential", async (req, res) => {
 });
 
 // ============================================================
-// ✅ STUDENT LOGIN WITH PIN (Email + Student ID + 6-digit PIN)
+// ✅ STUDENT LOGIN WITH PIN
 // ============================================================
 router.post("/verify-login-pin", async (req, res) => {
   try {
@@ -1684,9 +1599,9 @@ router.post("/verify-login-pin", async (req, res) => {
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
 
     const safeStudent = { ...s };
-for (const k of Object.keys(safeStudent)) {
-  if (k.endsWith("_pid")) delete safeStudent[k];
-}
+    for (const k of Object.keys(safeStudent)) {
+      if (k.endsWith("_pid")) delete safeStudent[k];
+    }
 
     res.json({
       success: true,
@@ -1780,10 +1695,7 @@ router.post("/pin/create", async (req, res) => {
 
     const existing = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
     if (existing.length) {
-      return res.status(409).json({
-        success: false,
-        message: "PIN already exists. Use 'Change PIN' instead."
-      });
+      return res.status(409).json({ success: false, message: "PIN already exists. Use 'Change PIN' instead." });
     }
 
     const salt = generatePinSalt();
@@ -1914,7 +1826,7 @@ router.post("/pin/change", async (req, res) => {
 });
 
 // ============================================================
-// ✅ VERIFY PIN (standalone)
+// ✅ VERIFY PIN
 // ============================================================
 router.post("/pin/verify", async (req, res) => {
   try {
@@ -1986,19 +1898,14 @@ router.post("/pin/verify", async (req, res) => {
 });
 
 // ============================================================
-// ✅ FORGOT PIN — Step 1: Verify identity + send OTP
-// SECURITY: Requires Student ID + APAAR ID + Aadhaar Number
+// ✅ FORGOT PIN — Step 1
 // ============================================================
 router.post("/pin/forgot/request-otp", async (req, res) => {
   try {
     const { studentId, apaarId, aadharNumber } = req.body;
 
-    // ---- Validation ----
     if (!studentId || !apaarId || !aadharNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Student ID, APAAR ID and Aadhaar Number are required"
-      });
+      return res.status(400).json({ success: false, message: "Student ID, APAAR ID and Aadhaar Number are required" });
     }
 
     const sidClean = String(studentId).trim();
@@ -2006,27 +1913,17 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     const aadhaarClean = String(aadharNumber).replace(/[\s-]/g, "").trim();
 
     if (sidClean.length < 3) {
-      return res.status(400).json({
-        success: false,
-        message: "Student ID must be at least 3 characters"
-      });
+      return res.status(400).json({ success: false, message: "Student ID must be at least 3 characters" });
     }
 
     if (!/^\d{12}$/.test(apaarClean)) {
-      return res.status(400).json({
-        success: false,
-        message: "APAAR ID must be exactly 12 digits"
-      });
+      return res.status(400).json({ success: false, message: "APAAR ID must be exactly 12 digits" });
     }
 
     if (!/^\d{12}$/.test(aadhaarClean)) {
-      return res.status(400).json({
-        success: false,
-        message: "Aadhaar Number must be exactly 12 digits"
-      });
+      return res.status(400).json({ success: false, message: "Aadhaar Number must be exactly 12 digits" });
     }
 
-    // ---- Verify all 3 fields match the same student ----
     const rows = await q(
       `SELECT id, name, email_id, student_id, apaar_id, aadhar_number
        FROM Nstudent 
@@ -2038,41 +1935,25 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     );
 
     if (!rows.length) {
-      // Security: don't reveal which field was wrong
-      return res.status(401).json({
-        success: false,
-        message: "Details do not match our records. Please check Student ID, APAAR ID and Aadhaar Number."
-      });
+      return res.status(401).json({ success: false, message: "Details do not match our records. Please check Student ID, APAAR ID and Aadhaar Number." });
     }
 
     const student = rows[0];
 
     if (!student.email_id) {
-      return res.status(400).json({
-        success: false,
-        message: "No email registered. Please contact the school office."
-      });
+      return res.status(400).json({ success: false, message: "No email registered. Please contact the school office." });
     }
 
-    // ---- Check if PIN exists ----
     const pinExists = await q(`SELECT locked_until FROM student_pins WHERE student_id = ?`, [student.id]);
     if (!pinExists.length) {
-      return res.status(404).json({
-        success: false,
-        message: "No PIN set for this student. Please contact the school office."
-      });
+      return res.status(404).json({ success: false, message: "No PIN set for this student. Please contact the school office." });
     }
 
-    // ---- Check if account locked ----
     const lockMins = calcRemainingLockMins(pinExists[0].locked_until);
     if (lockMins > 0) {
-      return res.status(423).json({
-        success: false,
-        message: `Account is currently locked. Try again in ${lockMins} minute(s).`
-      });
+      return res.status(423).json({ success: false, message: `Account is currently locked. Try again in ${lockMins} minute(s).` });
     }
 
-    // ---- Rate limit: check recent OTP ----
     const recentOtp = await q(
       `SELECT id, created_at FROM student_pin_reset_otps 
        WHERE student_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 30 SECOND)
@@ -2082,14 +1963,10 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     if (recentOtp.length) {
       const waitSec = Math.ceil((30 * 1000 - (Date.now() - new Date(recentOtp[0].created_at).getTime())) / 1000);
       if (waitSec > 0) {
-        return res.status(429).json({
-          success: false,
-          message: `Please wait ${waitSec} second(s) before requesting a new OTP.`
-        });
+        return res.status(429).json({ success: false, message: `Please wait ${waitSec} second(s) before requesting a new OTP.` });
       }
     }
 
-    // ---- Generate OTP ----
     const otp = genPinOTP();
     const expiresAt = new Date(Date.now() + PIN_OTP_EXPIRY_MS);
 
@@ -2099,11 +1976,9 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
       [student.id, otp, expiresAt]
     );
 
-    // ---- Mask email ----
     const [namePart, domain] = String(student.email_id).split("@");
     const maskedEmail = namePart.substring(0, 2) + "***@" + domain;
 
-    // ---- Send email ----
     if (BREVO_API_KEY) {
       try {
         const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -2173,7 +2048,6 @@ If you didn't request this, please ignore this email — your PIN is safe.
       studentName: student.name,
       expiresInMinutes: 10
     });
-
   } catch (err) {
     console.error("PIN forgot OTP error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
@@ -2181,7 +2055,7 @@ If you didn't request this, please ignore this email — your PIN is safe.
 });
 
 // ============================================================
-// ✅ FORGOT PIN — Step 2: Verify OTP + set new PIN
+// ✅ FORGOT PIN — Step 2
 // ============================================================
 router.post("/pin/forgot/reset", async (req, res) => {
   try {
@@ -2275,7 +2149,7 @@ router.post("/pin/forgot/reset", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — Reset kisi bhi student ka PIN
+// ✅ ADMIN — Reset PIN
 // ============================================================
 router.post("/pin/admin/reset", async (req, res) => {
   try {
@@ -2332,7 +2206,7 @@ router.post("/pin/admin/reset", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — Unlock a locked student
+// ✅ ADMIN — Unlock
 // ============================================================
 router.post("/pin/admin/unlock", async (req, res) => {
   try {
@@ -2358,7 +2232,7 @@ router.post("/pin/admin/unlock", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — PIN change history of a student
+// ✅ ADMIN — PIN history
 // ============================================================
 router.get("/pin/admin/history/:studentId", async (req, res) => {
   try {
@@ -2385,7 +2259,7 @@ router.get("/pin/admin/history/:studentId", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — All students ka PIN status
+// ✅ ADMIN — All students PIN status
 // ============================================================
 router.get("/pin/admin/all-status", async (req, res) => {
   try {
@@ -2447,7 +2321,7 @@ router.get("/pin/admin/all-status", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — Dashboard summary
+// ✅ ADMIN — Summary
 // ============================================================
 router.get("/pin/admin/summary", async (req, res) => {
   try {
@@ -2483,7 +2357,698 @@ router.get("/pin/admin/summary", async (req, res) => {
 });
 
 // ============================================================
-// ✅ GET SINGLE (must be LAST among GET routes)
+// ✅✅✅ BACKUP & RESTORE SYSTEM ✅✅✅
+// ============================================================
+const BACKUP_DIR = path.join(__dirname, "..", "backups");
+const MAX_BACKUPS = 10;
+const RETENTION_DAYS = 10;
+const BACKUP_TABLE = "Nstudent";
+
+if (!fs.existsSync(BACKUP_DIR)) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  console.log("✅ Backups folder created:", BACKUP_DIR);
+}
+
+const backupUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }
+});
+
+const verifyBackupAuth = (req, res, next) => {
+  const token = req.query.token || (req.headers.authorization || "").replace("Bearer ", "");
+  if (!token) return res.status(401).json({ success: false, message: "Auth required" });
+  next();
+};
+
+async function createBackup(type = "auto") {
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  const filename = `backup_${type}_${timestamp}.json`;
+  const filepath = path.join(BACKUP_DIR, filename);
+
+  const students = await q(`SELECT * FROM ${BACKUP_TABLE}`);
+
+  const backupData = {
+    version: "2.0",
+    type: type,
+    createdAt: now.toISOString(),
+    stats: {
+      students: students.length,
+      total: students.length
+    },
+    tables: {
+      [BACKUP_TABLE]: students
+    }
+  };
+
+  fs.writeFileSync(filepath, JSON.stringify(backupData, null, 2));
+  await cleanupOldBackups();
+
+  const stat = fs.statSync(filepath);
+  console.log(`[Backup] Created: ${filename} (${students.length} students, ${(stat.size / 1024).toFixed(2)} KB)`);
+
+  return {
+    filename,
+    filepath,
+    size: stat.size,
+    stats: backupData.stats
+  };
+}
+
+async function cleanupOldBackups() {
+  try {
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith("backup_") && f.endsWith(".json"))
+      .map(f => {
+        const fullPath = path.join(BACKUP_DIR, f);
+        return { name: f, path: fullPath, mtime: fs.statSync(fullPath).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+
+    const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (const file of files) {
+      if (file.mtime < cutoff) {
+        try {
+          fs.unlinkSync(file.path);
+          console.log(`[Backup] Deleted old: ${file.name}`);
+        } catch (e) {}
+      }
+    }
+
+    const remaining = files.filter(f => f.mtime >= cutoff);
+    if (remaining.length > MAX_BACKUPS) {
+      for (let i = MAX_BACKUPS; i < remaining.length; i++) {
+        try {
+          fs.unlinkSync(remaining[i].path);
+          console.log(`[Backup] Deleted excess: ${remaining[i].name}`);
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    console.error("[Backup] Cleanup error:", err.message);
+  }
+}
+
+async function restoreBackupData(data, mode = "merge") {
+  if (!data || !data.tables || !data.tables[BACKUP_TABLE]) {
+    throw new Error("Invalid backup file — missing table data");
+  }
+  const students = data.tables[BACKUP_TABLE];
+  if (!Array.isArray(students)) throw new Error("Invalid backup — students must be array");
+
+  const stats = { inserted: 0, updated: 0, skipped: 0, total: students.length };
+
+  if (mode === "replace") {
+    await q(`DELETE FROM ${BACKUP_TABLE}`);
+    console.log("[Backup] All students deleted (replace mode)");
+  }
+
+  const colsResult = await q(`SHOW COLUMNS FROM ${BACKUP_TABLE}`);
+  const validColumns = colsResult.map(c => c.Field);
+
+  for (const student of students) {
+    if (!student.student_id) {
+      stats.skipped++;
+      continue;
+    }
+
+    const existing = await q(
+      `SELECT id FROM ${BACKUP_TABLE} WHERE student_id = ? LIMIT 1`,
+      [student.student_id]
+    );
+
+    const entries = Object.entries(student).filter(([k]) =>
+      validColumns.includes(k) && k !== "id"
+    );
+
+    if (existing.length > 0) {
+      if (mode === "merge") {
+        if (entries.length === 0) { stats.skipped++; continue; }
+        const setSql = entries.map(([k]) => `${k} = ?`).join(", ");
+        const values = entries.map(([, v]) => v);
+        await q(
+          `UPDATE ${BACKUP_TABLE} SET ${setSql} WHERE student_id = ?`,
+          [...values, student.student_id]
+        );
+        stats.updated++;
+      } else {
+        stats.skipped++;
+      }
+    } else {
+      if (entries.length === 0) { stats.skipped++; continue; }
+      const cols = entries.map(([k]) => k);
+      const vals = entries.map(([, v]) => v);
+      const ph = cols.map(() => "?").join(",");
+      await q(
+        `INSERT INTO ${BACKUP_TABLE} (${cols.join(",")}) VALUES (${ph})`,
+        vals
+      );
+      stats.inserted++;
+    }
+  }
+
+  return stats;
+}
+
+// ------------------------------------------------------------
+// ✅ LIST-PDF ROUTE — MUST be before /:id
+// ------------------------------------------------------------
+router.get("/list-pdf", async (req, res) => {
+  try {
+    const {
+      class: cls,
+      gender,
+      stream,
+      category,
+      status,
+      session,
+      search,
+      sortBy = "class",
+      order = "asc",
+      includePhoto = "false",
+      includeSignature = "false",
+      includeReason = "false",
+      reason = "",
+      title = "STUDENT LIST",
+      columns
+    } = req.query;
+
+    const where = [];
+    const params = [];
+    if (cls)      { where.push("class = ?"); params.push(cls); }
+    if (session)  { where.push("session = ?"); params.push(session); }
+    if (gender)   { where.push("gender = ?"); params.push(gender); }
+    if (category) { where.push("category = ?"); params.push(category); }
+    if (status)   { where.push("status = ?"); params.push(status); }
+    if (stream)   { where.push("stream = ?"); params.push(stream); }
+    if (search) {
+      where.push("(name LIKE ? OR admission_number LIKE ? OR student_id LIKE ? OR father_name LIKE ? OR mobile_number LIKE ?)");
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const allowedSort = ["created_at", "name", "class", "roll_number", "admission_date", "admission_number"];
+    const sortCol = allowedSort.includes(sortBy) ? sortBy : "class";
+    const sortDir = order.toLowerCase() === "asc" ? "ASC" : "DESC";
+
+    const orderSql = sortBy === "class"
+      ? `ORDER BY FIELD(class,'Nursery','LKG','UKG','1','2','3','4','5','6','7','8','9','10','11','12') ${sortDir}, roll_number ASC`
+      : `ORDER BY ${sortCol} ${sortDir}, roll_number ASC`;
+
+    const students = await q(
+      `SELECT * FROM Nstudent ${whereSql} ${orderSql} LIMIT 2000`,
+      params
+    );
+
+    if (!students.length) {
+      return res.status(404).json({ success: false, message: "No students found for these filters" });
+    }
+
+    const filterParts = [];
+    if (cls) filterParts.push(`Class: ${cls}`);
+    if (session) filterParts.push(`Session: ${session}`);
+    if (stream) filterParts.push(`Stream: ${stream}`);
+    if (gender) filterParts.push(`Gender: ${gender}`);
+    if (category) filterParts.push(`Category: ${category}`);
+    if (status) filterParts.push(`Status: ${status}`);
+    if (search) filterParts.push(`Search: "${search}"`);
+    const filterSummary = filterParts.length ? filterParts.join(" • ") : "All Students";
+
+    const defaultColumns = [
+      "sl", "studentId", "admissionNumber", "name", "fatherName",
+      "class", "rollNumber", "session", "gender", "category", "mobile"
+    ];
+    const requestedColumns = columns
+      ? columns.split(",").map(c => c.trim()).filter(Boolean)
+      : defaultColumns;
+
+    const COLUMN_DEFS = {
+      sl:              { label: "#",           width: 28,  align: "center" },
+      studentId:       { label: "Student ID",  width: 78,  align: "left" },
+      admissionNumber: { label: "Adm. No",     width: 65,  align: "left" },
+      name:            { label: "Name",        width: 130, align: "left" },
+      fatherName:      { label: "Father",      width: 120, align: "left" },
+      motherName:      { label: "Mother",      width: 110, align: "left" },
+      class:           { label: "Class",       width: 45,  align: "center" },
+      rollNumber:      { label: "Roll",        width: 45,  align: "center" },
+      session:         { label: "Session",     width: 60,  align: "center" },
+      gender:          { label: "Gender",      width: 50,  align: "center" },
+      category:        { label: "Category",    width: 58,  align: "center" },
+      stream:          { label: "Stream",      width: 70,  align: "center" },
+      dob:             { label: "DOB",         width: 68,  align: "center" },
+      mobile:          { label: "Mobile",      width: 75,  align: "left" },
+      email:           { label: "Email",       width: 140, align: "left" },
+      aadhar:          { label: "Aadhaar",     width: 100, align: "left" },
+      apaar:           { label: "APAAR ID",    width: 95,  align: "left" },
+      status:          { label: "Status",      width: 60,  align: "center" },
+      address:         { label: "Address",     width: 180, align: "left" },
+      photo:           { label: "Photo",       width: 50,  align: "center" },
+      signature:       { label: "Sign",        width: 60,  align: "center" }
+    };
+
+    const finalColumns = [...requestedColumns];
+    if (includePhoto === "true" && !finalColumns.includes("photo")) {
+      const nameIdx = finalColumns.indexOf("name");
+      if (nameIdx >= 0) finalColumns.splice(nameIdx + 1, 0, "photo");
+      else finalColumns.push("photo");
+    }
+    if (includeSignature === "true" && !finalColumns.includes("signature")) {
+      finalColumns.push("signature");
+    }
+
+    const PAGE_W = 842;
+    const PAGE_H = 595;
+    const MARGIN = 30;
+    const CONTENT_W = PAGE_W - MARGIN * 2;
+    const TABLE_TOP_OFFSET = 130;
+    const FOOTER_H = 40;
+    const ROW_H_BASE = includePhoto === "true" ? 50 : 22;
+    const HEADER_ROW_H = 26;
+
+    let totalColWidth = finalColumns.reduce((sum, c) => sum + (COLUMN_DEFS[c]?.width || 70), 0);
+    const scale = CONTENT_W / totalColWidth;
+    const scaledWidths = {};
+    finalColumns.forEach(c => {
+      scaledWidths[c] = (COLUMN_DEFS[c]?.width || 70) * scale;
+    });
+
+    const needPhotos = includePhoto === "true";
+    const needSigs = includeSignature === "true";
+    const photoMap = {};
+    const sigMap = {};
+
+    if (needPhotos || needSigs) {
+      console.log(`[List PDF] Fetching ${students.length} photos/sigs...`);
+      await Promise.all(students.map(async (s) => {
+        if (needPhotos && s.student_photo_url) {
+          try { photoMap[s.id] = await fetchImageBuffer(s.student_photo_url); } catch (e) {}
+        }
+        if (needSigs && s.signature_url) {
+          try { sigMap[s.id] = await fetchImageBuffer(s.signature_url); } catch (e) {}
+        }
+      }));
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    const safeTitle = String(title).replace(/[^a-zA-Z0-9-_]/g, "_").substring(0, 50);
+    res.setHeader("Content-Disposition", `inline; filename="${safeTitle}.pdf"`);
+
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
+      bufferPages: true,
+      autoFirstPage: false
+    });
+
+    doc.pipe(res);
+
+    const drawHeader = (pageNum) => {
+      const y0 = 15;
+
+      doc.rect(0, 0, PAGE_W, 80).fill("#0d1b2a");
+      doc.rect(0, 78, PAGE_W, 3).fill("#c9972b");
+
+      doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff")
+         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN, y0 + 8, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.2 });
+
+      doc.font("Helvetica").fontSize(8).fillColor("#c9972b")
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN, y0 + 28, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.5 });
+
+      doc.font("Helvetica-Bold").fontSize(13).fillColor("#0d1b2a")
+         .text(String(title).toUpperCase(), MARGIN, 88, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.5 });
+
+      doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
+         .text(filterSummary, MARGIN, 106, { width: PAGE_W - MARGIN * 2, align: "center" });
+
+      if (includeReason === "true" && reason && reason.trim()) {
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
+           .text(`Reason: ${String(reason).trim()}`, MARGIN, 118, { width: PAGE_W - MARGIN * 2, align: "center" });
+      }
+
+      const metaRight = `Total: ${students.length} student(s) • Generated: ${new Date().toLocaleDateString("en-IN")}`;
+      doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8")
+         .text(metaRight, MARGIN, 66, { width: PAGE_W - MARGIN * 2, align: "right" });
+    };
+
+    const drawTableHeader = (y) => {
+      let x = MARGIN;
+      doc.rect(MARGIN, y, CONTENT_W, HEADER_ROW_H).fill("#0d1b2a");
+
+      finalColumns.forEach(c => {
+        const def = COLUMN_DEFS[c] || { label: c, width: 70, align: "left" };
+        const w = scaledWidths[c];
+
+        doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff")
+           .text(def.label, x + 4, y + 8, { width: w - 8, align: def.align, lineBreak: false });
+
+        doc.strokeColor("#c9972b").lineWidth(0.4)
+           .moveTo(x + w, y).lineTo(x + w, y + HEADER_ROW_H).stroke();
+
+        x += w;
+      });
+
+      doc.strokeColor("#c9972b").lineWidth(1)
+         .moveTo(MARGIN, y + HEADER_ROW_H).lineTo(MARGIN + CONTENT_W, y + HEADER_ROW_H).stroke();
+
+      return y + HEADER_ROW_H;
+    };
+
+    const getCellText = (student, colKey, rowIndex) => {
+      switch (colKey) {
+        case "sl": return String(rowIndex + 1);
+        case "studentId": return student.student_id || "-";
+        case "admissionNumber": return student.admission_number || "-";
+        case "name": return student.name || "-";
+        case "fatherName": return student.father_name || "-";
+        case "motherName": return student.mother_name || "-";
+        case "class": return student.class || "-";
+        case "rollNumber": return student.roll_number || "-";
+        case "session": return student.session || "-";
+        case "gender": return student.gender || "-";
+        case "category": return student.category || "-";
+        case "stream": return student.stream || "Non-Specialized";
+        case "dob": return student.dob ? new Date(student.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-";
+        case "mobile": return student.mobile_number || "-";
+        case "email": return student.email_id || "-";
+        case "aadhar": return student.aadhar_number || "-";
+        case "apaar": return student.apaar_id || "-";
+        case "status": return student.status || "Active";
+        case "address": return student.address || "-";
+        default: return "";
+      }
+    };
+
+    let pageNum = 1;
+    doc.addPage();
+    drawHeader(pageNum);
+    let y = TABLE_TOP_OFFSET;
+    y = drawTableHeader(y);
+
+    const ROW_PADDING = 4;
+    const FOOTER_SAFE_Y = PAGE_H - FOOTER_H;
+
+    const drawFooter = (pgNum) => {
+      const fy = PAGE_H - 28;
+
+      doc.strokeColor("#c9972b").lineWidth(0.8)
+         .moveTo(MARGIN, fy - 4).lineTo(PAGE_W - MARGIN, fy - 4).stroke();
+
+      doc.font("Helvetica").fontSize(7.5).fillColor("#64748b")
+         .text(
+           `Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
+           MARGIN, fy + 2,
+           { width: 200, align: "left" }
+         );
+
+      const centerW = 400;
+      const centerX = (PAGE_W - centerW) / 2;
+
+      doc.strokeColor("#94a3b8").lineWidth(0.5)
+         .moveTo(centerX, fy + 12).lineTo(centerX + 120, fy + 12).stroke();
+      doc.font("Helvetica").fontSize(7).fillColor("#475569")
+         .text("Class Teacher", centerX, fy + 14, { width: 120, align: "center" });
+
+      doc.strokeColor("#94a3b8").lineWidth(0.5)
+         .moveTo(centerX + 160, fy + 12).lineTo(centerX + 280, fy + 12).stroke();
+      doc.font("Helvetica").fontSize(7).fillColor("#475569")
+         .text("Principal", centerX + 160, fy + 14, { width: 120, align: "center" });
+
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
+         .text(`Page ${pgNum}`, PAGE_W - MARGIN - 100, fy + 2, { width: 100, align: "right" });
+
+      doc.font("Helvetica").fontSize(6).fillColor("#cbd5e1")
+         .text(
+           "GSSS SHILLA OFFICIAL DOCUMENT • This is a computer-generated list. Valid with school seal & signature.",
+           MARGIN, PAGE_H - 12,
+           { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.3 }
+         );
+    };
+
+    for (let i = 0; i < students.length; i++) {
+      const s = students[i];
+
+      if (y + ROW_H_BASE + 4 > FOOTER_SAFE_Y) {
+        drawFooter(pageNum);
+        pageNum++;
+        doc.addPage();
+        drawHeader(pageNum);
+        y = TABLE_TOP_OFFSET;
+        y = drawTableHeader(y);
+      }
+
+      if (i % 2 === 1) {
+        doc.rect(MARGIN, y, CONTENT_W, ROW_H_BASE).fill("#f8fafc");
+      }
+
+      let x = MARGIN;
+      finalColumns.forEach(c => {
+        const def = COLUMN_DEFS[c] || { label: c, width: 70, align: "left" };
+        const w = scaledWidths[c];
+
+        if (c === "photo" && needPhotos && photoMap[s.id]) {
+          const px = x + (w - 34) / 2;
+          const py = y + (ROW_H_BASE - 38) / 2;
+          try {
+            doc.image(photoMap[s.id], px, py, { fit: [34, 38], align: "center", valign: "center" });
+          } catch (e) {
+            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+               .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
+          }
+        } else if (c === "signature" && needSigs && sigMap[s.id]) {
+          const px = x + (w - 40) / 2;
+          const py = y + (ROW_H_BASE - 20) / 2;
+          try {
+            doc.image(sigMap[s.id], px, py, { fit: [40, 20], align: "center", valign: "center" });
+          } catch (e) {
+            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+               .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
+          }
+        } else if (c === "photo" || c === "signature") {
+          doc.font("Helvetica").fontSize(7).fillColor("#cbd5e1")
+             .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
+        } else {
+          const text = getCellText(s, c, i);
+          doc.font("Helvetica").fontSize(8).fillColor("#1a2332")
+             .text(text, x + ROW_PADDING, y + (ROW_H_BASE / 2) - 5, {
+               width: w - ROW_PADDING * 2,
+               align: def.align,
+               lineBreak: false,
+               ellipsis: true
+             });
+        }
+
+        doc.strokeColor("#e2e8f0").lineWidth(0.3)
+           .moveTo(x + w, y).lineTo(x + w, y + ROW_H_BASE).stroke();
+
+        x += w;
+      });
+
+      doc.strokeColor("#e2e8f0").lineWidth(0.3)
+         .moveTo(MARGIN, y + ROW_H_BASE).lineTo(MARGIN + CONTENT_W, y + ROW_H_BASE).stroke();
+
+      y += ROW_H_BASE;
+    }
+
+    drawFooter(pageNum);
+
+    doc.end();
+
+  } catch (err) {
+    console.error("❌ List PDF error:", err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+});
+
+// ------------------------------------------------------------
+// BACKUP ROUTES
+// ------------------------------------------------------------
+
+router.get("/backup/list", verifyBackupAuth, async (req, res) => {
+  try {
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith("backup_") && f.endsWith(".json"))
+      .map(f => {
+        const fullPath = path.join(BACKUP_DIR, f);
+        const stat = fs.statSync(fullPath);
+        let meta = {};
+        try { meta = JSON.parse(fs.readFileSync(fullPath, "utf8")); } catch (e) {}
+        return {
+          filename: f,
+          size: stat.size,
+          createdAt: meta.createdAt || stat.mtime.toISOString(),
+          type: meta.type || "auto",
+          stats: meta.stats || {}
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json({ success: true, backups: files, count: files.length });
+  } catch (err) {
+    console.error("[Backup] List error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post("/backup/create", verifyBackupAuth, async (req, res) => {
+  try {
+    const result = await createBackup("manual");
+    res.json({
+      success: true,
+      message: `Backup created ✅ (${result.stats.students} students)`,
+      filename: result.filename,
+      size: result.size,
+      stats: result.stats
+    });
+  } catch (err) {
+    console.error("[Backup] Create error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.get("/backup/download/:filename", verifyBackupAuth, async (req, res) => {
+  try {
+    const filename = req.params.filename;
+
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
+        filename.includes("..") || filename.includes("/")) {
+      return res.status(400).json({ success: false, message: "Invalid filename" });
+    }
+
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, message: "Backup not found" });
+    }
+
+    res.download(filepath, filename);
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.delete("/backup/:filename", verifyBackupAuth, async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
+        filename.includes("..") || filename.includes("/")) {
+      return res.status(400).json({ success: false, message: "Invalid filename" });
+    }
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, message: "Backup not found" });
+    }
+    fs.unlinkSync(filepath);
+    res.json({ success: true, message: "Backup deleted ✅" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post("/backup/restore/:filename", verifyBackupAuth, async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
+        filename.includes("..") || filename.includes("/")) {
+      return res.status(400).json({ success: false, message: "Invalid filename" });
+    }
+
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, message: "Backup not found" });
+    }
+
+    const data = JSON.parse(fs.readFileSync(filepath, "utf8"));
+    const mode = req.body.mode === "replace" ? "replace" : "merge";
+
+    try {
+      await createBackup("prebak");
+      console.log("[Backup] Safety backup created before restore");
+    } catch (e) {
+      console.warn("[Backup] Safety backup failed:", e.message);
+    }
+
+    const stats = await restoreBackupData(data, mode);
+
+    res.json({
+      success: true,
+      message: `Restore complete ✅ (${mode} mode) — ${stats.inserted} inserted, ${stats.updated} updated`,
+      mode,
+      inserted: stats.inserted,
+      updated: stats.updated,
+      skipped: stats.skipped,
+      total: stats.total
+    });
+  } catch (err) {
+    console.error("[Backup] Restore error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("backupFile"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "No file uploaded" });
+    }
+
+    let data;
+    try {
+      data = JSON.parse(req.file.buffer.toString("utf8"));
+    } catch (e) {
+      return res.status(400).json({ success: false, message: "Invalid JSON file" });
+    }
+
+    if (!data.tables || !data.tables[BACKUP_TABLE]) {
+      return res.status(400).json({
+        success: false,
+        message: `Backup file must contain "${BACKUP_TABLE}" table data`
+      });
+    }
+
+    const mode = req.body.mode === "replace" ? "replace" : "merge";
+
+    try {
+      await createBackup("prebak");
+      console.log("[Backup] Safety backup created before upload-restore");
+    } catch (e) {
+      console.warn("[Backup] Safety backup failed:", e.message);
+    }
+
+    const stats = await restoreBackupData(data, mode);
+
+    res.json({
+      success: true,
+      message: `Restore complete ✅ (${mode} mode) — ${stats.inserted} inserted, ${stats.updated} updated`,
+      mode,
+      inserted: stats.inserted,
+      updated: stats.updated,
+      skipped: stats.skipped,
+      total: stats.total
+    });
+  } catch (err) {
+    console.error("[Backup] Upload-restore error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Cron: Daily 2 AM IST auto-backup
+cron.schedule("0 2 * * *", async () => {
+  console.log("[Cron] Running daily 2 AM backup...");
+  try {
+    const result = await createBackup("auto");
+    console.log(`[Cron] Backup created: ${result.filename} (${result.stats.students} students)`);
+  } catch (err) {
+    console.error("[Cron] Backup failed:", err.message);
+  }
+}, { timezone: "Asia/Kolkata" });
+
+console.log("✅ Backup system loaded — daily cron at 2:00 AM IST");
+
+// ============================================================
+// ✅ GET SINGLE (LAST among GET routes)
 // ============================================================
 router.get("/:id", async (req, res) => {
   try {
@@ -2678,783 +3243,4 @@ router.get("/:id/pdf", async (req, res) => {
   }
 });
 
-// ============================================================
-// ✅✅✅ BACKUP & RESTORE SYSTEM ✅✅✅
-// ============================================================
-const BACKUP_DIR = path.join(__dirname, "..", "backups");
-const MAX_BACKUPS = 10;
-const RETENTION_DAYS = 10;
-const BACKUP_TABLE = "Nstudent";
-
-if (!fs.existsSync(BACKUP_DIR)) {
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  console.log("✅ Backups folder created:", BACKUP_DIR);
-}
-
-// Multer for upload restore (in-memory, 100MB limit)
-const backupUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 }
-});
-
-// Simple auth check for backup routes
-const verifyBackupAuth = (req, res, next) => {
-  const token = req.query.token || (req.headers.authorization || "").replace("Bearer ", "");
-  if (!token) return res.status(401).json({ success: false, message: "Auth required" });
-  next();
-};
-
-/**
- * Create backup file on server disk
- */
-async function createBackup(type = "auto") {
-  const now = new Date();
-  const timestamp = now.toISOString().replace(/[:.]/g, "-");
-  const filename = `backup_${type}_${timestamp}.json`;
-  const filepath = path.join(BACKUP_DIR, filename);
-
-  // Fetch all students
-  const students = await q(`SELECT * FROM ${BACKUP_TABLE}`);
-
-  const backupData = {
-    version: "2.0",
-    type: type,
-    createdAt: now.toISOString(),
-    stats: {
-      students: students.length,
-      total: students.length
-    },
-    tables: {
-      [BACKUP_TABLE]: students
-    }
-  };
-
-  fs.writeFileSync(filepath, JSON.stringify(backupData, null, 2));
-  await cleanupOldBackups();
-
-  const stat = fs.statSync(filepath);
-  console.log(`[Backup] Created: ${filename} (${students.length} students, ${(stat.size / 1024).toFixed(2)} KB)`);
-
-  return {
-    filename,
-    filepath,
-    size: stat.size,
-    stats: backupData.stats
-  };
-}
-
-/**
- * Delete old backups — keep only latest MAX_BACKUPS
- * Also delete files older than RETENTION_DAYS
- */
-async function cleanupOldBackups() {
-  try {
-    const files = fs.readdirSync(BACKUP_DIR)
-      .filter(f => f.startsWith("backup_") && f.endsWith(".json"))
-      .map(f => {
-        const fullPath = path.join(BACKUP_DIR, f);
-        return { name: f, path: fullPath, mtime: fs.statSync(fullPath).mtimeMs };
-      })
-      .sort((a, b) => b.mtime - a.mtime); // newest first
-
-    // 1. Delete files older than RETENTION_DAYS
-    const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    for (const file of files) {
-      if (file.mtime < cutoff) {
-        try {
-          fs.unlinkSync(file.path);
-          console.log(`[Backup] Deleted old: ${file.name}`);
-        } catch (e) {}
-      }
-    }
-
-    // 2. Keep only MAX_BACKUPS (newest)
-    const remaining = files.filter(f => f.mtime >= cutoff);
-    if (remaining.length > MAX_BACKUPS) {
-      for (let i = MAX_BACKUPS; i < remaining.length; i++) {
-        try {
-          fs.unlinkSync(remaining[i].path);
-          console.log(`[Backup] Deleted excess: ${remaining[i].name}`);
-        } catch (e) {}
-      }
-    }
-  } catch (err) {
-    console.error("[Backup] Cleanup error:", err.message);
-  }
-}
-
-/**
- * Restore data from backup object
- */
-async function restoreBackupData(data, mode = "merge") {
-  if (!data || !data.tables || !data.tables[BACKUP_TABLE]) {
-    throw new Error("Invalid backup file — missing table data");
-  }
-  const students = data.tables[BACKUP_TABLE];
-  if (!Array.isArray(students)) throw new Error("Invalid backup — students must be array");
-
-  const stats = { inserted: 0, updated: 0, skipped: 0, total: students.length };
-
-  if (mode === "replace") {
-    await q(`DELETE FROM ${BACKUP_TABLE}`);
-    console.log("[Backup] All students deleted (replace mode)");
-  }
-
-  // Get valid columns in current schema
-  const colsResult = await q(`SHOW COLUMNS FROM ${BACKUP_TABLE}`);
-  const validColumns = colsResult.map(c => c.Field);
-
-  for (const student of students) {
-    if (!student.student_id) {
-      stats.skipped++;
-      continue;
-    }
-
-    const existing = await q(
-      `SELECT id FROM ${BACKUP_TABLE} WHERE student_id = ? LIMIT 1`,
-      [student.student_id]
-    );
-
-    // Only use columns that still exist in schema
-    const entries = Object.entries(student).filter(([k]) =>
-      validColumns.includes(k) && k !== "id"
-    );
-
-    if (existing.length > 0) {
-      if (mode === "merge") {
-        if (entries.length === 0) { stats.skipped++; continue; }
-        const setSql = entries.map(([k]) => `${k} = ?`).join(", ");
-        const values = entries.map(([, v]) => v);
-        await q(
-          `UPDATE ${BACKUP_TABLE} SET ${setSql} WHERE student_id = ?`,
-          [...values, student.student_id]
-        );
-        stats.updated++;
-      } else {
-        stats.skipped++;
-      }
-    } else {
-      if (entries.length === 0) { stats.skipped++; continue; }
-      const cols = entries.map(([k]) => k);
-      const vals = entries.map(([, v]) => v);
-      const ph = cols.map(() => "?").join(",");
-      await q(
-        `INSERT INTO ${BACKUP_TABLE} (${cols.join(",")}) VALUES (${ph})`,
-        vals
-      );
-      stats.inserted++;
-    }
-  }
-
-  return stats;
-}
-
-// ------------------------------------------------------------
-// BACKUP ROUTES
-// ------------------------------------------------------------
-
-// List all backups
-router.get("/backup/list", verifyBackupAuth, async (req, res) => {
-  try {
-    const files = fs.readdirSync(BACKUP_DIR)
-      .filter(f => f.startsWith("backup_") && f.endsWith(".json"))
-      .map(f => {
-        const fullPath = path.join(BACKUP_DIR, f);
-        const stat = fs.statSync(fullPath);
-        let meta = {};
-        try { meta = JSON.parse(fs.readFileSync(fullPath, "utf8")); } catch (e) {}
-        return {
-          filename: f,
-          size: stat.size,
-          createdAt: meta.createdAt || stat.mtime.toISOString(),
-          type: meta.type || "auto",
-          stats: meta.stats || {}
-        };
-      })
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    res.json({ success: true, backups: files, count: files.length });
-  } catch (err) {
-    console.error("[Backup] List error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Create manual backup
-router.post("/backup/create", verifyBackupAuth, async (req, res) => {
-  try {
-    const result = await createBackup("manual");
-    res.json({
-      success: true,
-      message: `Backup created ✅ (${result.stats.students} students)`,
-      filename: result.filename,
-      size: result.size,
-      stats: result.stats
-    });
-  } catch (err) {
-    console.error("[Backup] Create error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Download backup file
-router.get("/backup/download/:filename", verifyBackupAuth, async (req, res) => {
-  try {
-    const filename = req.params.filename;
-
-    // Security
-    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
-        filename.includes("..") || filename.includes("/")) {
-      return res.status(400).json({ success: false, message: "Invalid filename" });
-    }
-
-    const filepath = path.join(BACKUP_DIR, filename);
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({ success: false, message: "Backup not found" });
-    }
-
-    res.download(filepath, filename);
-  } catch (err) {
-    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Delete backup
-router.delete("/backup/:filename", verifyBackupAuth, async (req, res) => {
-  try {
-    const filename = req.params.filename;
-    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
-        filename.includes("..") || filename.includes("/")) {
-      return res.status(400).json({ success: false, message: "Invalid filename" });
-    }
-    const filepath = path.join(BACKUP_DIR, filename);
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({ success: false, message: "Backup not found" });
-    }
-    fs.unlinkSync(filepath);
-    res.json({ success: true, message: "Backup deleted ✅" });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Restore from server-side backup
-router.post("/backup/restore/:filename", verifyBackupAuth, async (req, res) => {
-  try {
-    const filename = req.params.filename;
-    if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
-        filename.includes("..") || filename.includes("/")) {
-      return res.status(400).json({ success: false, message: "Invalid filename" });
-    }
-
-    const filepath = path.join(BACKUP_DIR, filename);
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({ success: false, message: "Backup not found" });
-    }
-
-    const data = JSON.parse(fs.readFileSync(filepath, "utf8"));
-    const mode = req.body.mode === "replace" ? "replace" : "merge";
-
-    // Safety backup before restore
-    try {
-      await createBackup("prebak");
-      console.log("[Backup] Safety backup created before restore");
-    } catch (e) {
-      console.warn("[Backup] Safety backup failed:", e.message);
-    }
-
-    const stats = await restoreBackupData(data, mode);
-
-    res.json({
-      success: true,
-      message: `Restore complete ✅ (${mode} mode) — ${stats.inserted} inserted, ${stats.updated} updated`,
-      mode,
-      inserted: stats.inserted,
-      updated: stats.updated,
-      skipped: stats.skipped,
-      total: stats.total
-    });
-  } catch (err) {
-    console.error("[Backup] Restore error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Upload & Restore
-router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("backupFile"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "No file uploaded" });
-    }
-
-    let data;
-    try {
-      data = JSON.parse(req.file.buffer.toString("utf8"));
-    } catch (e) {
-      return res.status(400).json({ success: false, message: "Invalid JSON file" });
-    }
-
-    if (!data.tables || !data.tables[BACKUP_TABLE]) {
-      return res.status(400).json({
-        success: false,
-        message: `Backup file must contain "${BACKUP_TABLE}" table data`
-      });
-    }
-
-    const mode = req.body.mode === "replace" ? "replace" : "merge";
-
-    // Safety backup
-    try {
-      await createBackup("prebak");
-      console.log("[Backup] Safety backup created before upload-restore");
-    } catch (e) {
-      console.warn("[Backup] Safety backup failed:", e.message);
-    }
-
-    const stats = await restoreBackupData(data, mode);
-
-    res.json({
-      success: true,
-      message: `Restore complete ✅ (${mode} mode) — ${stats.inserted} inserted, ${stats.updated} updated`,
-      mode,
-      inserted: stats.inserted,
-      updated: stats.updated,
-      skipped: stats.skipped,
-      total: stats.total
-    });
-  } catch (err) {
-    console.error("[Backup] Upload-restore error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Cron: Daily 2 AM IST auto-backup
-cron.schedule("0 2 * * *", async () => {
-  console.log("[Cron] Running daily 2 AM backup...");
-  try {
-    const result = await createBackup("auto");
-    console.log(`[Cron] Backup created: ${result.filename} (${result.stats.students} students)`);
-  } catch (err) {
-    console.error("[Cron] Backup failed:", err.message);
-  }
-}, { timezone: "Asia/Kolkata" });
-
-console.log("✅ Backup system loaded — daily cron at 2:00 AM IST");
-// ============================================================
-// ✅ PROFESSIONAL LANDSCAPE PDF — Students List by Filters
-// ============================================================
-/**
- * Generate a professional landscape PDF with student list
- * Query params:
- *  - class, gender, stream, category, status, session, search (filters)
- *  - sortBy, order (sorting)
- *  - includePhoto (true/false)
- *  - includeSignature (true/false)
- *  - includeReason (true/false)
- *  - reason (text)
- *  - title (custom title)
- *  - columns (comma-separated list of columns to include)
- */
-router.get("/list-pdf", async (req, res) => {
-  try {
-    const {
-      class: cls,
-      gender,
-      stream,
-      category,
-      status,
-      session,
-      search,
-      sortBy = "class",
-      order = "asc",
-      includePhoto = "false",
-      includeSignature = "false",
-      includeReason = "false",
-      reason = "",
-      title = "STUDENT LIST",
-      columns
-    } = req.query;
-
-    // ---- Build WHERE clause (same as GET /) ----
-    const where = [];
-    const params = [];
-    if (cls)      { where.push("class = ?"); params.push(cls); }
-    if (session)  { where.push("session = ?"); params.push(session); }
-    if (gender)   { where.push("gender = ?"); params.push(gender); }
-    if (category) { where.push("category = ?"); params.push(category); }
-    if (status)   { where.push("status = ?"); params.push(status); }
-    if (stream)   { where.push("stream = ?"); params.push(stream); }
-    if (search) {
-      where.push("(name LIKE ? OR admission_number LIKE ? OR student_id LIKE ? OR father_name LIKE ? OR mobile_number LIKE ?)");
-      const like = `%${search}%`;
-      params.push(like, like, like, like, like);
-    }
-
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
-    const allowedSort = ["created_at", "name", "class", "roll_number", "admission_date", "admission_number"];
-    const sortCol = allowedSort.includes(sortBy) ? sortBy : "class";
-    const sortDir = order.toLowerCase() === "asc" ? "ASC" : "DESC";
-
-    // Order: class first, then roll_number (natural for school lists)
-    const orderSql = sortBy === "class"
-      ? `ORDER BY FIELD(class,'Nursery','LKG','UKG','1','2','3','4','5','6','7','8','9','10','11','12') ${sortDir}, roll_number ASC`
-      : `ORDER BY ${sortCol} ${sortDir}, roll_number ASC`;
-
-    const students = await q(
-      `SELECT * FROM Nstudent ${whereSql} ${orderSql} LIMIT 2000`,
-      params
-    );
-
-    if (!students.length) {
-      return res.status(404).json({ success: false, message: "No students found for these filters" });
-    }
-
-    // ---- Filter summary text ----
-    const filterParts = [];
-    if (cls) filterParts.push(`Class: ${cls}`);
-    if (session) filterParts.push(`Session: ${session}`);
-    if (stream) filterParts.push(`Stream: ${stream}`);
-    if (gender) filterParts.push(`Gender: ${gender}`);
-    if (category) filterParts.push(`Category: ${category}`);
-    if (status) filterParts.push(`Status: ${status}`);
-    if (search) filterParts.push(`Search: "${search}"`);
-    const filterSummary = filterParts.length ? filterParts.join(" • ") : "All Students";
-
-    // ---- Column selection ----
-    // Default set of columns
-    const defaultColumns = [
-      "sl", "studentId", "admissionNumber", "name", "fatherName",
-      "class", "rollNumber", "session", "gender", "category", "mobile"
-    ];
-    const requestedColumns = columns
-      ? columns.split(",").map(c => c.trim()).filter(Boolean)
-      : defaultColumns;
-
-    // ---- Column definitions (label + width in landscape ~842pt) ----
-    const COLUMN_DEFS = {
-      sl:              { label: "#",           width: 28,  align: "center" },
-      studentId:       { label: "Student ID",  width: 78,  align: "left" },
-      admissionNumber: { label: "Adm. No",     width: 65,  align: "left" },
-      name:            { label: "Name",        width: 130, align: "left" },
-      fatherName:      { label: "Father",      width: 120, align: "left" },
-      motherName:      { label: "Mother",      width: 110, align: "left" },
-      class:           { label: "Class",       width: 45,  align: "center" },
-      rollNumber:      { label: "Roll",        width: 45,  align: "center" },
-      session:         { label: "Session",     width: 60,  align: "center" },
-      gender:          { label: "Gender",      width: 50,  align: "center" },
-      category:        { label: "Category",    width: 58,  align: "center" },
-      stream:          { label: "Stream",      width: 70,  align: "center" },
-      dob:             { label: "DOB",         width: 68,  align: "center" },
-      mobile:          { label: "Mobile",      width: 75,  align: "left" },
-      email:           { label: "Email",       width: 140, align: "left" },
-      aadhar:          { label: "Aadhaar",     width: 100, align: "left" },
-      apaar:           { label: "APAAR ID",    width: 95,  align: "left" },
-      status:          { label: "Status",      width: 60,  align: "center" },
-      address:         { label: "Address",     width: 180, align: "left" },
-      photo:           { label: "Photo",       width: 50,  align: "center" },
-      signature:       { label: "Sign",        width: 60,  align: "center" }
-    };
-
-    // ✅ Ensure photo/signature columns only if requested
-    const finalColumns = [...requestedColumns];
-    if (includePhoto === "true" && !finalColumns.includes("photo")) {
-      // Insert after name
-      const nameIdx = finalColumns.indexOf("name");
-      if (nameIdx >= 0) finalColumns.splice(nameIdx + 1, 0, "photo");
-      else finalColumns.push("photo");
-    }
-    if (includeSignature === "true" && !finalColumns.includes("signature")) {
-      finalColumns.push("signature");
-    }
-
-    // ---- Auto-fit columns to page width ----
-    const PAGE_W = 842;  // A4 landscape width in points
-    const PAGE_H = 595;  // A4 landscape height in points
-    const MARGIN = 30;
-    const CONTENT_W = PAGE_W - MARGIN * 2;
-    const TABLE_TOP_OFFSET = 130; // header + title area
-    const FOOTER_H = 40;
-    const ROW_H_BASE = includePhoto === "true" ? 50 : 22; // taller if photos
-    const HEADER_ROW_H = 26;
-
-    let totalColWidth = finalColumns.reduce((sum, c) => sum + (COLUMN_DEFS[c]?.width || 70), 0);
-    const scale = CONTENT_W / totalColWidth;
-    const scaledWidths = {};
-    finalColumns.forEach(c => {
-      scaledWidths[c] = (COLUMN_DEFS[c]?.width || 70) * scale;
-    });
-
-    // ---- Fetch images for photo/signature columns ----
-    const needPhotos = includePhoto === "true";
-    const needSigs = includeSignature === "true";
-    const photoMap = {};      // studentId -> Buffer
-    const sigMap = {};        // studentId -> Buffer
-
-    if (needPhotos || needSigs) {
-      console.log(`[List PDF] Fetching ${students.length} photos/sigs...`);
-      await Promise.all(students.map(async (s) => {
-        if (needPhotos && s.student_photo_url) {
-          try { photoMap[s.id] = await fetchImageBuffer(s.student_photo_url); } catch (e) {}
-        }
-        if (needSigs && s.signature_url) {
-          try { sigMap[s.id] = await fetchImageBuffer(s.signature_url); } catch (e) {}
-        }
-      }));
-    }
-
-    // ---- Setup PDF ----
-    res.setHeader("Content-Type", "application/pdf");
-    const safeTitle = String(title).replace(/[^a-zA-Z0-9-_]/g, "_").substring(0, 50);
-    res.setHeader("Content-Disposition", `inline; filename="${safeTitle}.pdf"`);
-
-    const doc = new PDFDocument({
-      size: "A4",
-      layout: "landscape",
-      margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
-      bufferPages: true, // for page numbers
-      autoFirstPage: false
-    });
-
-    doc.pipe(res);
-
-    // ---- Helper: draw page header ----
-    const drawHeader = (pageNum) => {
-      const y0 = 15;
-
-      // Title bar background
-      doc.rect(0, 0, PAGE_W, 80).fill("#0d1b2a");
-
-      // Gold accent line
-      doc.rect(0, 78, PAGE_W, 3).fill("#c9972b");
-
-      // School name
-      doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff")
-         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN, y0 + 8, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.2 });
-
-      // Location line
-      doc.font("Helvetica").fontSize(8).fillColor("#c9972b")
-         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN, y0 + 28, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.5 });
-
-      // Custom title (below school header)
-      doc.font("Helvetica-Bold").fontSize(13).fillColor("#0d1b2a")
-         .text(String(title).toUpperCase(), MARGIN, 88, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.5 });
-
-      // Filter summary
-      doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
-         .text(filterSummary, MARGIN, 106, { width: PAGE_W - MARGIN * 2, align: "center" });
-
-      // Reason (if included)
-      if (includeReason === "true" && reason && reason.trim()) {
-        doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
-           .text(`Reason: ${String(reason).trim()}`, MARGIN, 118, { width: PAGE_W - MARGIN * 2, align: "center" });
-      }
-
-      // Total count + generated date (top-right corner mini)
-      const metaRight = `Total: ${students.length} student(s) • Generated: ${new Date().toLocaleDateString("en-IN")}`;
-      doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8")
-         .text(metaRight, MARGIN, 66, { width: PAGE_W - MARGIN * 2, align: "right" });
-    };
-
-    // ---- Helper: draw table header row ----
-    const drawTableHeader = (y) => {
-      let x = MARGIN;
-
-      // Row background
-      doc.rect(MARGIN, y, CONTENT_W, HEADER_ROW_H).fill("#0d1b2a");
-
-      finalColumns.forEach(c => {
-        const def = COLUMN_DEFS[c] || { label: c, width: 70, align: "left" };
-        const w = scaledWidths[c];
-
-        doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff")
-           .text(def.label, x + 4, y + 8, { width: w - 8, align: def.align, lineBreak: false });
-
-        // Column separator
-        doc.strokeColor("#c9972b").lineWidth(0.4)
-           .moveTo(x + w, y).lineTo(x + w, y + HEADER_ROW_H).stroke();
-
-        x += w;
-      });
-
-      // Bottom border
-      doc.strokeColor("#c9972b").lineWidth(1)
-         .moveTo(MARGIN, y + HEADER_ROW_H).lineTo(MARGIN + CONTENT_W, y + HEADER_ROW_H).stroke();
-
-      return y + HEADER_ROW_H;
-    };
-
-    // ---- Helper: get cell value as text ----
-    const getCellText = (student, colKey, rowIndex) => {
-      switch (colKey) {
-        case "sl": return String(rowIndex + 1);
-        case "studentId": return student.student_id || "-";
-        case "admissionNumber": return student.admission_number || "-";
-        case "name": return student.name || "-";
-        case "fatherName": return student.father_name || "-";
-        case "motherName": return student.mother_name || "-";
-        case "class": return student.class || "-";
-        case "rollNumber": return student.roll_number || "-";
-        case "session": return student.session || "-";
-        case "gender": return student.gender || "-";
-        case "category": return student.category || "-";
-        case "stream": return student.stream || "Non-Specialized";
-        case "dob": return student.dob ? new Date(student.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-";
-        case "mobile": return student.mobile_number || "-";
-        case "email": return student.email_id || "-";
-        case "aadhar": return student.aadhar_number || "-";
-        case "apaar": return student.apaar_id || "-";
-        case "status": return student.status || "Active";
-        case "address": return student.address || "-";
-        case "photo": return ""; // drawn separately
-        case "signature": return ""; // drawn separately
-        default: return "";
-      }
-    };
-
-    // ---- Draw first page ----
-    let pageNum = 1;
-    doc.addPage();
-    drawHeader(pageNum);
-    let y = TABLE_TOP_OFFSET;
-    let headerY = drawTableHeader(y);
-    y = headerY;
-
-    const ROW_PADDING = 4;
-    const FOOTER_SAFE_Y = PAGE_H - FOOTER_H;
-
-    // ---- Draw each student row ----
-    for (let i = 0; i < students.length; i++) {
-      const s = students[i];
-
-      // Check if new page needed
-      if (y + ROW_H_BASE + 4 > FOOTER_SAFE_Y) {
-        // Draw footer for current page BEFORE adding new
-        drawFooter(pageNum);
-        pageNum++;
-        doc.addPage();
-        drawHeader(pageNum);
-        y = TABLE_TOP_OFFSET;
-        y = drawTableHeader(y);
-      }
-
-      // Row background (alternating)
-      if (i % 2 === 1) {
-        doc.rect(MARGIN, y, CONTENT_W, ROW_H_BASE).fill("#f8fafc");
-      }
-
-      // Row content
-      let x = MARGIN;
-      finalColumns.forEach(c => {
-        const def = COLUMN_DEFS[c] || { label: c, width: 70, align: "left" };
-        const w = scaledWidths[c];
-
-        if (c === "photo" && needPhotos && photoMap[s.id]) {
-          // Draw photo
-          const px = x + (w - 34) / 2;
-          const py = y + (ROW_H_BASE - 38) / 2;
-          try {
-            doc.image(photoMap[s.id], px, py, { fit: [34, 38], align: "center", valign: "center" });
-          } catch (e) {
-            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
-               .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
-          }
-        } else if (c === "signature" && needSigs && sigMap[s.id]) {
-          // Draw signature
-          const px = x + (w - 40) / 2;
-          const py = y + (ROW_H_BASE - 20) / 2;
-          try {
-            doc.image(sigMap[s.id], px, py, { fit: [40, 20], align: "center", valign: "center" });
-          } catch (e) {
-            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
-               .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
-          }
-        } else if (c === "photo" || c === "signature") {
-          doc.font("Helvetica").fontSize(7).fillColor("#cbd5e1")
-             .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
-        } else {
-          const text = getCellText(s, c, i);
-          doc.font("Helvetica").fontSize(8).fillColor("#1a2332")
-             .text(text, x + ROW_PADDING, y + (ROW_H_BASE / 2) - 5, {
-               width: w - ROW_PADDING * 2,
-               align: def.align,
-               lineBreak: false,
-               ellipsis: true
-             });
-        }
-
-        // Column separator
-        doc.strokeColor("#e2e8f0").lineWidth(0.3)
-           .moveTo(x + w, y).lineTo(x + w, y + ROW_H_BASE).stroke();
-
-        x += w;
-      });
-
-      // Row bottom border
-      doc.strokeColor("#e2e8f0").lineWidth(0.3)
-         .moveTo(MARGIN, y + ROW_H_BASE).lineTo(MARGIN + CONTENT_W, y + ROW_H_BASE).stroke();
-
-      y += ROW_H_BASE;
-    }
-
-    // ---- Helper: draw page footer ----
-    function drawFooter(pgNum) {
-      const fy = PAGE_H - 28;
-
-      // Gold thin line above footer
-      doc.strokeColor("#c9972b").lineWidth(0.8)
-         .moveTo(MARGIN, fy - 4).lineTo(PAGE_W - MARGIN, fy - 4).stroke();
-
-      // Left: Print date
-      doc.font("Helvetica").fontSize(7.5).fillColor("#64748b")
-         .text(
-           `Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
-           MARGIN, fy + 2,
-           { width: 200, align: "left" }
-         );
-
-      // Center: Signatures
-      const centerW = 400;
-      const centerX = (PAGE_W - centerW) / 2;
-
-      // Class Teacher signature line
-      doc.strokeColor("#94a3b8").lineWidth(0.5)
-         .moveTo(centerX, fy + 12).lineTo(centerX + 120, fy + 12).stroke();
-      doc.font("Helvetica").fontSize(7).fillColor("#475569")
-         .text("Class Teacher", centerX, fy + 14, { width: 120, align: "center" });
-
-      // Principal signature line
-      doc.strokeColor("#94a3b8").lineWidth(0.5)
-         .moveTo(centerX + 160, fy + 12).lineTo(centerX + 280, fy + 12).stroke();
-      doc.font("Helvetica").fontSize(7).fillColor("#475569")
-         .text("Principal", centerX + 160, fy + 14, { width: 120, align: "center" });
-
-      // Right: Page number
-      doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
-         .text(`Page ${pgNum}`, PAGE_W - MARGIN - 100, fy + 2, { width: 100, align: "right" });
-
-      // Bottom watermark line
-      doc.font("Helvetica").fontSize(6).fillColor("#cbd5e1")
-         .text(
-           "GSSS SHILLA OFFICIAL DOCUMENT • This is a computer-generated list. Valid with school seal & signature.",
-           MARGIN, PAGE_H - 12,
-           { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.3 }
-         );
-    }
-
-    // ---- Draw footer on last page ----
-    drawFooter(pageNum);
-
-    // ---- End PDF ----
-    doc.end();
-
-  } catch (err) {
-    console.error("❌ List PDF error:", err.message);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, message: err.message });
-    }
-  }
-});
 module.exports = router;
-
-
