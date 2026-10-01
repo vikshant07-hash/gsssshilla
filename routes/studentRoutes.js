@@ -6,24 +6,9 @@ const https = require("https");
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
-const fs = require("fs");
-const cron = require("node-cron");
-const multer = require("multer");
 
 const db = require("../config/db");
-const {
-  cloudinary,
-  uploadStudent,
-  // ✅ Backup helpers
-  uploadBackupToCloudinary,
-  downloadBackupFromCloudinary,
-  deleteBackupFromCloudinary,
-  listBackupsFromCloudinary,
-  // ✅ Student file helpers
-  resolveStudentFileUrl,
-  checkStudentFileExists,
-  parseCloudinaryUrl
-} = require("../config/cloudinary");
+const { cloudinary, uploadStudent } = require("../config/cloudinary");
 
 // ============================================================
 // ✅ PIN SYSTEM — Constants & Helpers
@@ -31,16 +16,17 @@ const {
 const PIN_LENGTH = 6;
 const MAX_CHANGES_PER_MONTH = 3;
 const MAX_FAILED_ATTEMPTS = 5;
-const LOCK_DURATION_MS = 30 * 60 * 1000;
-const PIN_OTP_EXPIRY_MS = 10 * 60 * 1000;
+const LOCK_DURATION_MS = 30 * 60 * 1000;     // 30 minutes
+const PIN_OTP_EXPIRY_MS = 10 * 60 * 1000;    // 10 minutes
 const PIN_OTP_MAX_ATTEMPTS = 5;
-const PIN_OTP_RESEND_COOLDOWN_MS = 30 * 1000;
+const PIN_OTP_RESEND_COOLDOWN_MS = 30 * 1000; // 30 sec cooldown between resends
 
 function currentMonthYear() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// ✅ FIX: Calculates remaining lock minutes correctly (timezone-safe)
 function calcRemainingLockMins(lockedUntil) {
   if (!lockedUntil) return 0;
   const lockTime = new Date(lockedUntil).getTime();
@@ -237,124 +223,6 @@ function validateVerhoeff(num) {
   const reversed = String(num).split("").reverse().map(Number);
   for (let i = 0; i < reversed.length; i++) c = d[c][p[i % 8][reversed[i]]];
   return c === 0;
-}
-
-// ============================================================
-// ✅ UNIQUENESS CHECK HELPER (SESSION-WISE)
-// ============================================================
-async function checkUniqueness({
-  studentId,
-  admissionNumber,
-  apaarId,
-  aadharNumber,
-  emailId,
-  class: cls,
-  rollNumber,
-  session,
-  excludeId
-}) {
-  const excludeSql = excludeId ? "AND id != ?" : "";
-  const excludeParams = excludeId ? [excludeId] : [];
-
-  if (studentId) {
-    const rows = await q(
-      `SELECT id, name, class, session FROM Nstudent WHERE LOWER(student_id) = LOWER(?) ${excludeSql} LIMIT 1`,
-      [studentId, ...excludeParams]
-    );
-    if (rows.length) {
-      return {
-        field: "studentId",
-        message: `Student ID "${studentId}" already exists${rows[0].session ? ` (Class ${rows[0].class}, Session ${rows[0].session})` : ""} — ${rows[0].name}`,
-        code: "STUDENT_ID_DUPLICATE",
-        existing: rows[0]
-      };
-    }
-  }
-
-  if (admissionNumber) {
-    const rows = await q(
-      `SELECT id, name, class, session FROM Nstudent WHERE LOWER(admission_number) = LOWER(?) ${excludeSql} LIMIT 1`,
-      [admissionNumber, ...excludeParams]
-    );
-    if (rows.length) {
-      return {
-        field: "admissionNumber",
-        message: `Admission Number "${admissionNumber}" already exists${rows[0].session ? ` (Class ${rows[0].class}, Session ${rows[0].session})` : ""} — ${rows[0].name}`,
-        code: "ADMISSION_NUMBER_DUPLICATE",
-        existing: rows[0]
-      };
-    }
-  }
-
-  if (apaarId) {
-    const cleaned = String(apaarId).replace(/\s/g, "");
-    const rows = await q(
-      `SELECT id, name, student_id, class, session FROM Nstudent WHERE apaar_id = ? ${excludeSql} LIMIT 1`,
-      [cleaned, ...excludeParams]
-    );
-    if (rows.length) {
-      return {
-        field: "apaarId",
-        message: `APAAR ID "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
-        code: "APAAR_ALREADY_REGISTERED",
-        existing: rows[0]
-      };
-    }
-  }
-
-  if (aadharNumber) {
-    const cleaned = normalizeAadhaar(aadharNumber);
-    const rows = await q(
-      `SELECT id, name, student_id, class, session FROM Nstudent WHERE aadhar_number = ? ${excludeSql} LIMIT 1`,
-      [cleaned, ...excludeParams]
-    );
-    if (rows.length) {
-      return {
-        field: "aadharNumber",
-        message: `Aadhaar "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
-        code: "AADHAAR_ALREADY_REGISTERED",
-        existing: rows[0]
-      };
-    }
-  }
-
-  if (emailId) {
-    const cleaned = String(emailId).toLowerCase().trim();
-    const rows = await q(
-      `SELECT id, name, student_id, class, session FROM Nstudent WHERE LOWER(email_id) = ? ${excludeSql} LIMIT 1`,
-      [cleaned, ...excludeParams]
-    );
-    if (rows.length) {
-      return {
-        field: "emailId",
-        message: `Email "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
-        code: "EMAIL_ALREADY_REGISTERED",
-        existing: rows[0]
-      };
-    }
-  }
-
-  if (rollNumber && cls && session) {
-    const rows = await q(
-      `SELECT id, name, student_id, class, roll_number, session FROM Nstudent 
-       WHERE LOWER(roll_number) = LOWER(?) 
-         AND LOWER(class) = LOWER(?) 
-         AND session = ?
-         ${excludeSql} 
-       LIMIT 1`,
-      [rollNumber, cls, session, ...excludeParams]
-    );
-    if (rows.length) {
-      return {
-        field: "rollNumber",
-        message: `Roll Number "${rollNumber}" already assigned in Class ${cls} (Session ${session}) — ${rows[0].name} (${rows[0].student_id})`,
-        code: "ROLL_NUMBER_DUPLICATE",
-        existing: rows[0]
-      };
-    }
-  }
-
-  return null;
 }
 
 // ============================================================
@@ -1141,116 +1009,45 @@ router.post("/verify-aadhaar", async (req, res) => {
 });
 
 // ============================================================
-// ✅ PDF PROXY — Cloudinary PDF view fix + Auto-recovery
+// ✅ PDF PROXY — Cloudinary /raw/ PDF view fix
 // ============================================================
 router.get("/proxy-pdf", async (req, res) => {
   try {
-    let { url } = req.query;
+    const { url } = req.query;
     if (!url) return res.status(400).json({ success: false, message: "URL required" });
-    if (!url.includes("res.cloudinary.com")) {
-      return res.status(400).json({ success: false, message: "Only Cloudinary URLs allowed" });
-    }
+    if (!url.includes("res.cloudinary.com")) return res.status(400).json({ success: false, message: "Only Cloudinary URLs allowed" });
 
-    try { url = decodeURIComponent(url); } catch (e) {}
-
-    // ✅ AUTO-RECOVERY: Original URL fail ho to swap karke try karo (image ⇄ raw)
-    const resolvedUrl = await resolveStudentFileUrl(url);
-
-    if (!resolvedUrl) {
-      // File Cloudinary me nahi hai
-      const parsed = parseCloudinaryUrl(url);
-      return res.status(404).json({
-        success: false,
-        message: "File not found on Cloudinary. It may have been deleted or upload failed originally. Please re-upload the document.",
-        diagnostic: {
-          originalUrl: url,
-          publicId: parsed?.publicId || null,
-          resourceType: parsed?.resourceType || null
-        }
-      });
-    }
-
-    // Resolved URL fetch karo
-    const fetchResolved = (targetUrl) => new Promise((resolve) => {
-      const client = targetUrl.startsWith("https") ? https : http;
-      const req2 = client.get(targetUrl, (remoteRes) => {
-        if ([301, 302, 307, 308].includes(remoteRes.statusCode) && remoteRes.headers.location) {
-          remoteRes.resume();
-          return resolve({ redirect: remoteRes.headers.location });
-        }
-        if (remoteRes.statusCode !== 200) {
-          remoteRes.resume();
-          return resolve({ status: remoteRes.statusCode });
-        }
-        resolve({ stream: remoteRes });
-      });
-      req2.on("error", (err) => resolve({ error: err.message }));
-      req2.setTimeout(15000, () => { req2.destroy(); resolve({ error: "timeout" }); });
-    });
-
-    const result = await fetchResolved(resolvedUrl);
-
-    if (result?.redirect) return res.redirect(result.redirect);
-
-    if (!result?.stream) {
-      return res.status(500).json({
-        success: false,
-        message: "Failed to fetch resolved file from Cloudinary"
-      });
-    }
-
-    const remoteRes = result.stream;
-    const usedUrl = resolvedUrl;
-
-    // ✅ URL se extension nikalo
-    const urlLower = usedUrl.toLowerCase().split("?")[0];
-    const isPdf = urlLower.endsWith(".pdf");
-    const isImage = /\.(jpg|jpeg|png|webp|gif|bmp|svg)$/i.test(urlLower);
-
-    // ✅ URL se filename nikalo
-    let filename = "document";
-    try {
-      const urlObj = new URL(usedUrl);
-      const pathParts = urlObj.pathname.split("/");
-      let lastPart = pathParts[pathParts.length - 1];
-      if (lastPart && lastPart.length > 0) {
-        filename = lastPart.split("?")[0];
-        if (isPdf && !filename.toLowerCase().endsWith(".pdf")) filename += ".pdf";
-        if (isImage && !/\.(jpg|jpeg|png|webp|gif|bmp|svg)$/i.test(filename)) filename += ".jpg";
+    const client = url.startsWith("https") ? https : http;
+    client.get(url, (remoteRes) => {
+      if ([301, 302, 307, 308].includes(remoteRes.statusCode) && remoteRes.headers.location) {
+        remoteRes.resume();
+        return res.redirect(remoteRes.headers.location);
       }
-    } catch (e) {
-      filename = isPdf ? "document.pdf" : "image.jpg";
-    }
+      if (remoteRes.statusCode !== 200) {
+        remoteRes.resume();
+        return res.status(remoteRes.statusCode).json({
+          success: false,
+          message: `Cloudinary returned ${remoteRes.statusCode}`
+        });
+      }
 
-    // ✅ Content-Type
-    let contentType;
-    if (isPdf) {
-      contentType = "application/pdf";
-    } else if (isImage) {
-      if (urlLower.endsWith(".png")) contentType = "image/png";
-      else if (urlLower.endsWith(".webp")) contentType = "image/webp";
-      else if (urlLower.endsWith(".gif")) contentType = "image/gif";
-      else if (urlLower.endsWith(".svg")) contentType = "image/svg+xml";
-      else contentType = "image/jpeg";
-    } else {
-      contentType = remoteRes.headers["content-type"] || "application/octet-stream";
-    }
+      let contentType = remoteRes.headers["content-type"] || "";
+      const urlLower = url.toLowerCase();
+      if (urlLower.endsWith(".pdf") || contentType.includes("pdf")) {
+        contentType = "application/pdf";
+      } else if (!contentType) {
+        contentType = "application/octet-stream";
+      }
 
-    const contentLength = remoteRes.headers["content-length"];
-
-    res.removeHeader("Content-Type");
-    res.removeHeader("Content-Disposition");
-
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-    res.setHeader("Cache-Control", "public, max-age=3600");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Accept-Ranges", "bytes");
-    if (contentLength) res.setHeader("Content-Length", contentLength);
-
-    remoteRes.pipe(res);
-
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", "inline");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      remoteRes.pipe(res);
+    }).on("error", (err) => {
+      console.error("❌ Proxy PDF error:", err.message);
+      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+    });
   } catch (err) {
     console.error("❌ Proxy catch error:", err.message);
     if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
@@ -1402,39 +1199,6 @@ router.get("/search/:query", async (req, res) => {
 });
 
 // ============================================================
-// ✅ CHECK UNIQUENESS (live)
-// ============================================================
-router.post("/check-uniqueness", async (req, res) => {
-  try {
-    const {
-      studentId, admissionNumber, apaarId, aadharNumber, emailId,
-      class: cls, rollNumber, session, excludeId
-    } = req.body;
-
-    const conflict = await checkUniqueness({
-      studentId, admissionNumber, apaarId, aadharNumber, emailId,
-      class: cls, rollNumber, session,
-      excludeId: excludeId ? Number(excludeId) : null
-    });
-
-    if (conflict) {
-      return res.status(409).json({
-        success: false,
-        available: false,
-        field: conflict.field,
-        code: conflict.code,
-        message: conflict.message,
-        existing: conflict.existing || null
-      });
-    }
-
-    return res.json({ success: true, available: true, message: "All fields unique ✅" });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
 // ✅ ADD STUDENT
 // ============================================================
 router.post(
@@ -1462,54 +1226,21 @@ router.post(
         return res.status(400).json({ success: false, message: "Email verification expired. Please verify again.", code: "OTP_EXPIRED" });
       }
 
-      const conflict = await checkUniqueness({
-        studentId: req.body.studentId,
-        admissionNumber: req.body.admissionNumber,
-        apaarId: req.body.apaarId,
-        aadharNumber: req.body.aadharNumber,
-        emailId: email,
-        class: req.body.class,
-        rollNumber: req.body.rollNumber,
-        session: req.body.session,
-        excludeId: null
-      });
-
-      if (conflict) {
-        if (req.files) {
-          for (const f of DOC_FIELDS) {
-            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
-              try {
-                const rt = (req.files[f][0].mimetype === "application/pdf") ? "raw" : "image";
-                await cloudinary.uploader.destroy(req.files[f][0].filename, { resource_type: rt });
-              } catch (e) {}
-            }
-          }
-        }
-        return res.status(409).json({
-          success: false,
-          field: conflict.field,
-          code: conflict.code,
-          message: conflict.message,
-          existing: conflict.existing || null
-        });
+      const emailDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ?`, [email]);
+      if (emailDup.length >= EMAIL_MAX_STUDENTS) {
+        return res.status(409).json({ success: false, message: `Email already registered with ${emailDup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
       }
-
       const mobileDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ?`, [mobile]);
       if (mobileDup.length >= MOBILE_MAX_STUDENTS) {
-        if (req.files) {
-          for (const f of DOC_FIELDS) {
-            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
-              try {
-                const rt = (req.files[f][0].mimetype === "application/pdf") ? "raw" : "image";
-                await cloudinary.uploader.destroy(req.files[f][0].filename, { resource_type: rt });
-              } catch (e) {}
-            }
-          }
+        return res.status(409).json({ success: false, message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED" });
+      }
+
+      const apaarVal = String(req.body.apaarId || "").replace(/\s/g, "");
+      if (apaarVal) {
+        const apaarDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ?`, [apaarVal]);
+        if (apaarDup.length > 0) {
+          return res.status(409).json({ success: false, message: `APAAR ID already registered with ${apaarDup[0].name}`, code: "APAAR_ALREADY_REGISTERED" });
         }
-        return res.status(409).json({
-          success: false, field: "mobileNumber",
-          message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED"
-        });
       }
 
       const requiredDocs = getRequiredDocs(category);
@@ -1520,28 +1251,13 @@ router.post(
         }
       }
       if (missing.length) {
-        if (req.files) {
-          for (const f of DOC_FIELDS) {
-            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
-              try {
-                const rt = (req.files[f][0].mimetype === "application/pdf") ? "raw" : "image";
-                await cloudinary.uploader.destroy(req.files[f][0].filename, { resource_type: rt });
-              } catch (e) {}
-            }
-          }
-        }
         return res.status(400).json({ success: false, message: `Missing required documents: ${missing.join(", ")}`, category, requiredDocuments: requiredDocs });
       }
 
       const files = req.files ? { ...req.files } : {};
       if (!CASTE_REQUIRED_CATEGORIES.includes(category) && files.casteCertificate) {
         const df = files.casteCertificate[0];
-        if (df?.filename) {
-          try {
-            const rt = (df.mimetype === "application/pdf") ? "raw" : "image";
-            await cloudinary.uploader.destroy(df.filename, { resource_type: rt });
-          } catch (e) {}
-        }
+        if (df?.filename) try { await cloudinary.uploader.destroy(df.filename); } catch (e) {}
         delete files.casteCertificate;
       }
 
@@ -1593,14 +1309,15 @@ router.post(
       });
     } catch (err) {
       console.error("❌ Add Student Error:", err);
-      if (err.code === "ER_DUP_ENTRY") {
-        return res.status(400).json({ success: false, message: "Duplicate entry — Student ID / Admission Number / Roll Number already exists in this session" });
-      }
+      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
       res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
+// ============================================================
+// ✅ STUDENT LOGIN VERIFY (Email + Student ID) — Legacy
+// ============================================================
 // ============================================================
 // ✅ CHECK EMAIL — Student verify (step 1)
 // ============================================================
@@ -1618,10 +1335,18 @@ router.post("/check-email", async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.json({ success: true, exists: false, message: "Email not registered" });
+      return res.json({
+        success: true,
+        exists: false,
+        message: "Email not registered"
+      });
     }
 
-    return res.json({ success: true, exists: true, message: "Email verified" });
+    return res.json({
+      success: true,
+      exists: true,
+      message: "Email verified"
+    });
   } catch (err) {
     console.error("check-email error:", err.message);
     res.status(500).json({ success: false, message: "Server error" });
@@ -1629,7 +1354,7 @@ router.post("/check-email", async (req, res) => {
 });
 
 // ============================================================
-// ✅ CHECK STUDENT ID
+// ✅ CHECK STUDENT ID — Match with email (step 2)
 // ============================================================
 router.post("/check-student-id", async (req, res) => {
   try {
@@ -1646,61 +1371,87 @@ router.post("/check-student-id", async (req, res) => {
     }
 
     const rows = await q(
-      `SELECT id FROM Nstudent WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? LIMIT 1`,
+      `SELECT id FROM Nstudent 
+       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
+       LIMIT 1`,
       [emailClean, sidClean.toLowerCase()]
     );
 
     if (!rows.length) {
-      return res.json({ success: true, matches: false, message: "Student ID does not match this email" });
+      return res.json({
+        success: true,
+        matches: false,
+        message: "Student ID does not match this email"
+      });
     }
 
-    return res.json({ success: true, matches: true, message: "Identity verified" });
+    return res.json({
+      success: true,
+      matches: true,
+      message: "Identity verified"
+    });
   } catch (err) {
     console.error("check-student-id error:", err.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
 router.post("/verify-login", async (req, res) => {
   try {
     const { email, studentId } = req.body;
 
     if (!email || !studentId) {
-      return res.status(400).json({ success: false, message: "Email and Student ID are required" });
+      return res.status(400).json({
+        success: false,
+        message: "Email and Student ID are required"
+      });
     }
 
     const emailClean = String(email).toLowerCase().trim();
     const sidClean = String(studentId).trim();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClean)) {
-      return res.status(400).json({ success: false, message: "Please enter a valid email address" });
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address"
+      });
     }
 
     if (sidClean.length < 3) {
-      return res.status(400).json({ success: false, message: "Student ID must be at least 3 characters" });
+      return res.status(400).json({
+        success: false,
+        message: "Student ID must be at least 3 characters"
+      });
     }
 
     const rows = await q(
-      `SELECT * FROM Nstudent WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? LIMIT 1`,
+      `SELECT * FROM Nstudent 
+       WHERE LOWER(email_id) = ? AND LOWER(student_id) = ? 
+       LIMIT 1`,
       [emailClean, sidClean.toLowerCase()]
     );
 
     if (!rows.length) {
-      return res.status(401).json({ success: false, message: "Invalid email or Student ID. Please check your details." });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or Student ID. Please check your details."
+      });
     }
 
     const s = revertStatusIfExpired(rows[0]);
 
     if (s.status && s.status.toLowerCase() === "inactive") {
-      return res.status(403).json({ success: false, message: "Your account is inactive. Please contact the school office." });
+      return res.status(403).json({
+        success: false,
+        message: "Your account is inactive. Please contact the school office."
+      });
     }
 
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
-    const safeStudent = { ...s };
-    for (const k of Object.keys(safeStudent)) {
-      if (k.endsWith("_pid")) delete safeStudent[k];
-    }
-
+const safeStudent = { ...s };
+for (const k of Object.keys(safeStudent)) {
+  if (k.endsWith("_pid")) delete safeStudent[k];
+}
+    
     res.json({
       success: true,
       message: "Login successful ✅",
@@ -1708,6 +1459,7 @@ router.post("/verify-login", async (req, res) => {
       token,
       loginTime: new Date().toISOString()
     });
+
   } catch (err) {
     console.error("❌ Verify-login error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
@@ -1715,25 +1467,34 @@ router.post("/verify-login", async (req, res) => {
 });
 
 // ============================================================
-// ✅ RECOVER CREDENTIAL
+// ✅ RECOVER CREDENTIAL (Email or Student ID)
 // ============================================================
 router.post("/recover-credential", async (req, res) => {
   try {
     const { recoverType } = req.body;
 
     if (!recoverType || !["email", "studentId"].includes(recoverType)) {
-      return res.status(400).json({ success: false, message: "Invalid recovery type" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid recovery type"
+      });
     }
 
     if (recoverType === "email") {
       const { class: cls, studentId, apaarId, dob, motherName } = req.body;
 
       if (!cls || !studentId || !apaarId || !dob || !motherName) {
-        return res.status(400).json({ success: false, message: "All fields required" });
+        return res.status(400).json({
+          success: false,
+          message: "All fields required"
+        });
       }
 
       if (!/^\d{12}$/.test(String(apaarId).replace(/\s/g, ""))) {
-        return res.status(400).json({ success: false, message: "APAAR ID must be 12 digits" });
+        return res.status(400).json({
+          success: false,
+          message: "APAAR ID must be 12 digits"
+        });
       }
 
       const rows = await q(
@@ -1745,17 +1506,32 @@ router.post("/recover-credential", async (req, res) => {
            AND DATE(dob) = DATE(?)
            AND LOWER(mother_name) = LOWER(?)
          LIMIT 1`,
-        [cls, String(studentId).trim(), String(apaarId).replace(/\s/g, "").trim(), dob, String(motherName).trim()]
+        [
+          cls,
+          String(studentId).trim(),
+          String(apaarId).replace(/\s/g, "").trim(),
+          dob,
+          String(motherName).trim()
+        ]
       );
 
       if (!rows.length) {
-        return res.status(401).json({ success: false, message: "No matching record found. Please check your details." });
+        return res.status(401).json({
+          success: false,
+          message: "No matching record found. Please check your details."
+        });
       }
 
       const s = rows[0];
+
       return res.json({
         success: true,
-        student: { class: s.class, name: s.name, fatherName: s.father_name, email: s.email_id }
+        student: {
+          class: s.class,
+          name: s.name,
+          fatherName: s.father_name,
+          email: s.email_id
+        }
       });
     }
 
@@ -1763,12 +1539,18 @@ router.post("/recover-credential", async (req, res) => {
       const { class: cls, email, aadharNumber, dob, fatherName } = req.body;
 
       if (!cls || !email || !aadharNumber || !dob || !fatherName) {
-        return res.status(400).json({ success: false, message: "All fields required" });
+        return res.status(400).json({
+          success: false,
+          message: "All fields required"
+        });
       }
 
       const aadhaar = String(aadharNumber).replace(/[\s-]/g, "");
       if (!/^\d{12}$/.test(aadhaar)) {
-        return res.status(400).json({ success: false, message: "Aadhaar must be 12 digits" });
+        return res.status(400).json({
+          success: false,
+          message: "Aadhaar must be 12 digits"
+        });
       }
 
       const rows = await q(
@@ -1780,21 +1562,37 @@ router.post("/recover-credential", async (req, res) => {
            AND DATE(dob) = DATE(?)
            AND LOWER(father_name) = LOWER(?)
          LIMIT 1`,
-        [cls, String(email).trim(), aadhaar, dob, String(fatherName).trim()]
+        [
+          cls,
+          String(email).trim(),
+          aadhaar,
+          dob,
+          String(fatherName).trim()
+        ]
       );
 
       if (!rows.length) {
-        return res.status(401).json({ success: false, message: "No matching record found. Please check your details." });
+        return res.status(401).json({
+          success: false,
+          message: "No matching record found. Please check your details."
+        });
       }
 
       const s = rows[0];
+
       return res.json({
         success: true,
-        student: { class: s.class, name: s.name, fatherName: s.father_name, studentId: s.student_id }
+        student: {
+          class: s.class,
+          name: s.name,
+          fatherName: s.father_name,
+          studentId: s.student_id
+        }
       });
     }
 
     return res.status(400).json({ success: false, message: "Unknown recovery type" });
+
   } catch (err) {
     console.error("❌ recover-credential error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
@@ -1802,7 +1600,7 @@ router.post("/recover-credential", async (req, res) => {
 });
 
 // ============================================================
-// ✅ STUDENT LOGIN WITH PIN
+// ✅ STUDENT LOGIN WITH PIN (Email + Student ID + 6-digit PIN)
 // ============================================================
 router.post("/verify-login-pin", async (req, res) => {
   try {
@@ -1883,9 +1681,9 @@ router.post("/verify-login-pin", async (req, res) => {
     const token = Buffer.from(`${s.id}-${Date.now()}-${Math.random()}`).toString("base64");
 
     const safeStudent = { ...s };
-    for (const k of Object.keys(safeStudent)) {
-      if (k.endsWith("_pid")) delete safeStudent[k];
-    }
+for (const k of Object.keys(safeStudent)) {
+  if (k.endsWith("_pid")) delete safeStudent[k];
+}
 
     res.json({
       success: true,
@@ -1979,7 +1777,10 @@ router.post("/pin/create", async (req, res) => {
 
     const existing = await q(`SELECT id FROM student_pins WHERE student_id = ?`, [sid]);
     if (existing.length) {
-      return res.status(409).json({ success: false, message: "PIN already exists. Use 'Change PIN' instead." });
+      return res.status(409).json({
+        success: false,
+        message: "PIN already exists. Use 'Change PIN' instead."
+      });
     }
 
     const salt = generatePinSalt();
@@ -2110,7 +1911,7 @@ router.post("/pin/change", async (req, res) => {
 });
 
 // ============================================================
-// ✅ VERIFY PIN
+// ✅ VERIFY PIN (standalone)
 // ============================================================
 router.post("/pin/verify", async (req, res) => {
   try {
@@ -2182,14 +1983,19 @@ router.post("/pin/verify", async (req, res) => {
 });
 
 // ============================================================
-// ✅ FORGOT PIN — Step 1
+// ✅ FORGOT PIN — Step 1: Verify identity + send OTP
+// SECURITY: Requires Student ID + APAAR ID + Aadhaar Number
 // ============================================================
 router.post("/pin/forgot/request-otp", async (req, res) => {
   try {
     const { studentId, apaarId, aadharNumber } = req.body;
 
+    // ---- Validation ----
     if (!studentId || !apaarId || !aadharNumber) {
-      return res.status(400).json({ success: false, message: "Student ID, APAAR ID and Aadhaar Number are required" });
+      return res.status(400).json({
+        success: false,
+        message: "Student ID, APAAR ID and Aadhaar Number are required"
+      });
     }
 
     const sidClean = String(studentId).trim();
@@ -2197,17 +2003,27 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     const aadhaarClean = String(aadharNumber).replace(/[\s-]/g, "").trim();
 
     if (sidClean.length < 3) {
-      return res.status(400).json({ success: false, message: "Student ID must be at least 3 characters" });
+      return res.status(400).json({
+        success: false,
+        message: "Student ID must be at least 3 characters"
+      });
     }
 
     if (!/^\d{12}$/.test(apaarClean)) {
-      return res.status(400).json({ success: false, message: "APAAR ID must be exactly 12 digits" });
+      return res.status(400).json({
+        success: false,
+        message: "APAAR ID must be exactly 12 digits"
+      });
     }
 
     if (!/^\d{12}$/.test(aadhaarClean)) {
-      return res.status(400).json({ success: false, message: "Aadhaar Number must be exactly 12 digits" });
+      return res.status(400).json({
+        success: false,
+        message: "Aadhaar Number must be exactly 12 digits"
+      });
     }
 
+    // ---- Verify all 3 fields match the same student ----
     const rows = await q(
       `SELECT id, name, email_id, student_id, apaar_id, aadhar_number
        FROM Nstudent 
@@ -2219,25 +2035,41 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(401).json({ success: false, message: "Details do not match our records. Please check Student ID, APAAR ID and Aadhaar Number." });
+      // Security: don't reveal which field was wrong
+      return res.status(401).json({
+        success: false,
+        message: "Details do not match our records. Please check Student ID, APAAR ID and Aadhaar Number."
+      });
     }
 
     const student = rows[0];
 
     if (!student.email_id) {
-      return res.status(400).json({ success: false, message: "No email registered. Please contact the school office." });
+      return res.status(400).json({
+        success: false,
+        message: "No email registered. Please contact the school office."
+      });
     }
 
+    // ---- Check if PIN exists ----
     const pinExists = await q(`SELECT locked_until FROM student_pins WHERE student_id = ?`, [student.id]);
     if (!pinExists.length) {
-      return res.status(404).json({ success: false, message: "No PIN set for this student. Please contact the school office." });
+      return res.status(404).json({
+        success: false,
+        message: "No PIN set for this student. Please contact the school office."
+      });
     }
 
+    // ---- Check if account locked ----
     const lockMins = calcRemainingLockMins(pinExists[0].locked_until);
     if (lockMins > 0) {
-      return res.status(423).json({ success: false, message: `Account is currently locked. Try again in ${lockMins} minute(s).` });
+      return res.status(423).json({
+        success: false,
+        message: `Account is currently locked. Try again in ${lockMins} minute(s).`
+      });
     }
 
+    // ---- Rate limit: check recent OTP ----
     const recentOtp = await q(
       `SELECT id, created_at FROM student_pin_reset_otps 
        WHERE student_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 30 SECOND)
@@ -2247,10 +2079,14 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     if (recentOtp.length) {
       const waitSec = Math.ceil((30 * 1000 - (Date.now() - new Date(recentOtp[0].created_at).getTime())) / 1000);
       if (waitSec > 0) {
-        return res.status(429).json({ success: false, message: `Please wait ${waitSec} second(s) before requesting a new OTP.` });
+        return res.status(429).json({
+          success: false,
+          message: `Please wait ${waitSec} second(s) before requesting a new OTP.`
+        });
       }
     }
 
+    // ---- Generate OTP ----
     const otp = genPinOTP();
     const expiresAt = new Date(Date.now() + PIN_OTP_EXPIRY_MS);
 
@@ -2260,9 +2096,11 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
       [student.id, otp, expiresAt]
     );
 
+    // ---- Mask email ----
     const [namePart, domain] = String(student.email_id).split("@");
     const maskedEmail = namePart.substring(0, 2) + "***@" + domain;
 
+    // ---- Send email ----
     if (BREVO_API_KEY) {
       try {
         const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -2332,6 +2170,7 @@ If you didn't request this, please ignore this email — your PIN is safe.
       studentName: student.name,
       expiresInMinutes: 10
     });
+
   } catch (err) {
     console.error("PIN forgot OTP error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
@@ -2339,7 +2178,7 @@ If you didn't request this, please ignore this email — your PIN is safe.
 });
 
 // ============================================================
-// ✅ FORGOT PIN — Step 2
+// ✅ FORGOT PIN — Step 2: Verify OTP + set new PIN
 // ============================================================
 router.post("/pin/forgot/reset", async (req, res) => {
   try {
@@ -2433,7 +2272,7 @@ router.post("/pin/forgot/reset", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — Reset PIN
+// ✅ ADMIN — Reset kisi bhi student ka PIN
 // ============================================================
 router.post("/pin/admin/reset", async (req, res) => {
   try {
@@ -2490,7 +2329,7 @@ router.post("/pin/admin/reset", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — Unlock
+// ✅ ADMIN — Unlock a locked student
 // ============================================================
 router.post("/pin/admin/unlock", async (req, res) => {
   try {
@@ -2516,7 +2355,7 @@ router.post("/pin/admin/unlock", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — PIN history
+// ✅ ADMIN — PIN change history of a student
 // ============================================================
 router.get("/pin/admin/history/:studentId", async (req, res) => {
   try {
@@ -2543,7 +2382,7 @@ router.get("/pin/admin/history/:studentId", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — All students PIN status
+// ✅ ADMIN — All students ka PIN status
 // ============================================================
 router.get("/pin/admin/all-status", async (req, res) => {
   try {
@@ -2605,7 +2444,7 @@ router.get("/pin/admin/all-status", async (req, res) => {
 });
 
 // ============================================================
-// ✅ ADMIN — Summary
+// ✅ ADMIN — Dashboard summary
 // ============================================================
 router.get("/pin/admin/summary", async (req, res) => {
   try {
@@ -2641,302 +2480,6 @@ router.get("/pin/admin/summary", async (req, res) => {
 });
 
 // ============================================================
-// ✅✅✅ BACKUP & RESTORE SYSTEM (Cloudinary-based) ✅✅✅
-// ============================================================
-const MAX_BACKUPS = 10;
-const RETENTION_DAYS = 10;
-const BACKUP_TABLE = "Nstudent";
-const BACKUP_PREFIX = "school/backups"; // Cloudinary folder
-
-const backupUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 }
-});
-
-const verifyBackupAuth = (req, res, next) => {
-  const token = req.query.token || (req.headers.authorization || "").replace("Bearer ", "");
-  if (!token) return res.status(401).json({ success: false, message: "Auth required" });
-  next();
-};
-
-// ✅ Backup create karo — Cloudinary me
-async function createBackup(type = "auto") {
-  const now = new Date();
-  const students = await q(`SELECT * FROM ${BACKUP_TABLE}`);
-
-  const backupData = {
-    version: "2.0",
-    type,
-    createdAt: now.toISOString(),
-    stats: { students: students.length },
-    tables: { [BACKUP_TABLE]: students }
-  };
-
-  const jsonString = JSON.stringify(backupData, null, 2);
-  const result = await uploadBackupToCloudinary(jsonString, type);
-
-  // ✅ Purane backups cleanup
-  await cleanupOldBackups();
-
-  return {
-    filename: result.public_id.split("/").pop(),
-    public_id: result.public_id,
-    url: result.url,
-    size: result.size,
-    stats: backupData.stats
-  };
-}
-
-// ✅ Cloudinary se purane backups cleanup
-async function cleanupOldBackups() {
-  try {
-    const allBackups = await listBackupsFromCloudinary(100);
-    if (allBackups.length <= MAX_BACKUPS) return;
-
-    // Latest 10 rakho, baaki delete
-    const toDelete = allBackups.slice(MAX_BACKUPS);
-    for (const b of toDelete) {
-      // Sirf auto/prebak delete karo, manual safe rakho
-      const fname = b.filename || "";
-      if (fname.includes("auto") || fname.includes("prebak")) {
-        try { await deleteBackupFromCloudinary(b.public_id); } catch (e) {}
-      }
-    }
-  } catch (err) {
-    console.error("[Backup] Cleanup error:", err.message);
-  }
-}
-
-// ✅ Restore — same logic
-async function restoreBackupData(data, mode = "merge") {
-  if (!data || !data.tables || !data.tables[BACKUP_TABLE]) {
-    throw new Error("Invalid backup file — missing table data");
-  }
-  const students = data.tables[BACKUP_TABLE];
-  if (!Array.isArray(students)) throw new Error("Invalid backup — students must be array");
-
-  const stats = { inserted: 0, updated: 0, skipped: 0, total: students.length };
-
-  if (mode === "replace") {
-    await q(`DELETE FROM ${BACKUP_TABLE}`);
-  }
-
-  const colsResult = await q(`SHOW COLUMNS FROM ${BACKUP_TABLE}`);
-  const validColumns = colsResult.map(c => c.Field);
-
-  for (const student of students) {
-    if (!student.student_id) { stats.skipped++; continue; }
-
-    const existing = await q(
-      `SELECT id FROM ${BACKUP_TABLE} WHERE student_id = ? LIMIT 1`,
-      [student.student_id]
-    );
-
-    const entries = Object.entries(student).filter(([k]) =>
-      validColumns.includes(k) && k !== "id"
-    );
-
-    if (existing.length > 0) {
-      if (mode === "merge") {
-        if (entries.length === 0) { stats.skipped++; continue; }
-        const setSql = entries.map(([k]) => `${k} = ?`).join(", ");
-        const values = entries.map(([, v]) => v);
-        await q(
-          `UPDATE ${BACKUP_TABLE} SET ${setSql} WHERE student_id = ?`,
-          [...values, student.student_id]
-        );
-        stats.updated++;
-      } else {
-        stats.skipped++;
-      }
-    } else {
-      if (entries.length === 0) { stats.skipped++; continue; }
-      const cols = entries.map(([k]) => k);
-      const vals = entries.map(([, v]) => v);
-      const ph = cols.map(() => "?").join(",");
-      await q(
-        `INSERT INTO ${BACKUP_TABLE} (${cols.join(",")}) VALUES (${ph})`,
-        vals
-      );
-      stats.inserted++;
-    }
-  }
-
-  return stats;
-}
-
-// --- Route: List all backups ---
-router.get("/backup/list", verifyBackupAuth, async (req, res) => {
-  try {
-    const backups = await listBackupsFromCloudinary(50);
-
-    const formatted = backups.map(b => ({
-      filename: b.filename,
-      public_id: b.public_id,
-      url: b.url,
-      size: b.size,
-      createdAt: b.createdAt,
-      type: b.filename.includes("manual") ? "manual"
-        : b.filename.includes("prebak") ? "prebak"
-        : "auto",
-      stats: {}
-    }));
-
-    res.json({ success: true, backups: formatted, count: formatted.length });
-  } catch (err) {
-    console.error("[Backup] List error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// --- Route: Create manual backup ---
-router.post("/backup/create", verifyBackupAuth, async (req, res) => {
-  try {
-    const result = await createBackup("manual");
-    res.json({
-      success: true,
-      message: "Backup created on Cloudinary ✅",
-      filename: result.filename,
-      public_id: result.public_id,
-      size: result.size,
-      stats: result.stats
-    });
-  } catch (err) {
-    console.error("[Backup] Create error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// --- Route: Download backup (Cloudinary URL redirect) ---
-router.get("/backup/download/:publicId", verifyBackupAuth, async (req, res) => {
-  try {
-    const publicId = decodeURIComponent(req.params.publicId);
-    if (!publicId.includes(BACKUP_PREFIX)) {
-      return res.status(400).json({ success: false, message: "Invalid backup ID" });
-    }
-
-    const url = cloudinary.url(publicId, {
-      resource_type: "raw",
-      type: "upload",
-      secure: true
-    });
-
-    // ✅ Redirect to Cloudinary (browser will download)
-    res.redirect(url);
-  } catch (err) {
-    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// --- Route: Delete backup ---
-router.delete("/backup/:publicId", verifyBackupAuth, async (req, res) => {
-  try {
-    const publicId = decodeURIComponent(req.params.publicId);
-    if (!publicId.includes(BACKUP_PREFIX)) {
-      return res.status(400).json({ success: false, message: "Invalid backup ID" });
-    }
-    await deleteBackupFromCloudinary(publicId);
-    res.json({ success: true, message: "Backup deleted ✅" });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// --- Route: Restore from Cloudinary backup ---
-router.post("/backup/restore/:publicId", verifyBackupAuth, async (req, res) => {
-  try {
-    const publicId = decodeURIComponent(req.params.publicId);
-    if (!publicId.includes(BACKUP_PREFIX)) {
-      return res.status(400).json({ success: false, message: "Invalid backup ID" });
-    }
-
-    const jsonString = await downloadBackupFromCloudinary(publicId);
-    const data = JSON.parse(jsonString);
-    const mode = req.body.mode === "replace" ? "replace" : "merge";
-
-    // ✅ Safety backup
-    try {
-      await createBackup("prebak");
-      console.log("[Backup] Safety backup created before restore");
-    } catch (e) {
-      console.warn("[Backup] Safety backup failed:", e.message);
-    }
-
-    const stats = await restoreBackupData(data, mode);
-
-    res.json({
-      success: true,
-      message: `Restore complete ✅ (${mode} mode)`,
-      mode,
-      inserted: stats.inserted,
-      updated: stats.updated,
-      skipped: stats.skipped,
-      total: stats.total
-    });
-  } catch (err) {
-    console.error("[Backup] Restore error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// --- Route: Upload & Restore ---
-router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("backupFile"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "No file uploaded" });
-    }
-    let data;
-    try {
-      data = JSON.parse(req.file.buffer.toString("utf8"));
-    } catch (e) {
-      return res.status(400).json({ success: false, message: "Invalid JSON file" });
-    }
-    if (!data.tables || !data.tables[BACKUP_TABLE]) {
-      return res.status(400).json({
-        success: false,
-        message: `Backup file must contain "${BACKUP_TABLE}" table data`
-      });
-    }
-    const mode = req.body.mode === "replace" ? "replace" : "merge";
-
-    try {
-      await createBackup("prebak");
-      console.log("[Backup] Safety backup created before upload-restore");
-    } catch (e) {
-      console.warn("[Backup] Safety backup failed:", e.message);
-    }
-
-    const stats = await restoreBackupData(data, mode);
-
-    res.json({
-      success: true,
-      message: `Restore complete ✅ (${mode} mode)`,
-      mode,
-      inserted: stats.inserted,
-      updated: stats.updated,
-      skipped: stats.skipped,
-      total: stats.total
-    });
-  } catch (err) {
-    console.error("[Backup] Upload-restore error:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// --- Cron: Daily 2 AM IST auto-backup (Cloudinary me) ---
-cron.schedule("0 2 * * *", async () => {
-  console.log("[Cron] Running daily 2 AM backup...");
-  try {
-    const result = await createBackup("auto");
-    console.log(`[Cron] Backup uploaded to Cloudinary: ${result.public_id} (${result.stats.students} students)`);
-  } catch (err) {
-    console.error("[Cron] Backup failed:", err.message);
-  }
-}, { timezone: "Asia/Kolkata" });
-
-console.log("✅ Backup system loaded (Cloudinary-based) — daily cron at 2:00 AM IST");
-
-// ============================================================
 // ✅ GET SINGLE (must be LAST among GET routes)
 // ============================================================
 router.get("/:id", async (req, res) => {
@@ -2969,19 +2512,14 @@ router.put(
       const newEmail = String(req.body.emailId || existing.email_id || "").toLowerCase().trim();
       const newMobile = String(req.body.mobileNumber || existing.mobile_number || "").trim();
       const newApaar = String(req.body.apaarId || existing.apaar_id || "").replace(/\s/g, "");
-      const newAadhaar = req.body.aadharNumber !== undefined
-        ? normalizeAadhaar(req.body.aadharNumber)
-        : existing.aadhar_number;
-      const newStudentId = String(req.body.studentId || existing.student_id || "").trim();
-      const newAdmissionNumber = String(req.body.admissionNumber || existing.admission_number || "").trim();
-      const newClass = String(req.body.class || existing.class || "").trim();
-      const newRollNumber = String(req.body.rollNumber || existing.roll_number || "").trim();
-      const newSession = String(req.body.session || existing.session || "").trim();
 
       const emailChanged = newEmail !== (existing.email_id || "").toLowerCase().trim();
       const mobileChanged = newMobile !== (existing.mobile_number || "").trim();
+      const apaarChanged = newApaar !== (existing.apaar_id || "").replace(/\s/g, "").trim();
 
       if (emailChanged) {
+        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? AND id != ?`, [newEmail, id]);
+        if (dup.length >= EMAIL_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Email already registered with ${dup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
         const v = await q(`SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`, [newEmail]);
         if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified", code: "EMAIL_NOT_VERIFIED" });
       }
@@ -2989,37 +2527,9 @@ router.put(
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? AND id != ?`, [newMobile, id]);
         if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile limit reached`, code: "MOBILE_LIMIT_REACHED" });
       }
-
-      const conflict = await checkUniqueness({
-        studentId: newStudentId !== existing.student_id ? newStudentId : null,
-        admissionNumber: newAdmissionNumber !== existing.admission_number ? newAdmissionNumber : null,
-        apaarId: newApaar !== (existing.apaar_id || "").replace(/\s/g, "") ? newApaar : null,
-        aadharNumber: newAadhaar !== existing.aadhar_number ? newAadhaar : null,
-        emailId: emailChanged ? newEmail : null,
-        class: newClass,
-        rollNumber: newRollNumber,
-        session: newSession,
-        excludeId: Number(id)
-      });
-
-      if (conflict) {
-        if (req.files) {
-          for (const f of DOC_FIELDS) {
-            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
-              try {
-                const rt = (req.files[f][0].mimetype === "application/pdf") ? "raw" : "image";
-                await cloudinary.uploader.destroy(req.files[f][0].filename, { resource_type: rt });
-              } catch (e) {}
-            }
-          }
-        }
-        return res.status(409).json({
-          success: false,
-          field: conflict.field,
-          code: conflict.code,
-          message: conflict.message,
-          existing: conflict.existing || null
-        });
+      if (apaarChanged && newApaar) {
+        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ? AND id != ?`, [newApaar, id]);
+        if (dup.length > 0) return res.status(409).json({ success: false, message: `APAAR ID already registered`, code: "APAAR_ALREADY_REGISTERED" });
       }
 
       const finalCategory = req.body.category || existing.category;
@@ -3046,7 +2556,7 @@ router.put(
       const newFiles = extractFiles(req.files);
       if (!needsCaste && newFiles.caste_certificate_url) {
         const dp = newFiles.caste_certificate_pid;
-        if (dp) try { await cloudinary.uploader.destroy(dp, { resource_type: "raw" }); } catch (e) {}
+        if (dp) try { await cloudinary.uploader.destroy(dp); } catch (e) {}
         delete newFiles.caste_certificate_url;
         delete newFiles.caste_certificate_pid;
       }
