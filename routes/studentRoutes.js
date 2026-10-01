@@ -244,7 +244,6 @@ async function checkUniqueness({
   const excludeSql = excludeId ? "AND id != ?" : "";
   const excludeParams = excludeId ? [excludeId] : [];
 
-  // 1. Student ID — Global
   if (studentId) {
     const rows = await q(
       `SELECT id, name, class, session FROM Nstudent WHERE LOWER(student_id) = LOWER(?) ${excludeSql} LIMIT 1`,
@@ -253,14 +252,13 @@ async function checkUniqueness({
     if (rows.length) {
       return {
         field: "studentId",
-        message: `Student ID "${studentId}" already exists${rows[0].session ? ` (Class ${rows[0].class}, Session ${rows[0].session})` : ""} — ${rows[0].name}`,
+        message: `Student ID "${studentId}" already exists — ${rows[0].name}`,
         code: "STUDENT_ID_DUPLICATE",
         existing: rows[0]
       };
     }
   }
 
-  // 2. Admission Number — Global
   if (admissionNumber) {
     const rows = await q(
       `SELECT id, name, class, session FROM Nstudent WHERE LOWER(admission_number) = LOWER(?) ${excludeSql} LIMIT 1`,
@@ -269,74 +267,69 @@ async function checkUniqueness({
     if (rows.length) {
       return {
         field: "admissionNumber",
-        message: `Admission Number "${admissionNumber}" already exists${rows[0].session ? ` (Class ${rows[0].class}, Session ${rows[0].session})` : ""} — ${rows[0].name}`,
+        message: `Admission Number "${admissionNumber}" already exists — ${rows[0].name}`,
         code: "ADMISSION_NUMBER_DUPLICATE",
         existing: rows[0]
       };
     }
   }
 
-  // 3. APAAR — Global
   if (apaarId) {
     const cleaned = String(apaarId).replace(/\s/g, "");
     const rows = await q(
-      `SELECT id, name, student_id, class, session FROM Nstudent WHERE apaar_id = ? ${excludeSql} LIMIT 1`,
+      `SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ? ${excludeSql} LIMIT 1`,
       [cleaned, ...excludeParams]
     );
     if (rows.length) {
       return {
         field: "apaarId",
-        message: `APAAR ID "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        message: `APAAR ID "${cleaned}" already registered with ${rows[0].name}`,
         code: "APAAR_ALREADY_REGISTERED",
         existing: rows[0]
       };
     }
   }
 
-  // 4. Aadhaar — Global
   if (aadharNumber) {
     const cleaned = normalizeAadhaar(aadharNumber);
     const rows = await q(
-      `SELECT id, name, student_id, class, session FROM Nstudent WHERE aadhar_number = ? ${excludeSql} LIMIT 1`,
+      `SELECT id, name, student_id FROM Nstudent WHERE aadhar_number = ? ${excludeSql} LIMIT 1`,
       [cleaned, ...excludeParams]
     );
     if (rows.length) {
       return {
         field: "aadharNumber",
-        message: `Aadhaar "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        message: `Aadhaar "${cleaned}" already registered with ${rows[0].name}`,
         code: "AADHAAR_ALREADY_REGISTERED",
         existing: rows[0]
       };
     }
   }
 
-  // 5. Email — Global (max 1)
   if (emailId) {
     const cleaned = String(emailId).toLowerCase().trim();
     const rows = await q(
-      `SELECT id, name, student_id, class, session FROM Nstudent WHERE LOWER(email_id) = ? ${excludeSql} LIMIT 1`,
+      `SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? ${excludeSql} LIMIT 1`,
       [cleaned, ...excludeParams]
     );
     if (rows.length) {
       return {
         field: "emailId",
-        message: `Email "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        message: `Email "${cleaned}" already registered with ${rows[0].name}`,
         code: "EMAIL_ALREADY_REGISTERED",
         existing: rows[0]
       };
     }
   }
 
-  // 6. ✅ Roll Number + Class + Session — SESSION-WISE UNIQUE
-  // Ek session me ek class me ek roll number ek hi baar
+  // ✅ Roll + Class + Session — SESSION-WISE
   if (rollNumber && cls && session) {
     const rows = await q(
-      `SELECT id, name, student_id, class, roll_number, session FROM Nstudent 
+      `SELECT id, name, student_id FROM Nstudent 
        WHERE LOWER(roll_number) = LOWER(?) 
          AND LOWER(class) = LOWER(?) 
          AND session = ?
-         ${excludeSql} 
-       LIMIT 1`,
+         ${excludeSql} LIMIT 1`,
       [rollNumber, cls, session, ...excludeParams]
     );
     if (rows.length) {
@@ -547,7 +540,7 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
   <tr><td style="padding: 40px 36px;">
     <h2 style="color:#1e293b; font-size:22px; margin:0 0 12px;">🎉 Welcome, ${s.name}!</h2>
     <p style="color:#475569; font-size:15px; line-height:1.7; margin:0 0 24px;">
-      Congratulations! Your registration at <b>Govt. Sr. Sec. School Shilla</b> has been completed successfully. We're delighted to welcome you to our school family.
+      Congratulations! Your registration at <b>Govt. Sr. Sec. School Shilla</b> has been completed successfully.
     </p>
 
     <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border: 1.5px solid #c7d2fe; border-radius: 14px; margin-bottom: 24px;">
@@ -566,9 +559,6 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
     <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1.5px solid #f59e0b; border-radius: 14px; margin-bottom: 24px;">
       <tr><td style="padding: 20px 24px;">
         <p style="margin:0 0 14px; color:#92400e; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.2px;">🔐 Your Login Credentials</p>
-        <p style="margin:0 0 12px; color:#78350f; font-size:13px; line-height:1.6;">
-          Use these credentials to log in to your student portal:
-        </p>
         <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
           <tr><td style="padding: 7px 0; color:#78350f; width:40%;">APAAR ID:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800; font-family: monospace; letter-spacing: 2px;">${s.apaar_id}</td></tr>
           <tr><td style="padding: 7px 0; color:#78350f;">Date of Birth:</td><td style="padding: 7px 0; color:#1e293b; font-weight:800;">${s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-"}</td></tr>
@@ -592,32 +582,19 @@ async function sendRegistrationSuccessEmail(student, pdfBuffer) {
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4; border:1.5px solid #86efac; border-radius:14px; margin-bottom: 24px;">
       <tr><td style="padding: 16px 20px;">
         <p style="margin:0; color:#166534; font-size:13px; line-height:1.6;">
-          📎 <b>Attachment:</b> Your <b>Provisional Registration Form</b> is attached with this email. Please download and save it for your records.
+          📎 <b>Attachment:</b> Your <b>Provisional Registration Form</b> is attached with this email.
         </p>
       </td></tr>
     </table>
 
     <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e2e8f0; padding-top:20px;">
       <tr><td>
-        <p style="margin:0 0 8px; color:#64748b; font-size:12px; line-height:1.6;">
-          <b style="color:#1e293b;">Need help?</b> Contact the school office:
-        </p>
         <p style="margin:0; color:#64748b; font-size:12px; line-height:1.7;">
-          📞 +91 9805444375<br>
-          📧 info@gssshilla.in<br>
-          🌐 ${SCHOOL_WEBSITE}
+          <b style="color:#1e293b;">Need help?</b> Contact the school office:<br>
+          📞 +91 9805444375 · 📧 info@gssshilla.in · 🌐 ${SCHOOL_WEBSITE}
         </p>
       </td></tr>
     </table>
-  </td></tr>
-
-  <tr><td style="background:#f8fafc; padding: 24px; text-align:center; border-top:1px solid #e2e8f0;">
-    <p style="margin:0 0 6px; color:#94a3b8; font-size:11px; letter-spacing:0.5px;">
-      This is an automated email from GSSS Shilla Student Management System
-    </p>
-    <p style="margin:0; color:#94a3b8; font-size:11px;">
-      © ${new Date().getFullYear()} Govt. Sr. Sec. School Shilla · All rights reserved
-    </p>
   </td></tr>
 </table>
 </td></tr>
@@ -837,13 +814,10 @@ async function generateWelcomePDF(student) {
         doc.font("Helvetica").fontSize(9.5).fillColor("#78350f")
            .text("Use these details to login to your student portal:", ML + 14, y + 30);
 
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f")
-           .text("APAAR ID:", ML + 14, y + 50);
-        doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b")
-           .text(s.apaar_id || "—", ML + 90, y + 50);
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f").text("APAAR ID:", ML + 14, y + 50);
+        doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b").text(s.apaar_id || "—", ML + 90, y + 50);
 
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f")
-           .text("Date of Birth:", ML + 14, y + 68);
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#78350f").text("Date of Birth:", ML + 14, y + 68);
         doc.font("Courier-Bold").fontSize(11).fillColor("#1e293b")
            .text(s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—", ML + 90, y + 68);
 
@@ -856,16 +830,12 @@ async function generateWelcomePDF(student) {
         const sigW = 180;
         const sigX = pageW - MR - sigW;
         if (sigBuf) {
-          try {
-            doc.image(sigBuf, sigX + 40, y - 10, { fit: [100, 45], align: "center" });
-          } catch (e) {}
+          try { doc.image(sigBuf, sigX + 40, y - 10, { fit: [100, 45], align: "center" }); } catch (e) {}
         }
         const lineY = y + 40;
         doc.moveTo(sigX + 20, lineY).lineTo(sigX + sigW - 20, lineY).lineWidth(0.7).strokeColor("#64748b").stroke();
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
-           .text("Principal", sigX, lineY + 6, { width: sigW, align: "center" });
-        doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
-           .text("Govt. Sr. Sec. School Shilla", sigX, lineY + 20, { width: sigW, align: "center" });
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a").text("Principal", sigX, lineY + 6, { width: sigW, align: "center" });
+        doc.font("Helvetica").fontSize(8.5).fillColor("#475569").text("Govt. Sr. Sec. School Shilla", sigX, lineY + 20, { width: sigW, align: "center" });
       }
 
       doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
@@ -1353,7 +1323,6 @@ router.post(
         return res.status(400).json({ success: false, message: "Email verification expired. Please verify again.", code: "OTP_EXPIRED" });
       }
 
-      // ✅ UNIQUENESS CHECK (includes session-wise roll number)
       const conflict = await checkUniqueness({
         studentId: req.body.studentId,
         admissionNumber: req.body.admissionNumber,
@@ -1453,11 +1422,8 @@ router.post(
 
       (async () => {
         try {
-          console.log(`📧 Generating welcome PDF for ${savedStudent.name}...`);
           const pdfBuffer = await generateWelcomePDF(savedStudent);
-          console.log(`📧 Sending welcome email to ${savedStudent.email_id}...`);
           await sendRegistrationSuccessEmail(savedStudent, pdfBuffer);
-          console.log(`✅ Welcome email sent to ${savedStudent.email_id}`);
         } catch (emailErr) {
           console.error("❌ Welcome email error:", emailErr.message);
         }
@@ -1471,9 +1437,7 @@ router.post(
       });
     } catch (err) {
       console.error("❌ Add Student Error:", err);
-      if (err.code === "ER_DUP_ENTRY") {
-        return res.status(400).json({ success: false, message: "Duplicate entry — Student ID / Admission Number / Roll Number already exists in this session" });
-      }
+      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
       res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -1490,18 +1454,10 @@ router.post("/check-email", async (req, res) => {
     }
     const emailClean = String(email).toLowerCase().trim();
 
-    const rows = await q(
-      `SELECT id FROM Nstudent WHERE LOWER(email_id) = ? LIMIT 1`,
-      [emailClean]
-    );
-
-    if (!rows.length) {
-      return res.json({ success: true, exists: false, message: "Email not registered" });
-    }
-
+    const rows = await q(`SELECT id FROM Nstudent WHERE LOWER(email_id) = ? LIMIT 1`, [emailClean]);
+    if (!rows.length) return res.json({ success: true, exists: false, message: "Email not registered" });
     return res.json({ success: true, exists: true, message: "Email verified" });
   } catch (err) {
-    console.error("check-email error:", err.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -1528,13 +1484,9 @@ router.post("/check-student-id", async (req, res) => {
       [emailClean, sidClean.toLowerCase()]
     );
 
-    if (!rows.length) {
-      return res.json({ success: true, matches: false, message: "Student ID does not match this email" });
-    }
-
+    if (!rows.length) return res.json({ success: true, matches: false, message: "Student ID does not match this email" });
     return res.json({ success: true, matches: true, message: "Identity verified" });
   } catch (err) {
-    console.error("check-student-id error:", err.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -1829,7 +1781,6 @@ router.get("/pin/status/:studentId", async (req, res) => {
       monthYear: thisMonth
     });
   } catch (err) {
-    console.error("PIN status error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -1879,7 +1830,6 @@ router.post("/pin/create", async (req, res) => {
       changesRemaining: MAX_CHANGES_PER_MONTH - 1
     });
   } catch (err) {
-    console.error("Create PIN error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -1982,7 +1932,6 @@ router.post("/pin/change", async (req, res) => {
       maxChangesPerMonth: MAX_CHANGES_PER_MONTH
     });
   } catch (err) {
-    console.error("Change PIN error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2054,7 +2003,6 @@ router.post("/pin/verify", async (req, res) => {
       lastChangedAt: pinRec.last_changed_at
     });
   } catch (err) {
-    console.error("Verify PIN error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2097,7 +2045,7 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(401).json({ success: false, message: "Details do not match our records. Please check Student ID, APAAR ID and Aadhaar Number." });
+      return res.status(401).json({ success: false, message: "Details do not match our records." });
     }
 
     const student = rows[0];
@@ -2108,7 +2056,7 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
 
     const pinExists = await q(`SELECT locked_until FROM student_pins WHERE student_id = ?`, [student.id]);
     if (!pinExists.length) {
-      return res.status(404).json({ success: false, message: "No PIN set for this student. Please contact the school office." });
+      return res.status(404).json({ success: false, message: "No PIN set for this student." });
     }
 
     const lockMins = calcRemainingLockMins(pinExists[0].locked_until);
@@ -2178,11 +2126,8 @@ Someone requested to reset your 6-digit portal PIN. Use the OTP below to proceed
 </table>
 <p style="color:#94a3b8; font-size:12px; margin:20px 0 0; line-height:1.6;">
 ⏱ Valid for <strong>10 minutes</strong>.<br>
-If you didn't request this, please ignore this email — your PIN is safe.
+If you didn't request this, please ignore this email.
 </p>
-</td></tr>
-<tr><td style="background:#f8fafc; padding: 16px 24px; text-align:center; border-top:1px solid #e2e8f0;">
-<p style="margin:0; color:#94a3b8; font-size:11px;">© ${new Date().getFullYear()} GSSS SHILLA · Automated email</p>
 </td></tr>
 </table>
 </td></tr>
@@ -2191,16 +2136,10 @@ If you didn't request this, please ignore this email — your PIN is safe.
             textContent: `Your PIN Reset OTP: ${otp}\nValid for 10 minutes.`
           })
         });
-
-        if (!resp.ok) {
-          const errBody = await resp.text();
-          console.error("Brevo PIN OTP error:", resp.status, errBody);
-        }
+        if (!resp.ok) console.error("Brevo PIN OTP error:", resp.status);
       } catch (emailErr) {
         console.error("PIN OTP email error:", emailErr.message);
       }
-    } else {
-      console.log(`📧 PIN OTP for student ${student.id}: ${otp}`);
     }
 
     res.json({
@@ -2211,7 +2150,6 @@ If you didn't request this, please ignore this email — your PIN is safe.
       expiresInMinutes: 10
     });
   } catch (err) {
-    console.error("PIN forgot OTP error:", err.message);
     res.status(500).json({ success: false, message: "Server error. Please try again." });
   }
 });
@@ -2285,7 +2223,7 @@ router.post("/pin/forgot/reset", async (req, res) => {
       if (changesUsed >= MAX_CHANGES_PER_MONTH) {
         return res.status(429).json({
           success: false,
-          message: `Monthly limit reached (${MAX_CHANGES_PER_MONTH}/month). Contact admin to reset.`,
+          message: `Monthly limit reached (${MAX_CHANGES_PER_MONTH}/month).`,
           code: "MONTHLY_LIMIT_REACHED"
         });
       }
@@ -2305,7 +2243,6 @@ router.post("/pin/forgot/reset", async (req, res) => {
 
     res.json({ success: true, message: "PIN reset successfully ✅ Please login with your new PIN." });
   } catch (err) {
-    console.error("PIN reset error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2356,13 +2293,8 @@ router.post("/pin/admin/reset", async (req, res) => {
     }
 
     await logPinHistory(sid, "reset_by_admin", "admin", req);
-
-    res.json({
-      success: true,
-      message: `PIN reset by admin ✅ (month counter refreshed to 0)`
-    });
+    res.json({ success: true, message: `PIN reset by admin ✅` });
   } catch (err) {
-    console.error("Admin PIN reset error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2477,7 +2409,6 @@ router.get("/pin/admin/all-status", async (req, res) => {
       data: rows
     });
   } catch (err) {
-    console.error("Admin all-status error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2504,14 +2435,7 @@ router.get("/pin/admin/summary", async (req, res) => {
     res.json({
       success: true,
       monthYear: thisMonth,
-      stats: {
-        totalStudents,
-        totalPins,
-        noPin: totalStudents - totalPins,
-        locked,
-        needsChange,
-        limitReached
-      }
+      stats: { totalStudents, totalPins, noPin: totalStudents - totalPins, locked, needsChange, limitReached }
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -2519,7 +2443,7 @@ router.get("/pin/admin/summary", async (req, res) => {
 });
 
 // ============================================================
-// ✅✅✅ BACKUP SYSTEM ✅✅✅
+// ✅ BACKUP SYSTEM
 // ============================================================
 const BACKUP_DIR = path.join(__dirname, "..", "backups");
 const MAX_BACKUPS = 10;
@@ -2562,7 +2486,7 @@ async function createBackup(type = "auto") {
   await cleanupOldBackups();
 
   const stat = fs.statSync(filepath);
-  console.log(`[Backup] Created: ${filename} (${students.length} students, ${(stat.size / 1024).toFixed(2)} KB)`);
+  console.log(`[Backup] Created: ${filename} (${students.length} students)`);
 
   return { filename, filepath, size: stat.size, stats: backupData.stats };
 }
@@ -2580,14 +2504,14 @@ async function cleanupOldBackups() {
     const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
     for (const file of files) {
       if (file.mtime < cutoff) {
-        try { fs.unlinkSync(file.path); console.log(`[Backup] Deleted old: ${file.name}`); } catch (e) {}
+        try { fs.unlinkSync(file.path); } catch (e) {}
       }
     }
 
     const remaining = files.filter(f => f.mtime >= cutoff);
     if (remaining.length > MAX_BACKUPS) {
       for (let i = MAX_BACKUPS; i < remaining.length; i++) {
-        try { fs.unlinkSync(remaining[i].path); console.log(`[Backup] Deleted excess: ${remaining[i].name}`); } catch (e) {}
+        try { fs.unlinkSync(remaining[i].path); } catch (e) {}
       }
     }
   } catch (err) { console.error("[Backup] Cleanup error:", err.message); }
@@ -2651,7 +2575,7 @@ async function restoreBackupData(data, mode = "merge") {
 }
 
 // ============================================================
-// ✅✅✅ PROFESSIONAL PDF — Album Style (Class-wise, Card Layout)
+// ✅✅✅ PROFESSIONAL TABLE PDF — One Row Per Student
 // ============================================================
 router.get("/list-pdf", async (req, res) => {
   try {
@@ -2670,7 +2594,7 @@ router.get("/list-pdf", async (req, res) => {
       title = "STUDENT LIST"
     } = req.query;
 
-    // Build WHERE
+    // ---- WHERE clause ----
     const where = [];
     const params = [];
     if (cls)      { where.push("class = ?"); params.push(cls); }
@@ -2684,7 +2608,6 @@ router.get("/list-pdf", async (req, res) => {
       const like = `%${search}%`;
       params.push(like, like, like, like, like);
     }
-
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
     const students = await q(
@@ -2699,7 +2622,7 @@ router.get("/list-pdf", async (req, res) => {
       return res.status(404).json({ success: false, message: "No students found for these filters" });
     }
 
-    // Filter summary
+    // ---- Filter summary ----
     const filterParts = [];
     if (cls) filterParts.push(`Class: ${cls}`);
     if (session) filterParts.push(`Session: ${session}`);
@@ -2710,7 +2633,7 @@ router.get("/list-pdf", async (req, res) => {
     if (search) filterParts.push(`Search: "${search}"`);
     const filterSummary = filterParts.length ? filterParts.join("  •  ") : "All Students";
 
-    // Group by class
+    // ---- Group by class ----
     const grouped = {};
     const classOrder = ["Nursery","LKG","UKG","1","2","3","4","5","6","7","8","9","10","11","12"];
     classOrder.forEach(c => { grouped[c] = []; });
@@ -2725,7 +2648,7 @@ router.get("/list-pdf", async (req, res) => {
     const needPhotos = includePhoto === "true";
     const needSigs = includeSignature === "true";
 
-    // Fetch images
+    // ---- Fetch images ----
     const photoMap = {};
     const sigMap = {};
 
@@ -2741,23 +2664,24 @@ router.get("/list-pdf", async (req, res) => {
       }));
     }
 
-    // Fetch logo for header + watermark
+    // ---- School logo ----
     const schoolLogo = await fetchImageBuffer(SCHOOL_LOGO_URL);
 
-    // PDF setup — Landscape A4
+    // ---- PDF Setup ----
     res.setHeader("Content-Type", "application/pdf");
     const safeTitle = String(title).replace(/[^a-zA-Z0-9-_]/g, "_").substring(0, 50);
     res.setHeader("Content-Disposition", `inline; filename="${safeTitle}.pdf"`);
 
     const PAGE_W = 842;
     const PAGE_H = 595;
-    const MARGIN = 24;
+    const MARGIN = 20;
     const CONTENT_W = PAGE_W - MARGIN * 2;
 
-    // Header & footer
-    const HEADER_H = 90;
-    const FOOTER_H = 36;
-    const BODY_TOP = HEADER_H + 6;
+    const HEADER_H = 76;
+    const FILTER_BAND_H = 18;
+    const FOOTER_H = 28;
+
+    const BODY_TOP = HEADER_H + FILTER_BAND_H + 4;
     const BODY_BOTTOM = PAGE_H - FOOTER_H - 4;
     const BODY_H = BODY_BOTTOM - BODY_TOP;
 
@@ -2773,360 +2697,399 @@ router.get("/list-pdf", async (req, res) => {
 
     let pageNum = 0;
 
-    // ---- Draw header on current page ----
+    // ============================================================
+    // Header (with logo + school name + title)
+    // ============================================================
     const drawPageHeader = (pageTitle) => {
-      // Top navy band
-      doc.rect(0, 0, PAGE_W, 70).fill("#0d1b2a");
-      // Gold line
-      doc.rect(0, 70, PAGE_W, 3).fill("#c9972b");
+      // Navy band
+      doc.rect(0, 0, PAGE_W, HEADER_H).fill("#0d1b2a");
+      // Gold line at bottom
+      doc.rect(0, HEADER_H - 3, PAGE_W, 3).fill("#c9972b");
 
-      // School logo (small circle top-left)
+      // Logo circle (top-left)
       if (schoolLogo) {
         try {
           doc.save();
-          doc.circle(MARGIN + 24, 35, 24).fill("#ffffff");
-          doc.circle(MARGIN + 24, 35, 23).lineWidth(1.5).strokeColor("#c9972b").stroke();
+          doc.circle(MARGIN + 26, 38, 26).fill("#ffffff");
+          doc.circle(MARGIN + 26, 38, 25).lineWidth(1.5).strokeColor("#c9972b").stroke();
           doc.restore();
-          doc.image(schoolLogo, MARGIN + 4, 15, { fit: [40, 40], align: "center", valign: "center" });
+          doc.image(schoolLogo, MARGIN + 4, 16, { fit: [44, 44], align: "center", valign: "center" });
         } catch (e) {}
       }
 
       // School name (centered)
-      doc.font("Helvetica-Bold").fontSize(15).fillColor("#ffffff")
-         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN + 60, 14, {
-           width: PAGE_W - MARGIN * 2 - 60,
-           align: "center",
-           characterSpacing: 1
-         });
-
-      doc.font("Helvetica").fontSize(7.5).fillColor("#c9972b")
-         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN + 60, 33, {
-           width: PAGE_W - MARGIN * 2 - 60,
-           align: "center",
-           characterSpacing: 0.5
-         });
-
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#ffffff")
-         .text(String(pageTitle || title).toUpperCase(), MARGIN + 60, 48, {
+      doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff")
+         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN + 60, 12, {
            width: PAGE_W - MARGIN * 2 - 60,
            align: "center",
            characterSpacing: 1.2
          });
 
-      // Filter summary band (below header)
-      const summaryY = 78;
-      doc.rect(0, summaryY, PAGE_W, 16).fill("#f1f5f9");
-      doc.font("Helvetica").fontSize(7.5).fillColor("#334155")
-         .text(filterSummary, MARGIN, summaryY + 4, { width: PAGE_W - MARGIN * 2, align: "center" });
+      doc.font("Helvetica").fontSize(8).fillColor("#c9972b")
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN + 60, 32, {
+           width: PAGE_W - MARGIN * 2 - 60,
+           align: "center",
+           characterSpacing: 0.5
+         });
 
-      if (includeReason === "true" && reason && reason.trim()) {
-        doc.font("Helvetica-Bold").fontSize(8).fillColor("#c9972b")
-           .text(`Reason: ${String(reason).trim()}`, MARGIN, summaryY + 6, { width: PAGE_W - MARGIN * 2, align: "right" });
-      }
+      doc.font("Helvetica-Bold").fontSize(12).fillColor("#ffffff")
+         .text(String(pageTitle || title).toUpperCase(), MARGIN + 60, 48, {
+           width: PAGE_W - MARGIN * 2 - 60,
+           align: "center",
+           characterSpacing: 1.5
+         });
 
-      // Total count text (top-right of header, overlay)
-      doc.font("Helvetica").fontSize(7).fillColor("#cbd5e1")
-         .text(`Total: ${students.length}`, PAGE_W - MARGIN - 120, 6, { width: 120, align: "right" });
+      // Filter band
+      const summaryY = HEADER_H;
+      doc.rect(0, summaryY, PAGE_W, FILTER_BAND_H).fill("#f1f5f9");
+      doc.font("Helvetica").fontSize(8).fillColor("#334155")
+         .text(filterSummary, MARGIN, summaryY + 5, { width: PAGE_W - MARGIN * 2 - 160, align: "left" });
+
+      // Total count on right
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
+         .text(`Total: ${students.length}`, PAGE_W - MARGIN - 150, summaryY + 5, { width: 150, align: "right" });
     };
 
-    // ---- Draw footer on current page ----
+    // ============================================================
+    // Footer
+    // ============================================================
     const drawPageFooter = () => {
-      const fy = PAGE_H - 26;
+      const fy = PAGE_H - FOOTER_H + 2;
 
-      // Gold line
-      doc.strokeColor("#c9972b").lineWidth(0.8)
+      doc.strokeColor("#c9972b").lineWidth(1)
          .moveTo(MARGIN, fy - 4).lineTo(PAGE_W - MARGIN, fy - 4).stroke();
 
-      // Left: date
+      // Left: Print date
       doc.font("Helvetica").fontSize(7).fillColor("#64748b")
          .text(
            `Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
-           MARGIN, fy + 2, { width: 200, align: "left" }
+           MARGIN, fy + 3, { width: 220, align: "left" }
          );
 
-      // Center: Signature lines
-      const cx = (PAGE_W - 360) / 2;
-      doc.strokeColor("#94a3b8").lineWidth(0.5)
-         .moveTo(cx, fy + 8).lineTo(cx + 100, fy + 8).stroke();
-      doc.font("Helvetica").fontSize(6.5).fillColor("#475569")
-         .text("Class Teacher", cx, fy + 10, { width: 100, align: "center" });
-
-      doc.strokeColor("#94a3b8").lineWidth(0.5)
-         .moveTo(cx + 140, fy + 8).lineTo(cx + 240, fy + 8).stroke();
-      doc.font("Helvetica").fontSize(6.5).fillColor("#475569")
-         .text("Principal", cx + 140, fy + 10, { width: 100, align: "center" });
-
-      // Right: page number
+      // Right: Page num
       doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a")
-         .text(`Page ${pageNum}`, PAGE_W - MARGIN - 100, fy + 2, { width: 100, align: "right" });
+         .text(`Page ${pageNum}`, PAGE_W - MARGIN - 100, fy + 3, { width: 100, align: "right" });
 
-      // Watermark footer text
-      doc.font("Helvetica").fontSize(5.5).fillColor("#cbd5e1")
-         .text("GSSS SHILLA — OFFICIAL DOCUMENT", MARGIN, PAGE_H - 10, {
+      // Center text
+      doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+         .text("GSSS SHILLA — OFFICIAL DOCUMENT", MARGIN, fy + 14, {
            width: PAGE_W - MARGIN * 2,
            align: "center",
            characterSpacing: 0.5
          });
     };
 
-    // ---- Watermark (school logo) on current page ----
+    // ============================================================
+    // Watermark
+    // ============================================================
     const drawWatermark = () => {
       if (!schoolLogo) return;
       try {
         doc.save();
-        doc.opacity(0.04);
-        const size = 400;
+        doc.opacity(0.05);
+        const size = 380;
         doc.image(schoolLogo, (PAGE_W - size) / 2, (PAGE_H - size) / 2, { width: size, height: size });
         doc.restore();
       } catch (e) {}
     };
 
-    // ---- Add a new page (with header, footer, watermark) ----
+    // ============================================================
+    // Add new page
+    // ============================================================
     const addPage = (pageTitle) => {
       doc.addPage();
       pageNum++;
-      // Watermark first (bottom layer)
       drawWatermark();
-      // Header
       drawPageHeader(pageTitle);
     };
 
     // ============================================================
-    // Card Layout Config
+    // Table setup — dynamic columns based on options
     // ============================================================
-    // Cards grid: 2 columns × N rows
-    const GRID_COLS = 2;
-    const GRID_GAP = 8;
-    const CARD_W = (CONTENT_W - (GRID_COLS - 1) * GRID_GAP) / GRID_COLS;
-    const CARD_H = 132; // height per card
-    const CARDS_TOP = BODY_TOP + 4;
+    // Column definitions
+    const COLS = [];
+    COLS.push({ key: "sl",     label: "#",           width: 28,  align: "center" });
+    if (needPhotos) {
+      COLS.push({ key: "photo", label: "PHOTO",       width: 44,  align: "center" });
+    }
+    COLS.push({ key: "studentId", label: "STUDENT ID", width: 78,  align: "left" });
+    COLS.push({ key: "admissionNumber", label: "ADM. NO", width: 68, align: "left" });
+    COLS.push({ key: "name",   label: "STUDENT NAME", width: 128, align: "left" });
+    COLS.push({ key: "fatherName", label: "FATHER'S NAME", width: 120, align: "left" });
+    COLS.push({ key: "motherName", label: "MOTHER'S NAME", width: 110, align: "left" });
+    COLS.push({ key: "dob",    label: "DOB",          width: 68,  align: "center" });
+    COLS.push({ key: "gender", label: "GENDER",       width: 48,  align: "center" });
+    COLS.push({ key: "category", label: "CATEGORY",   width: 55,  align: "center" });
+    COLS.push({ key: "stream", label: "STREAM",       width: 68,  align: "center" });
+    COLS.push({ key: "rollNumber", label: "ROLL",     width: 42,  align: "center" });
+    COLS.push({ key: "session", label: "SESSION",     width: 58,  align: "center" });
+    COLS.push({ key: "mobile", label: "MOBILE",       width: 78,  align: "left" });
+    COLS.push({ key: "status", label: "STATUS",       width: 55,  align: "center" });
+    if (needSigs) {
+      COLS.push({ key: "signature", label: "SIGNATURE", width: 62, align: "center" });
+    }
 
-    // Rows per page
-    const CARD_ROWS_PER_PAGE = Math.floor((BODY_H - 8) / (CARD_H + GRID_GAP));
+    // Scale to fit content width
+    const totalColW = COLS.reduce((s, c) => s + c.width, 0);
+    const scale = CONTENT_W / totalColW;
+    COLS.forEach(c => { c.scaledW = c.width * scale; });
 
-    // Section title height
-    const SECTION_TITLE_H = 20;
+    // Row heights
+    const ROW_H = needPhotos || needSigs ? 48 : 22;
+    const TABLE_HEADER_H = 24;
+    const SECTION_TITLE_H = 22;
 
     // ============================================================
-    // Draw a single student card
+    // Draw table header row (dark navy with white text)
     // ============================================================
-    const drawStudentCard = (s, x, y, idx) => {
-      // Card background
-      doc.rect(x, y, CARD_W, CARD_H).fillAndStroke("#ffffff", "#e2e8f0");
+    const drawTableHeader = (y) => {
+      // Bold outer border top handled by outer rect at end
+      let x = MARGIN;
 
-      // Left gold accent bar
-      doc.rect(x, y, 3, CARD_H).fill("#c9972b");
+      // Header background
+      doc.rect(MARGIN, y, CONTENT_W, TABLE_HEADER_H).fill("#0d1b2a");
 
-      // Photo box (left)  — 60x72
-      const PHOTO_W = 58;
-      const PHOTO_H = 68;
-      const PHOTO_X = x + 12;
-      const PHOTO_Y = y + 10;
+      COLS.forEach((c, i) => {
+        // Label
+        doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#ffffff")
+           .text(c.label, x + 3, y + 8, {
+             width: c.scaledW - 6,
+             align: "center",
+             lineBreak: false,
+             ellipsis: true
+           });
 
-      // Photo border + background
-      doc.rect(PHOTO_X, PHOTO_Y, PHOTO_W, PHOTO_H).fillAndStroke("#f8fafc", "#c9972b");
-
-      if (needPhotos && photoMap[s.id]) {
-        try {
-          doc.image(photoMap[s.id], PHOTO_X + 1.5, PHOTO_Y + 1.5, {
-            fit: [PHOTO_W - 3, PHOTO_H - 3],
-            align: "center",
-            valign: "center"
-          });
-        } catch (e) {
-          doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-             .text("No Photo", PHOTO_X, PHOTO_Y + PHOTO_H / 2 - 3, { width: PHOTO_W, align: "center" });
+        // Column separator (gold inside header)
+        if (i < COLS.length - 1) {
+          doc.strokeColor("#c9972b").lineWidth(0.6)
+             .moveTo(x + c.scaledW, y + 2)
+             .lineTo(x + c.scaledW, y + TABLE_HEADER_H - 2)
+             .stroke();
         }
-      } else {
-        doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
-           .text("No Photo", PHOTO_X, PHOTO_Y + PHOTO_H / 2 - 3, { width: PHOTO_W, align: "center" });
-      }
 
-      // Signature box (below photo)
-      const SIG_W = 58;
-      const SIG_H = 22;
-      const SIG_X = PHOTO_X;
-      const SIG_Y = PHOTO_Y + PHOTO_H + 4;
+        x += c.scaledW;
+      });
 
-      doc.rect(SIG_X, SIG_Y, SIG_W, SIG_H).fillAndStroke("#fef8ed", "#c9972b");
-      if (needSigs && sigMap[s.id]) {
-        try {
-          doc.image(sigMap[s.id], SIG_X + 1.5, SIG_Y + 1.5, {
-            fit: [SIG_W - 3, SIG_H - 3],
-            align: "center",
-            valign: "center"
-          });
-        } catch (e) {
-          doc.font("Helvetica").fontSize(5.5).fillColor("#94a3b8")
-             .text("No Sign", SIG_X, SIG_Y + SIG_H / 2 - 2.5, { width: SIG_W, align: "center" });
-        }
-      } else {
-        doc.font("Helvetica").fontSize(5.5).fillColor("#94a3b8")
-           .text("No Sign", SIG_X, SIG_Y + SIG_H / 2 - 2.5, { width: SIG_W, align: "center" });
-      }
+      // Bold bottom border of header
+      doc.strokeColor("#c9972b").lineWidth(1.5)
+         .moveTo(MARGIN, y + TABLE_HEADER_H)
+         .lineTo(MARGIN + CONTENT_W, y + TABLE_HEADER_H)
+         .stroke();
 
-      // Right side (details)
-      const INFO_X = PHOTO_X + PHOTO_W + 10;
-      const INFO_W = CARD_W - (INFO_X - x) - 8;
-      let iy = y + 8;
-
-      // Serial number circle
-      doc.circle(x + CARD_W - 14, y + 12, 8).fill("#0d1b2a");
-      doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff")
-         .text(String(idx + 1), x + CARD_W - 22, y + 9, { width: 16, align: "center" });
-
-      // Name (bold)
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
-         .text(String(s.name || "—").toUpperCase(), INFO_X, iy, { width: INFO_W - 24, lineBreak: false, ellipsis: true });
-      iy += 13;
-
-      // Class + Roll + Session chip
-      const chipY = iy;
-      const chipText = `Class ${s.class || "-"}  ·  Roll ${s.roll_number || "-"}  ·  ${s.session || "-"}`;
-      doc.roundedRect(INFO_X, chipY, INFO_W - 24, 12, 3).fill("#fef8ed");
-      doc.font("Helvetica-Bold").fontSize(7).fillColor("#92400e")
-         .text(chipText, INFO_X + 4, chipY + 3, { width: INFO_W - 32, lineBreak: false, ellipsis: true });
-      iy = chipY + 16;
-
-      // Two-column info rows
-      const rowH = 11;
-      const halfW = (INFO_W - 24) / 2;
-
-      const drawRow = (label, value, col) => {
-        const lx = INFO_X + col * halfW;
-        doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#64748b")
-           .text(label + ":", lx, iy, { width: 42, lineBreak: false });
-        doc.font("Helvetica").fontSize(7).fillColor("#1a2332")
-           .text(String(value || "—"), lx + 44, iy, { width: halfW - 46, lineBreak: false, ellipsis: true });
-      };
-
-      // Row 1
-      drawRow("ID", s.student_id, 0);
-      drawRow("Adm", s.admission_number, 1);
-      iy += rowH;
-
-      // Row 2
-      drawRow("Father", s.father_name, 0);
-      drawRow("Mother", s.mother_name, 1);
-      iy += rowH;
-
-      // Row 3
-      drawRow("DOB", s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—", 0);
-      drawRow("Gender", s.gender, 1);
-      iy += rowH;
-
-      // Row 4
-      drawRow("Category", s.category, 0);
-      drawRow("Stream", s.stream || "Non-Specialized", 1);
-      iy += rowH;
-
-      // Row 5
-      drawRow("Mobile", s.mobile_number, 0);
-      drawRow("Status", s.status || "Active", 1);
+      return y + TABLE_HEADER_H;
     };
 
     // ============================================================
-    // Main rendering loop — class-wise sections with cards
+    // Draw one student row
     // ============================================================
-    const allClasses = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
+    const drawStudentRow = (s, y, idx) => {
+      let x = MARGIN;
 
-    // Compute positions
-    let cursorY = CARDS_TOP;
-    let colIdx = 0;
-    let rowIdx = 0;
-    let firstSection = true;
+      // Alternating row background
+      if (idx % 2 === 1) {
+        doc.rect(MARGIN, y, CONTENT_W, ROW_H).fill("#f8fafc");
+      } else {
+        doc.rect(MARGIN, y, CONTENT_W, ROW_H).fill("#ffffff");
+      }
 
-    // Start with a page
+      // Row content
+      COLS.forEach((c, i) => {
+        // Vertical cell separator (light gray 2px gap feel)
+        if (i > 0) {
+          doc.strokeColor("#cbd5e1").lineWidth(1)
+             .moveTo(x, y)
+             .lineTo(x, y + ROW_H)
+             .stroke();
+        }
+
+        const cellX = x + 4;
+        const cellW = c.scaledW - 8;
+        const centerY = y + (ROW_H / 2);
+
+        if (c.key === "sl") {
+          doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0d1b2a")
+             .text(String(idx + 1), x, centerY - 5, { width: c.scaledW, align: "center" });
+        } else if (c.key === "photo") {
+          const PHOTO_W = 34;
+          const PHOTO_H = 40;
+          const px = x + (c.scaledW - PHOTO_W) / 2;
+          const py = y + (ROW_H - PHOTO_H) / 2;
+          doc.rect(px, py, PHOTO_W, PHOTO_H).fillAndStroke("#f1f5f9", "#c9972b");
+          if (photoMap[s.id]) {
+            try {
+              doc.image(photoMap[s.id], px + 1.5, py + 1.5, {
+                fit: [PHOTO_W - 3, PHOTO_H - 3],
+                align: "center",
+                valign: "center"
+              });
+            } catch (e) {
+              doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+                 .text("N/A", px, centerY - 3, { width: PHOTO_W, align: "center" });
+            }
+          } else {
+            doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+               .text("N/A", px, centerY - 3, { width: PHOTO_W, align: "center" });
+          }
+        } else if (c.key === "signature") {
+          const SIG_W = 48;
+          const SIG_H = 22;
+          const px = x + (c.scaledW - SIG_W) / 2;
+          const py = y + (ROW_H - SIG_H) / 2;
+          doc.rect(px, py, SIG_W, SIG_H).fillAndStroke("#fef8ed", "#c9972b");
+          if (sigMap[s.id]) {
+            try {
+              doc.image(sigMap[s.id], px + 1.5, py + 1.5, {
+                fit: [SIG_W - 3, SIG_H - 3],
+                align: "center",
+                valign: "center"
+              });
+            } catch (e) {
+              doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+                 .text("N/A", px, centerY - 3, { width: SIG_W, align: "center" });
+            }
+          } else {
+            doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+               .text("N/A", px, centerY - 3, { width: SIG_W, align: "center" });
+          }
+        } else {
+          // Regular text cell
+          let value = "";
+          switch (c.key) {
+            case "studentId": value = s.student_id || "-"; break;
+            case "admissionNumber": value = s.admission_number || "-"; break;
+            case "name": value = s.name || "-"; break;
+            case "fatherName": value = s.father_name || "-"; break;
+            case "motherName": value = s.mother_name || "-"; break;
+            case "dob": value = s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }) : "-"; break;
+            case "gender": value = s.gender || "-"; break;
+            case "category": value = s.category || "-"; break;
+            case "stream": value = s.stream || "Non-Spec."; break;
+            case "rollNumber": value = s.roll_number || "-"; break;
+            case "session": value = s.session || "-"; break;
+            case "mobile": value = s.mobile_number || "-"; break;
+            case "status": value = s.status || "Active"; break;
+          }
+
+          const isName = c.key === "name";
+          doc.font(isName ? "Helvetica-Bold" : "Helvetica").fontSize(isName ? 8.5 : 8).fillColor("#1a2332")
+             .text(String(value), cellX, centerY - 5, {
+               width: cellW,
+               align: c.align,
+               lineBreak: false,
+               ellipsis: true
+             });
+        }
+
+        x += c.scaledW;
+      });
+
+      // Horizontal bottom separator (2px)
+      doc.strokeColor("#cbd5e1").lineWidth(1)
+         .moveTo(MARGIN, y + ROW_H)
+         .lineTo(MARGIN + CONTENT_W, y + ROW_H)
+         .stroke();
+
+      return y + ROW_H;
+    };
+
+    // ============================================================
+    // Draw outer bold border of table block
+    // ============================================================
+    const drawTableOuterBorder = (topY, bottomY) => {
+      doc.strokeColor("#0d1b2a").lineWidth(2)
+         .rect(MARGIN, topY, CONTENT_W, bottomY - topY)
+         .stroke();
+    };
+
+    // ============================================================
+    // Main rendering
+    // ============================================================
+    let cursorY = BODY_TOP;
+    let classList = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
+    let globalSerial = 0;
+
+    // Start first page
     addPage(title);
 
-    const ensureSpace = (neededH) => {
-      if (cursorY + neededH > BODY_BOTTOM) {
-        drawPageFooter();
-        addPage(title);
-        cursorY = CARDS_TOP;
-        colIdx = 0;
-        rowIdx = 0;
-      }
-    };
-
-    // A student needs a card. Cards fit in grid 2 columns.
-    // If a section title needs to be drawn, ensure space for title + at least 1 card.
-
-    allClasses.forEach((className) => {
+    classList.forEach((className, classIdx) => {
       const classStudents = grouped[className];
 
-      // Section header
-      ensureSpace(SECTION_TITLE_H + CARD_H + 4);
+      // Need to keep section title + table header + at least one row on the page
+      const minNeeded = SECTION_TITLE_H + TABLE_HEADER_H + ROW_H + 6;
+      if (cursorY + minNeeded > BODY_BOTTOM) {
+        drawPageFooter();
+        addPage(title);
+        cursorY = BODY_TOP;
+      }
 
-      // Draw class title bar
-      const barY = cursorY;
-      doc.rect(MARGIN, barY, CONTENT_W, SECTION_TITLE_H - 4).fill("#0d1b2a");
-      doc.rect(MARGIN, barY, 5, SECTION_TITLE_H - 4).fill("#c9972b");
+      // ---- Section Title Bar ----
+      const sectionY = cursorY;
+      doc.rect(MARGIN, sectionY, CONTENT_W, SECTION_TITLE_H - 2).fill("#1e3a8a");
+      doc.rect(MARGIN, sectionY, 6, SECTION_TITLE_H - 2).fill("#c9972b");
+
       doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff")
-         .text(`CLASS: ${className}`, MARGIN + 10, barY + 3, {
-           width: CONTENT_W - 100,
+         .text(`CLASS: ${className}`, MARGIN + 14, sectionY + 5, {
+           width: CONTENT_W - 200,
            align: "left",
-           characterSpacing: 1
+           characterSpacing: 1.2
          });
+
+      // ✅ Student count on the SAME row, right-aligned
       doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
-         .text(`${classStudents.length} Student${classStudents.length > 1 ? "s" : ""}`, MARGIN, barY + 3, {
-           width: CONTENT_W - 10,
+         .text(`${classStudents.length} Student${classStudents.length > 1 ? "s" : ""}`, MARGIN, sectionY + 5, {
+           width: CONTENT_W - 14,
            align: "right"
          });
 
       cursorY += SECTION_TITLE_H;
 
-      // Reset grid for new section
-      colIdx = 0;
-      rowIdx = 0;
+      // Table start position
+      const tableTop = cursorY;
+      let rowY = drawTableHeader(cursorY);
+      let tableContinued = false;
+      let tableTopForBorder = tableTop;
 
-      // Draw each student's card
+      // ---- Rows ----
       for (let i = 0; i < classStudents.length; i++) {
         const s = classStudents[i];
 
-        // Compute position
-        const col = colIdx;
-        const row = rowIdx;
+        // Check space for next row
+        if (rowY + ROW_H > BODY_BOTTOM) {
+          // Close the outer border for current table chunk
+          drawTableOuterBorder(tableTopForBorder, rowY);
 
-        const x = MARGIN + col * (CARD_W + GRID_GAP);
-        const y = cursorY + row * (CARD_H + GRID_GAP);
-
-        // If card doesn't fit in current page → new page
-        if (y + CARD_H > BODY_BOTTOM) {
+          // Footer + new page
           drawPageFooter();
           addPage(title);
-          cursorY = CARDS_TOP;
-          colIdx = 0;
-          rowIdx = 0;
-          // Redraw section header on new page
-          doc.rect(MARGIN, cursorY, CONTENT_W, SECTION_TITLE_H - 4).fill("#0d1b2a");
-          doc.rect(MARGIN, cursorY, 5, SECTION_TITLE_H - 4).fill("#c9972b");
+          cursorY = BODY_TOP;
+
+          // Continued section header
+          const contY = cursorY;
+          doc.rect(MARGIN, contY, CONTENT_W, SECTION_TITLE_H - 2).fill("#1e3a8a");
+          doc.rect(MARGIN, contY, 6, SECTION_TITLE_H - 2).fill("#c9972b");
           doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff")
-             .text(`CLASS: ${className} (contd.)`, MARGIN + 10, cursorY + 3, {
-               width: CONTENT_W - 100, align: "left", characterSpacing: 1
+             .text(`CLASS: ${className} (contd.)`, MARGIN + 14, contY + 5, {
+               width: CONTENT_W - 200, align: "left", characterSpacing: 1.2
              });
+          doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
+             .text(`continued...`, MARGIN, contY + 5, {
+               width: CONTENT_W - 14, align: "right"
+             });
+
           cursorY += SECTION_TITLE_H;
+          tableTopForBorder = cursorY;
+          rowY = drawTableHeader(cursorY);
         }
 
-        const finalX = MARGIN + colIdx * (CARD_W + GRID_GAP);
-        const finalY = cursorY + rowIdx * (CARD_H + GRID_GAP);
-
-        drawStudentCard(s, finalX, finalY, i);
-
-        // Advance grid
-        colIdx++;
-        if (colIdx >= GRID_COLS) {
-          colIdx = 0;
-          rowIdx++;
-        }
+        rowY = drawStudentRow(s, rowY, globalSerial);
+        globalSerial++;
       }
 
-      // After section: advance cursor by full rows used
-      const rowsUsed = Math.ceil(classStudents.length / GRID_COLS);
-      cursorY += rowsUsed * (CARD_H + GRID_GAP);
-      colIdx = 0;
-      rowIdx = 0;
-      cursorY += 4; // small gap between sections
+      // Close outer border for this section's table
+      drawTableOuterBorder(tableTopForBorder, rowY);
+
+      // Advance cursor with a gap before next section
+      cursorY = rowY + 6;
     });
 
     // Final footer
@@ -3166,7 +3129,6 @@ router.get("/backup/list", verifyBackupAuth, async (req, res) => {
 
     res.json({ success: true, backups: files, count: files.length });
   } catch (err) {
-    console.error("[Backup] List error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -3182,7 +3144,6 @@ router.post("/backup/create", verifyBackupAuth, async (req, res) => {
       stats: result.stats
     });
   } catch (err) {
-    console.error("[Backup] Create error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -3250,7 +3211,6 @@ router.post("/backup/restore/:filename", verifyBackupAuth, async (req, res) => {
       total: stats.total
     });
   } catch (err) {
-    console.error("[Backup] Restore error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -3288,7 +3248,6 @@ router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("bac
       total: stats.total
     });
   } catch (err) {
-    console.error("[Backup] Upload-restore error:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -3360,7 +3319,7 @@ router.put(
         if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile limit reached`, code: "MOBILE_LIMIT_REACHED" });
       }
 
-      // ✅ UNIQUENESS CHECK (includes session-wise roll number)
+      // ✅ UNIQUENESS CHECK
       const conflict = await checkUniqueness({
         studentId: newStudentId !== existing.student_id ? newStudentId : null,
         admissionNumber: newAdmissionNumber !== existing.admission_number ? newAdmissionNumber : null,
