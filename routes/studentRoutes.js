@@ -3040,7 +3040,421 @@ cron.schedule("0 2 * * *", async () => {
 }, { timezone: "Asia/Kolkata" });
 
 console.log("✅ Backup system loaded — daily cron at 2:00 AM IST");
+// ============================================================
+// ✅ PROFESSIONAL LANDSCAPE PDF — Students List by Filters
+// ============================================================
+/**
+ * Generate a professional landscape PDF with student list
+ * Query params:
+ *  - class, gender, stream, category, status, session, search (filters)
+ *  - sortBy, order (sorting)
+ *  - includePhoto (true/false)
+ *  - includeSignature (true/false)
+ *  - includeReason (true/false)
+ *  - reason (text)
+ *  - title (custom title)
+ *  - columns (comma-separated list of columns to include)
+ */
+router.get("/list-pdf", async (req, res) => {
+  try {
+    const {
+      class: cls,
+      gender,
+      stream,
+      category,
+      status,
+      session,
+      search,
+      sortBy = "class",
+      order = "asc",
+      includePhoto = "false",
+      includeSignature = "false",
+      includeReason = "false",
+      reason = "",
+      title = "STUDENT LIST",
+      columns
+    } = req.query;
 
+    // ---- Build WHERE clause (same as GET /) ----
+    const where = [];
+    const params = [];
+    if (cls)      { where.push("class = ?"); params.push(cls); }
+    if (session)  { where.push("session = ?"); params.push(session); }
+    if (gender)   { where.push("gender = ?"); params.push(gender); }
+    if (category) { where.push("category = ?"); params.push(category); }
+    if (status)   { where.push("status = ?"); params.push(status); }
+    if (stream)   { where.push("stream = ?"); params.push(stream); }
+    if (search) {
+      where.push("(name LIKE ? OR admission_number LIKE ? OR student_id LIKE ? OR father_name LIKE ? OR mobile_number LIKE ?)");
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const allowedSort = ["created_at", "name", "class", "roll_number", "admission_date", "admission_number"];
+    const sortCol = allowedSort.includes(sortBy) ? sortBy : "class";
+    const sortDir = order.toLowerCase() === "asc" ? "ASC" : "DESC";
+
+    // Order: class first, then roll_number (natural for school lists)
+    const orderSql = sortBy === "class"
+      ? `ORDER BY FIELD(class,'Nursery','LKG','UKG','1','2','3','4','5','6','7','8','9','10','11','12') ${sortDir}, roll_number ASC`
+      : `ORDER BY ${sortCol} ${sortDir}, roll_number ASC`;
+
+    const students = await q(
+      `SELECT * FROM Nstudent ${whereSql} ${orderSql} LIMIT 2000`,
+      params
+    );
+
+    if (!students.length) {
+      return res.status(404).json({ success: false, message: "No students found for these filters" });
+    }
+
+    // ---- Filter summary text ----
+    const filterParts = [];
+    if (cls) filterParts.push(`Class: ${cls}`);
+    if (session) filterParts.push(`Session: ${session}`);
+    if (stream) filterParts.push(`Stream: ${stream}`);
+    if (gender) filterParts.push(`Gender: ${gender}`);
+    if (category) filterParts.push(`Category: ${category}`);
+    if (status) filterParts.push(`Status: ${status}`);
+    if (search) filterParts.push(`Search: "${search}"`);
+    const filterSummary = filterParts.length ? filterParts.join(" • ") : "All Students";
+
+    // ---- Column selection ----
+    // Default set of columns
+    const defaultColumns = [
+      "sl", "studentId", "admissionNumber", "name", "fatherName",
+      "class", "rollNumber", "session", "gender", "category", "mobile"
+    ];
+    const requestedColumns = columns
+      ? columns.split(",").map(c => c.trim()).filter(Boolean)
+      : defaultColumns;
+
+    // ---- Column definitions (label + width in landscape ~842pt) ----
+    const COLUMN_DEFS = {
+      sl:              { label: "#",           width: 28,  align: "center" },
+      studentId:       { label: "Student ID",  width: 78,  align: "left" },
+      admissionNumber: { label: "Adm. No",     width: 65,  align: "left" },
+      name:            { label: "Name",        width: 130, align: "left" },
+      fatherName:      { label: "Father",      width: 120, align: "left" },
+      motherName:      { label: "Mother",      width: 110, align: "left" },
+      class:           { label: "Class",       width: 45,  align: "center" },
+      rollNumber:      { label: "Roll",        width: 45,  align: "center" },
+      session:         { label: "Session",     width: 60,  align: "center" },
+      gender:          { label: "Gender",      width: 50,  align: "center" },
+      category:        { label: "Category",    width: 58,  align: "center" },
+      stream:          { label: "Stream",      width: 70,  align: "center" },
+      dob:             { label: "DOB",         width: 68,  align: "center" },
+      mobile:          { label: "Mobile",      width: 75,  align: "left" },
+      email:           { label: "Email",       width: 140, align: "left" },
+      aadhar:          { label: "Aadhaar",     width: 100, align: "left" },
+      apaar:           { label: "APAAR ID",    width: 95,  align: "left" },
+      status:          { label: "Status",      width: 60,  align: "center" },
+      address:         { label: "Address",     width: 180, align: "left" },
+      photo:           { label: "Photo",       width: 50,  align: "center" },
+      signature:       { label: "Sign",        width: 60,  align: "center" }
+    };
+
+    // ✅ Ensure photo/signature columns only if requested
+    const finalColumns = [...requestedColumns];
+    if (includePhoto === "true" && !finalColumns.includes("photo")) {
+      // Insert after name
+      const nameIdx = finalColumns.indexOf("name");
+      if (nameIdx >= 0) finalColumns.splice(nameIdx + 1, 0, "photo");
+      else finalColumns.push("photo");
+    }
+    if (includeSignature === "true" && !finalColumns.includes("signature")) {
+      finalColumns.push("signature");
+    }
+
+    // ---- Auto-fit columns to page width ----
+    const PAGE_W = 842;  // A4 landscape width in points
+    const PAGE_H = 595;  // A4 landscape height in points
+    const MARGIN = 30;
+    const CONTENT_W = PAGE_W - MARGIN * 2;
+    const TABLE_TOP_OFFSET = 130; // header + title area
+    const FOOTER_H = 40;
+    const ROW_H_BASE = includePhoto === "true" ? 50 : 22; // taller if photos
+    const HEADER_ROW_H = 26;
+
+    let totalColWidth = finalColumns.reduce((sum, c) => sum + (COLUMN_DEFS[c]?.width || 70), 0);
+    const scale = CONTENT_W / totalColWidth;
+    const scaledWidths = {};
+    finalColumns.forEach(c => {
+      scaledWidths[c] = (COLUMN_DEFS[c]?.width || 70) * scale;
+    });
+
+    // ---- Fetch images for photo/signature columns ----
+    const needPhotos = includePhoto === "true";
+    const needSigs = includeSignature === "true";
+    const photoMap = {};      // studentId -> Buffer
+    const sigMap = {};        // studentId -> Buffer
+
+    if (needPhotos || needSigs) {
+      console.log(`[List PDF] Fetching ${students.length} photos/sigs...`);
+      await Promise.all(students.map(async (s) => {
+        if (needPhotos && s.student_photo_url) {
+          try { photoMap[s.id] = await fetchImageBuffer(s.student_photo_url); } catch (e) {}
+        }
+        if (needSigs && s.signature_url) {
+          try { sigMap[s.id] = await fetchImageBuffer(s.signature_url); } catch (e) {}
+        }
+      }));
+    }
+
+    // ---- Setup PDF ----
+    res.setHeader("Content-Type", "application/pdf");
+    const safeTitle = String(title).replace(/[^a-zA-Z0-9-_]/g, "_").substring(0, 50);
+    res.setHeader("Content-Disposition", `inline; filename="${safeTitle}.pdf"`);
+
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
+      bufferPages: true, // for page numbers
+      autoFirstPage: false
+    });
+
+    doc.pipe(res);
+
+    // ---- Helper: draw page header ----
+    const drawHeader = (pageNum) => {
+      const y0 = 15;
+
+      // Title bar background
+      doc.rect(0, 0, PAGE_W, 80).fill("#0d1b2a");
+
+      // Gold accent line
+      doc.rect(0, 78, PAGE_W, 3).fill("#c9972b");
+
+      // School name
+      doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff")
+         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN, y0 + 8, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.2 });
+
+      // Location line
+      doc.font("Helvetica").fontSize(8).fillColor("#c9972b")
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN, y0 + 28, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.5 });
+
+      // Custom title (below school header)
+      doc.font("Helvetica-Bold").fontSize(13).fillColor("#0d1b2a")
+         .text(String(title).toUpperCase(), MARGIN, 88, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.5 });
+
+      // Filter summary
+      doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
+         .text(filterSummary, MARGIN, 106, { width: PAGE_W - MARGIN * 2, align: "center" });
+
+      // Reason (if included)
+      if (includeReason === "true" && reason && reason.trim()) {
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
+           .text(`Reason: ${String(reason).trim()}`, MARGIN, 118, { width: PAGE_W - MARGIN * 2, align: "center" });
+      }
+
+      // Total count + generated date (top-right corner mini)
+      const metaRight = `Total: ${students.length} student(s) • Generated: ${new Date().toLocaleDateString("en-IN")}`;
+      doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8")
+         .text(metaRight, MARGIN, 66, { width: PAGE_W - MARGIN * 2, align: "right" });
+    };
+
+    // ---- Helper: draw table header row ----
+    const drawTableHeader = (y) => {
+      let x = MARGIN;
+
+      // Row background
+      doc.rect(MARGIN, y, CONTENT_W, HEADER_ROW_H).fill("#0d1b2a");
+
+      finalColumns.forEach(c => {
+        const def = COLUMN_DEFS[c] || { label: c, width: 70, align: "left" };
+        const w = scaledWidths[c];
+
+        doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff")
+           .text(def.label, x + 4, y + 8, { width: w - 8, align: def.align, lineBreak: false });
+
+        // Column separator
+        doc.strokeColor("#c9972b").lineWidth(0.4)
+           .moveTo(x + w, y).lineTo(x + w, y + HEADER_ROW_H).stroke();
+
+        x += w;
+      });
+
+      // Bottom border
+      doc.strokeColor("#c9972b").lineWidth(1)
+         .moveTo(MARGIN, y + HEADER_ROW_H).lineTo(MARGIN + CONTENT_W, y + HEADER_ROW_H).stroke();
+
+      return y + HEADER_ROW_H;
+    };
+
+    // ---- Helper: get cell value as text ----
+    const getCellText = (student, colKey, rowIndex) => {
+      switch (colKey) {
+        case "sl": return String(rowIndex + 1);
+        case "studentId": return student.student_id || "-";
+        case "admissionNumber": return student.admission_number || "-";
+        case "name": return student.name || "-";
+        case "fatherName": return student.father_name || "-";
+        case "motherName": return student.mother_name || "-";
+        case "class": return student.class || "-";
+        case "rollNumber": return student.roll_number || "-";
+        case "session": return student.session || "-";
+        case "gender": return student.gender || "-";
+        case "category": return student.category || "-";
+        case "stream": return student.stream || "Non-Specialized";
+        case "dob": return student.dob ? new Date(student.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-";
+        case "mobile": return student.mobile_number || "-";
+        case "email": return student.email_id || "-";
+        case "aadhar": return student.aadhar_number || "-";
+        case "apaar": return student.apaar_id || "-";
+        case "status": return student.status || "Active";
+        case "address": return student.address || "-";
+        case "photo": return ""; // drawn separately
+        case "signature": return ""; // drawn separately
+        default: return "";
+      }
+    };
+
+    // ---- Draw first page ----
+    let pageNum = 1;
+    doc.addPage();
+    drawHeader(pageNum);
+    let y = TABLE_TOP_OFFSET;
+    let headerY = drawTableHeader(y);
+    y = headerY;
+
+    const ROW_PADDING = 4;
+    const FOOTER_SAFE_Y = PAGE_H - FOOTER_H;
+
+    // ---- Draw each student row ----
+    for (let i = 0; i < students.length; i++) {
+      const s = students[i];
+
+      // Check if new page needed
+      if (y + ROW_H_BASE + 4 > FOOTER_SAFE_Y) {
+        // Draw footer for current page BEFORE adding new
+        drawFooter(pageNum);
+        pageNum++;
+        doc.addPage();
+        drawHeader(pageNum);
+        y = TABLE_TOP_OFFSET;
+        y = drawTableHeader(y);
+      }
+
+      // Row background (alternating)
+      if (i % 2 === 1) {
+        doc.rect(MARGIN, y, CONTENT_W, ROW_H_BASE).fill("#f8fafc");
+      }
+
+      // Row content
+      let x = MARGIN;
+      finalColumns.forEach(c => {
+        const def = COLUMN_DEFS[c] || { label: c, width: 70, align: "left" };
+        const w = scaledWidths[c];
+
+        if (c === "photo" && needPhotos && photoMap[s.id]) {
+          // Draw photo
+          const px = x + (w - 34) / 2;
+          const py = y + (ROW_H_BASE - 38) / 2;
+          try {
+            doc.image(photoMap[s.id], px, py, { fit: [34, 38], align: "center", valign: "center" });
+          } catch (e) {
+            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+               .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
+          }
+        } else if (c === "signature" && needSigs && sigMap[s.id]) {
+          // Draw signature
+          const px = x + (w - 40) / 2;
+          const py = y + (ROW_H_BASE - 20) / 2;
+          try {
+            doc.image(sigMap[s.id], px, py, { fit: [40, 20], align: "center", valign: "center" });
+          } catch (e) {
+            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
+               .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
+          }
+        } else if (c === "photo" || c === "signature") {
+          doc.font("Helvetica").fontSize(7).fillColor("#cbd5e1")
+             .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
+        } else {
+          const text = getCellText(s, c, i);
+          doc.font("Helvetica").fontSize(8).fillColor("#1a2332")
+             .text(text, x + ROW_PADDING, y + (ROW_H_BASE / 2) - 5, {
+               width: w - ROW_PADDING * 2,
+               align: def.align,
+               lineBreak: false,
+               ellipsis: true
+             });
+        }
+
+        // Column separator
+        doc.strokeColor("#e2e8f0").lineWidth(0.3)
+           .moveTo(x + w, y).lineTo(x + w, y + ROW_H_BASE).stroke();
+
+        x += w;
+      });
+
+      // Row bottom border
+      doc.strokeColor("#e2e8f0").lineWidth(0.3)
+         .moveTo(MARGIN, y + ROW_H_BASE).lineTo(MARGIN + CONTENT_W, y + ROW_H_BASE).stroke();
+
+      y += ROW_H_BASE;
+    }
+
+    // ---- Helper: draw page footer ----
+    function drawFooter(pgNum) {
+      const fy = PAGE_H - 28;
+
+      // Gold thin line above footer
+      doc.strokeColor("#c9972b").lineWidth(0.8)
+         .moveTo(MARGIN, fy - 4).lineTo(PAGE_W - MARGIN, fy - 4).stroke();
+
+      // Left: Print date
+      doc.font("Helvetica").fontSize(7.5).fillColor("#64748b")
+         .text(
+           `Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
+           MARGIN, fy + 2,
+           { width: 200, align: "left" }
+         );
+
+      // Center: Signatures
+      const centerW = 400;
+      const centerX = (PAGE_W - centerW) / 2;
+
+      // Class Teacher signature line
+      doc.strokeColor("#94a3b8").lineWidth(0.5)
+         .moveTo(centerX, fy + 12).lineTo(centerX + 120, fy + 12).stroke();
+      doc.font("Helvetica").fontSize(7).fillColor("#475569")
+         .text("Class Teacher", centerX, fy + 14, { width: 120, align: "center" });
+
+      // Principal signature line
+      doc.strokeColor("#94a3b8").lineWidth(0.5)
+         .moveTo(centerX + 160, fy + 12).lineTo(centerX + 280, fy + 12).stroke();
+      doc.font("Helvetica").fontSize(7).fillColor("#475569")
+         .text("Principal", centerX + 160, fy + 14, { width: 120, align: "center" });
+
+      // Right: Page number
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
+         .text(`Page ${pgNum}`, PAGE_W - MARGIN - 100, fy + 2, { width: 100, align: "right" });
+
+      // Bottom watermark line
+      doc.font("Helvetica").fontSize(6).fillColor("#cbd5e1")
+         .text(
+           "GSSS SHILLA OFFICIAL DOCUMENT • This is a computer-generated list. Valid with school seal & signature.",
+           MARGIN, PAGE_H - 12,
+           { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.3 }
+         );
+    }
+
+    // ---- Draw footer on last page ----
+    drawFooter(pageNum);
+
+    // ---- End PDF ----
+    doc.end();
+
+  } catch (err) {
+    console.error("❌ List PDF error:", err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+});
 module.exports = router;
 
-module.exports = router;
+
