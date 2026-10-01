@@ -228,6 +228,131 @@ function validateVerhoeff(num) {
 }
 
 // ============================================================
+// ✅ UNIQUENESS CHECK HELPER (SESSION-WISE)
+// ============================================================
+async function checkUniqueness({
+  studentId,
+  admissionNumber,
+  apaarId,
+  aadharNumber,
+  emailId,
+  class: cls,
+  rollNumber,
+  session,
+  excludeId
+}) {
+  const excludeSql = excludeId ? "AND id != ?" : "";
+  const excludeParams = excludeId ? [excludeId] : [];
+
+  // 1. Student ID — Global
+  if (studentId) {
+    const rows = await q(
+      `SELECT id, name, class, session FROM Nstudent WHERE LOWER(student_id) = LOWER(?) ${excludeSql} LIMIT 1`,
+      [studentId, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "studentId",
+        message: `Student ID "${studentId}" already exists${rows[0].session ? ` (Class ${rows[0].class}, Session ${rows[0].session})` : ""} — ${rows[0].name}`,
+        code: "STUDENT_ID_DUPLICATE",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 2. Admission Number — Global
+  if (admissionNumber) {
+    const rows = await q(
+      `SELECT id, name, class, session FROM Nstudent WHERE LOWER(admission_number) = LOWER(?) ${excludeSql} LIMIT 1`,
+      [admissionNumber, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "admissionNumber",
+        message: `Admission Number "${admissionNumber}" already exists${rows[0].session ? ` (Class ${rows[0].class}, Session ${rows[0].session})` : ""} — ${rows[0].name}`,
+        code: "ADMISSION_NUMBER_DUPLICATE",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 3. APAAR — Global
+  if (apaarId) {
+    const cleaned = String(apaarId).replace(/\s/g, "");
+    const rows = await q(
+      `SELECT id, name, student_id, class, session FROM Nstudent WHERE apaar_id = ? ${excludeSql} LIMIT 1`,
+      [cleaned, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "apaarId",
+        message: `APAAR ID "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        code: "APAAR_ALREADY_REGISTERED",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 4. Aadhaar — Global
+  if (aadharNumber) {
+    const cleaned = normalizeAadhaar(aadharNumber);
+    const rows = await q(
+      `SELECT id, name, student_id, class, session FROM Nstudent WHERE aadhar_number = ? ${excludeSql} LIMIT 1`,
+      [cleaned, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "aadharNumber",
+        message: `Aadhaar "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        code: "AADHAAR_ALREADY_REGISTERED",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 5. Email — Global (max 1)
+  if (emailId) {
+    const cleaned = String(emailId).toLowerCase().trim();
+    const rows = await q(
+      `SELECT id, name, student_id, class, session FROM Nstudent WHERE LOWER(email_id) = ? ${excludeSql} LIMIT 1`,
+      [cleaned, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "emailId",
+        message: `Email "${cleaned}" already registered with ${rows[0].name} (${rows[0].student_id})`,
+        code: "EMAIL_ALREADY_REGISTERED",
+        existing: rows[0]
+      };
+    }
+  }
+
+  // 6. ✅ Roll Number + Class + Session — SESSION-WISE UNIQUE
+  // Ek session me ek class me ek roll number ek hi baar
+  if (rollNumber && cls && session) {
+    const rows = await q(
+      `SELECT id, name, student_id, class, roll_number, session FROM Nstudent 
+       WHERE LOWER(roll_number) = LOWER(?) 
+         AND LOWER(class) = LOWER(?) 
+         AND session = ?
+         ${excludeSql} 
+       LIMIT 1`,
+      [rollNumber, cls, session, ...excludeParams]
+    );
+    if (rows.length) {
+      return {
+        field: "rollNumber",
+        message: `Roll Number "${rollNumber}" already assigned in Class ${cls} (Session ${session}) — ${rows[0].name} (${rows[0].student_id})`,
+        code: "ROLL_NUMBER_DUPLICATE",
+        existing: rows[0]
+      };
+    }
+  }
+
+  return null;
+}
+
+// ============================================================
 // ✅ AUTO-REVERT PROMOTED
 // ============================================================
 async function autoRevertExpiredPromotions() {
@@ -1011,7 +1136,7 @@ router.post("/verify-aadhaar", async (req, res) => {
 });
 
 // ============================================================
-// ✅ PDF PROXY — Cloudinary /raw/ PDF view fix
+// ✅ PDF PROXY
 // ============================================================
 router.get("/proxy-pdf", async (req, res) => {
   try {
@@ -1228,21 +1353,49 @@ router.post(
         return res.status(400).json({ success: false, message: "Email verification expired. Please verify again.", code: "OTP_EXPIRED" });
       }
 
-      const emailDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ?`, [email]);
-      if (emailDup.length >= EMAIL_MAX_STUDENTS) {
-        return res.status(409).json({ success: false, message: `Email already registered with ${emailDup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
-      }
-      const mobileDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ?`, [mobile]);
-      if (mobileDup.length >= MOBILE_MAX_STUDENTS) {
-        return res.status(409).json({ success: false, message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED" });
+      // ✅ UNIQUENESS CHECK (includes session-wise roll number)
+      const conflict = await checkUniqueness({
+        studentId: req.body.studentId,
+        admissionNumber: req.body.admissionNumber,
+        apaarId: req.body.apaarId,
+        aadharNumber: req.body.aadharNumber,
+        emailId: email,
+        class: req.body.class,
+        rollNumber: req.body.rollNumber,
+        session: req.body.session,
+        excludeId: null
+      });
+
+      if (conflict) {
+        if (req.files) {
+          for (const f of DOC_FIELDS) {
+            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
+            }
+          }
+        }
+        return res.status(409).json({
+          success: false,
+          field: conflict.field,
+          code: conflict.code,
+          message: conflict.message,
+          existing: conflict.existing || null
+        });
       }
 
-      const apaarVal = String(req.body.apaarId || "").replace(/\s/g, "");
-      if (apaarVal) {
-        const apaarDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ?`, [apaarVal]);
-        if (apaarDup.length > 0) {
-          return res.status(409).json({ success: false, message: `APAAR ID already registered with ${apaarDup[0].name}`, code: "APAAR_ALREADY_REGISTERED" });
+      const mobileDup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ?`, [mobile]);
+      if (mobileDup.length >= MOBILE_MAX_STUDENTS) {
+        if (req.files) {
+          for (const f of DOC_FIELDS) {
+            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
+            }
+          }
         }
+        return res.status(409).json({
+          success: false, field: "mobileNumber",
+          message: `Mobile already linked to ${MOBILE_MAX_STUDENTS} students`, code: "MOBILE_LIMIT_REACHED"
+        });
       }
 
       const requiredDocs = getRequiredDocs(category);
@@ -1253,6 +1406,13 @@ router.post(
         }
       }
       if (missing.length) {
+        if (req.files) {
+          for (const f of DOC_FIELDS) {
+            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
+            }
+          }
+        }
         return res.status(400).json({ success: false, message: `Missing required documents: ${missing.join(", ")}`, category, requiredDocuments: requiredDocs });
       }
 
@@ -1311,7 +1471,9 @@ router.post(
       });
     } catch (err) {
       console.error("❌ Add Student Error:", err);
-      if (err.code === "ER_DUP_ENTRY") return res.status(400).json({ success: false, message: "Student ID or Admission Number already exists" });
+      if (err.code === "ER_DUP_ENTRY") {
+        return res.status(400).json({ success: false, message: "Duplicate entry — Student ID / Admission Number / Roll Number already exists in this session" });
+      }
       res.status(500).json({ success: false, message: err.message });
     }
   }
@@ -2357,7 +2519,7 @@ router.get("/pin/admin/summary", async (req, res) => {
 });
 
 // ============================================================
-// ✅✅✅ BACKUP & RESTORE SYSTEM ✅✅✅
+// ✅✅✅ BACKUP SYSTEM ✅✅✅
 // ============================================================
 const BACKUP_DIR = path.join(__dirname, "..", "backups");
 const MAX_BACKUPS = 10;
@@ -2392,13 +2554,8 @@ async function createBackup(type = "auto") {
     version: "2.0",
     type: type,
     createdAt: now.toISOString(),
-    stats: {
-      students: students.length,
-      total: students.length
-    },
-    tables: {
-      [BACKUP_TABLE]: students
-    }
+    stats: { students: students.length, total: students.length },
+    tables: { [BACKUP_TABLE]: students }
   };
 
   fs.writeFileSync(filepath, JSON.stringify(backupData, null, 2));
@@ -2407,12 +2564,7 @@ async function createBackup(type = "auto") {
   const stat = fs.statSync(filepath);
   console.log(`[Backup] Created: ${filename} (${students.length} students, ${(stat.size / 1024).toFixed(2)} KB)`);
 
-  return {
-    filename,
-    filepath,
-    size: stat.size,
-    stats: backupData.stats
-  };
+  return { filename, filepath, size: stat.size, stats: backupData.stats };
 }
 
 async function cleanupOldBackups() {
@@ -2428,25 +2580,17 @@ async function cleanupOldBackups() {
     const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
     for (const file of files) {
       if (file.mtime < cutoff) {
-        try {
-          fs.unlinkSync(file.path);
-          console.log(`[Backup] Deleted old: ${file.name}`);
-        } catch (e) {}
+        try { fs.unlinkSync(file.path); console.log(`[Backup] Deleted old: ${file.name}`); } catch (e) {}
       }
     }
 
     const remaining = files.filter(f => f.mtime >= cutoff);
     if (remaining.length > MAX_BACKUPS) {
       for (let i = MAX_BACKUPS; i < remaining.length; i++) {
-        try {
-          fs.unlinkSync(remaining[i].path);
-          console.log(`[Backup] Deleted excess: ${remaining[i].name}`);
-        } catch (e) {}
+        try { fs.unlinkSync(remaining[i].path); console.log(`[Backup] Deleted excess: ${remaining[i].name}`); } catch (e) {}
       }
     }
-  } catch (err) {
-    console.error("[Backup] Cleanup error:", err.message);
-  }
+  } catch (err) { console.error("[Backup] Cleanup error:", err.message); }
 }
 
 async function restoreBackupData(data, mode = "merge") {
@@ -2460,17 +2604,13 @@ async function restoreBackupData(data, mode = "merge") {
 
   if (mode === "replace") {
     await q(`DELETE FROM ${BACKUP_TABLE}`);
-    console.log("[Backup] All students deleted (replace mode)");
   }
 
   const colsResult = await q(`SHOW COLUMNS FROM ${BACKUP_TABLE}`);
   const validColumns = colsResult.map(c => c.Field);
 
   for (const student of students) {
-    if (!student.student_id) {
-      stats.skipped++;
-      continue;
-    }
+    if (!student.student_id) { stats.skipped++; continue; }
 
     const existing = await q(
       `SELECT id FROM ${BACKUP_TABLE} WHERE student_id = ? LIMIT 1`,
@@ -2510,9 +2650,9 @@ async function restoreBackupData(data, mode = "merge") {
   return stats;
 }
 
-// ------------------------------------------------------------
-// ✅ LIST-PDF ROUTE — MUST be before /:id
-// ------------------------------------------------------------
+// ============================================================
+// ✅✅✅ PROFESSIONAL PDF — Album Style (Class-wise, Card Layout)
+// ============================================================
 router.get("/list-pdf", async (req, res) => {
   try {
     const {
@@ -2523,16 +2663,14 @@ router.get("/list-pdf", async (req, res) => {
       status,
       session,
       search,
-      sortBy = "class",
-      order = "asc",
-      includePhoto = "false",
-      includeSignature = "false",
+      includePhoto = "true",
+      includeSignature = "true",
       includeReason = "false",
       reason = "",
-      title = "STUDENT LIST",
-      columns
+      title = "STUDENT LIST"
     } = req.query;
 
+    // Build WHERE
     const where = [];
     const params = [];
     if (cls)      { where.push("class = ?"); params.push(cls); }
@@ -2549,16 +2687,11 @@ router.get("/list-pdf", async (req, res) => {
 
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-    const allowedSort = ["created_at", "name", "class", "roll_number", "admission_date", "admission_number"];
-    const sortCol = allowedSort.includes(sortBy) ? sortBy : "class";
-    const sortDir = order.toLowerCase() === "asc" ? "ASC" : "DESC";
-
-    const orderSql = sortBy === "class"
-      ? `ORDER BY FIELD(class,'Nursery','LKG','UKG','1','2','3','4','5','6','7','8','9','10','11','12') ${sortDir}, roll_number ASC`
-      : `ORDER BY ${sortCol} ${sortDir}, roll_number ASC`;
-
     const students = await q(
-      `SELECT * FROM Nstudent ${whereSql} ${orderSql} LIMIT 2000`,
+      `SELECT * FROM Nstudent ${whereSql}
+       ORDER BY FIELD(class,'Nursery','LKG','UKG','1','2','3','4','5','6','7','8','9','10','11','12') ASC,
+                CAST(roll_number AS UNSIGNED) ASC, name ASC
+       LIMIT 5000`,
       params
     );
 
@@ -2566,6 +2699,7 @@ router.get("/list-pdf", async (req, res) => {
       return res.status(404).json({ success: false, message: "No students found for these filters" });
     }
 
+    // Filter summary
     const filterParts = [];
     if (cls) filterParts.push(`Class: ${cls}`);
     if (session) filterParts.push(`Session: ${session}`);
@@ -2574,73 +2708,29 @@ router.get("/list-pdf", async (req, res) => {
     if (category) filterParts.push(`Category: ${category}`);
     if (status) filterParts.push(`Status: ${status}`);
     if (search) filterParts.push(`Search: "${search}"`);
-    const filterSummary = filterParts.length ? filterParts.join(" • ") : "All Students";
+    const filterSummary = filterParts.length ? filterParts.join("  •  ") : "All Students";
 
-    const defaultColumns = [
-      "sl", "studentId", "admissionNumber", "name", "fatherName",
-      "class", "rollNumber", "session", "gender", "category", "mobile"
-    ];
-    const requestedColumns = columns
-      ? columns.split(",").map(c => c.trim()).filter(Boolean)
-      : defaultColumns;
+    // Group by class
+    const grouped = {};
+    const classOrder = ["Nursery","LKG","UKG","1","2","3","4","5","6","7","8","9","10","11","12"];
+    classOrder.forEach(c => { grouped[c] = []; });
+    grouped["Other"] = [];
 
-    const COLUMN_DEFS = {
-      sl:              { label: "#",           width: 28,  align: "center" },
-      studentId:       { label: "Student ID",  width: 78,  align: "left" },
-      admissionNumber: { label: "Adm. No",     width: 65,  align: "left" },
-      name:            { label: "Name",        width: 130, align: "left" },
-      fatherName:      { label: "Father",      width: 120, align: "left" },
-      motherName:      { label: "Mother",      width: 110, align: "left" },
-      class:           { label: "Class",       width: 45,  align: "center" },
-      rollNumber:      { label: "Roll",        width: 45,  align: "center" },
-      session:         { label: "Session",     width: 60,  align: "center" },
-      gender:          { label: "Gender",      width: 50,  align: "center" },
-      category:        { label: "Category",    width: 58,  align: "center" },
-      stream:          { label: "Stream",      width: 70,  align: "center" },
-      dob:             { label: "DOB",         width: 68,  align: "center" },
-      mobile:          { label: "Mobile",      width: 75,  align: "left" },
-      email:           { label: "Email",       width: 140, align: "left" },
-      aadhar:          { label: "Aadhaar",     width: 100, align: "left" },
-      apaar:           { label: "APAAR ID",    width: 95,  align: "left" },
-      status:          { label: "Status",      width: 60,  align: "center" },
-      address:         { label: "Address",     width: 180, align: "left" },
-      photo:           { label: "Photo",       width: 50,  align: "center" },
-      signature:       { label: "Sign",        width: 60,  align: "center" }
-    };
-
-    const finalColumns = [...requestedColumns];
-    if (includePhoto === "true" && !finalColumns.includes("photo")) {
-      const nameIdx = finalColumns.indexOf("name");
-      if (nameIdx >= 0) finalColumns.splice(nameIdx + 1, 0, "photo");
-      else finalColumns.push("photo");
-    }
-    if (includeSignature === "true" && !finalColumns.includes("signature")) {
-      finalColumns.push("signature");
-    }
-
-    const PAGE_W = 842;
-    const PAGE_H = 595;
-    const MARGIN = 30;
-    const CONTENT_W = PAGE_W - MARGIN * 2;
-    const TABLE_TOP_OFFSET = 130;
-    const FOOTER_H = 40;
-    const ROW_H_BASE = includePhoto === "true" ? 50 : 22;
-    const HEADER_ROW_H = 26;
-
-    let totalColWidth = finalColumns.reduce((sum, c) => sum + (COLUMN_DEFS[c]?.width || 70), 0);
-    const scale = CONTENT_W / totalColWidth;
-    const scaledWidths = {};
-    finalColumns.forEach(c => {
-      scaledWidths[c] = (COLUMN_DEFS[c]?.width || 70) * scale;
+    students.forEach(s => {
+      const key = String(s.class || "Other");
+      if (grouped[key]) grouped[key].push(s);
+      else grouped["Other"].push(s);
     });
 
     const needPhotos = includePhoto === "true";
     const needSigs = includeSignature === "true";
+
+    // Fetch images
     const photoMap = {};
     const sigMap = {};
 
     if (needPhotos || needSigs) {
-      console.log(`[List PDF] Fetching ${students.length} photos/sigs...`);
+      console.log(`[List PDF] Fetching images for ${students.length} students...`);
       await Promise.all(students.map(async (s) => {
         if (needPhotos && s.student_photo_url) {
           try { photoMap[s.id] = await fetchImageBuffer(s.student_photo_url); } catch (e) {}
@@ -2651,208 +2741,396 @@ router.get("/list-pdf", async (req, res) => {
       }));
     }
 
+    // Fetch logo for header + watermark
+    const schoolLogo = await fetchImageBuffer(SCHOOL_LOGO_URL);
+
+    // PDF setup — Landscape A4
     res.setHeader("Content-Type", "application/pdf");
     const safeTitle = String(title).replace(/[^a-zA-Z0-9-_]/g, "_").substring(0, 50);
     res.setHeader("Content-Disposition", `inline; filename="${safeTitle}.pdf"`);
 
+    const PAGE_W = 842;
+    const PAGE_H = 595;
+    const MARGIN = 24;
+    const CONTENT_W = PAGE_W - MARGIN * 2;
+
+    // Header & footer
+    const HEADER_H = 90;
+    const FOOTER_H = 36;
+    const BODY_TOP = HEADER_H + 6;
+    const BODY_BOTTOM = PAGE_H - FOOTER_H - 4;
+    const BODY_H = BODY_BOTTOM - BODY_TOP;
+
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
-      margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
       bufferPages: true,
       autoFirstPage: false
     });
 
     doc.pipe(res);
 
-    const drawHeader = (pageNum) => {
-      const y0 = 15;
+    let pageNum = 0;
 
-      doc.rect(0, 0, PAGE_W, 80).fill("#0d1b2a");
-      doc.rect(0, 78, PAGE_W, 3).fill("#c9972b");
+    // ---- Draw header on current page ----
+    const drawPageHeader = (pageTitle) => {
+      // Top navy band
+      doc.rect(0, 0, PAGE_W, 70).fill("#0d1b2a");
+      // Gold line
+      doc.rect(0, 70, PAGE_W, 3).fill("#c9972b");
 
-      doc.font("Helvetica-Bold").fontSize(16).fillColor("#ffffff")
-         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN, y0 + 8, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.2 });
+      // School logo (small circle top-left)
+      if (schoolLogo) {
+        try {
+          doc.save();
+          doc.circle(MARGIN + 24, 35, 24).fill("#ffffff");
+          doc.circle(MARGIN + 24, 35, 23).lineWidth(1.5).strokeColor("#c9972b").stroke();
+          doc.restore();
+          doc.image(schoolLogo, MARGIN + 4, 15, { fit: [40, 40], align: "center", valign: "center" });
+        } catch (e) {}
+      }
 
-      doc.font("Helvetica").fontSize(8).fillColor("#c9972b")
-         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN, y0 + 28, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.5 });
+      // School name (centered)
+      doc.font("Helvetica-Bold").fontSize(15).fillColor("#ffffff")
+         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN + 60, 14, {
+           width: PAGE_W - MARGIN * 2 - 60,
+           align: "center",
+           characterSpacing: 1
+         });
 
-      doc.font("Helvetica-Bold").fontSize(13).fillColor("#0d1b2a")
-         .text(String(title).toUpperCase(), MARGIN, 88, { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.5 });
+      doc.font("Helvetica").fontSize(7.5).fillColor("#c9972b")
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN + 60, 33, {
+           width: PAGE_W - MARGIN * 2 - 60,
+           align: "center",
+           characterSpacing: 0.5
+         });
 
-      doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
-         .text(filterSummary, MARGIN, 106, { width: PAGE_W - MARGIN * 2, align: "center" });
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#ffffff")
+         .text(String(pageTitle || title).toUpperCase(), MARGIN + 60, 48, {
+           width: PAGE_W - MARGIN * 2 - 60,
+           align: "center",
+           characterSpacing: 1.2
+         });
+
+      // Filter summary band (below header)
+      const summaryY = 78;
+      doc.rect(0, summaryY, PAGE_W, 16).fill("#f1f5f9");
+      doc.font("Helvetica").fontSize(7.5).fillColor("#334155")
+         .text(filterSummary, MARGIN, summaryY + 4, { width: PAGE_W - MARGIN * 2, align: "center" });
 
       if (includeReason === "true" && reason && reason.trim()) {
-        doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
-           .text(`Reason: ${String(reason).trim()}`, MARGIN, 118, { width: PAGE_W - MARGIN * 2, align: "center" });
+        doc.font("Helvetica-Bold").fontSize(8).fillColor("#c9972b")
+           .text(`Reason: ${String(reason).trim()}`, MARGIN, summaryY + 6, { width: PAGE_W - MARGIN * 2, align: "right" });
       }
 
-      const metaRight = `Total: ${students.length} student(s) • Generated: ${new Date().toLocaleDateString("en-IN")}`;
-      doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8")
-         .text(metaRight, MARGIN, 66, { width: PAGE_W - MARGIN * 2, align: "right" });
+      // Total count text (top-right of header, overlay)
+      doc.font("Helvetica").fontSize(7).fillColor("#cbd5e1")
+         .text(`Total: ${students.length}`, PAGE_W - MARGIN - 120, 6, { width: 120, align: "right" });
     };
 
-    const drawTableHeader = (y) => {
-      let x = MARGIN;
-      doc.rect(MARGIN, y, CONTENT_W, HEADER_ROW_H).fill("#0d1b2a");
+    // ---- Draw footer on current page ----
+    const drawPageFooter = () => {
+      const fy = PAGE_H - 26;
 
-      finalColumns.forEach(c => {
-        const def = COLUMN_DEFS[c] || { label: c, width: 70, align: "left" };
-        const w = scaledWidths[c];
-
-        doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff")
-           .text(def.label, x + 4, y + 8, { width: w - 8, align: def.align, lineBreak: false });
-
-        doc.strokeColor("#c9972b").lineWidth(0.4)
-           .moveTo(x + w, y).lineTo(x + w, y + HEADER_ROW_H).stroke();
-
-        x += w;
-      });
-
-      doc.strokeColor("#c9972b").lineWidth(1)
-         .moveTo(MARGIN, y + HEADER_ROW_H).lineTo(MARGIN + CONTENT_W, y + HEADER_ROW_H).stroke();
-
-      return y + HEADER_ROW_H;
-    };
-
-    const getCellText = (student, colKey, rowIndex) => {
-      switch (colKey) {
-        case "sl": return String(rowIndex + 1);
-        case "studentId": return student.student_id || "-";
-        case "admissionNumber": return student.admission_number || "-";
-        case "name": return student.name || "-";
-        case "fatherName": return student.father_name || "-";
-        case "motherName": return student.mother_name || "-";
-        case "class": return student.class || "-";
-        case "rollNumber": return student.roll_number || "-";
-        case "session": return student.session || "-";
-        case "gender": return student.gender || "-";
-        case "category": return student.category || "-";
-        case "stream": return student.stream || "Non-Specialized";
-        case "dob": return student.dob ? new Date(student.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-";
-        case "mobile": return student.mobile_number || "-";
-        case "email": return student.email_id || "-";
-        case "aadhar": return student.aadhar_number || "-";
-        case "apaar": return student.apaar_id || "-";
-        case "status": return student.status || "Active";
-        case "address": return student.address || "-";
-        default: return "";
-      }
-    };
-
-    let pageNum = 1;
-    doc.addPage();
-    drawHeader(pageNum);
-    let y = TABLE_TOP_OFFSET;
-    y = drawTableHeader(y);
-
-    const ROW_PADDING = 4;
-    const FOOTER_SAFE_Y = PAGE_H - FOOTER_H;
-
-    const drawFooter = (pgNum) => {
-      const fy = PAGE_H - 28;
-
+      // Gold line
       doc.strokeColor("#c9972b").lineWidth(0.8)
          .moveTo(MARGIN, fy - 4).lineTo(PAGE_W - MARGIN, fy - 4).stroke();
 
-      doc.font("Helvetica").fontSize(7.5).fillColor("#64748b")
+      // Left: date
+      doc.font("Helvetica").fontSize(7).fillColor("#64748b")
          .text(
            `Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
-           MARGIN, fy + 2,
-           { width: 200, align: "left" }
+           MARGIN, fy + 2, { width: 200, align: "left" }
          );
 
-      const centerW = 400;
-      const centerX = (PAGE_W - centerW) / 2;
+      // Center: Signature lines
+      const cx = (PAGE_W - 360) / 2;
+      doc.strokeColor("#94a3b8").lineWidth(0.5)
+         .moveTo(cx, fy + 8).lineTo(cx + 100, fy + 8).stroke();
+      doc.font("Helvetica").fontSize(6.5).fillColor("#475569")
+         .text("Class Teacher", cx, fy + 10, { width: 100, align: "center" });
 
       doc.strokeColor("#94a3b8").lineWidth(0.5)
-         .moveTo(centerX, fy + 12).lineTo(centerX + 120, fy + 12).stroke();
-      doc.font("Helvetica").fontSize(7).fillColor("#475569")
-         .text("Class Teacher", centerX, fy + 14, { width: 120, align: "center" });
+         .moveTo(cx + 140, fy + 8).lineTo(cx + 240, fy + 8).stroke();
+      doc.font("Helvetica").fontSize(6.5).fillColor("#475569")
+         .text("Principal", cx + 140, fy + 10, { width: 100, align: "center" });
 
-      doc.strokeColor("#94a3b8").lineWidth(0.5)
-         .moveTo(centerX + 160, fy + 12).lineTo(centerX + 280, fy + 12).stroke();
-      doc.font("Helvetica").fontSize(7).fillColor("#475569")
-         .text("Principal", centerX + 160, fy + 14, { width: 120, align: "center" });
+      // Right: page number
+      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#0d1b2a")
+         .text(`Page ${pageNum}`, PAGE_W - MARGIN - 100, fy + 2, { width: 100, align: "right" });
 
-      doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
-         .text(`Page ${pgNum}`, PAGE_W - MARGIN - 100, fy + 2, { width: 100, align: "right" });
-
-      doc.font("Helvetica").fontSize(6).fillColor("#cbd5e1")
-         .text(
-           "GSSS SHILLA OFFICIAL DOCUMENT • This is a computer-generated list. Valid with school seal & signature.",
-           MARGIN, PAGE_H - 12,
-           { width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.3 }
-         );
+      // Watermark footer text
+      doc.font("Helvetica").fontSize(5.5).fillColor("#cbd5e1")
+         .text("GSSS SHILLA — OFFICIAL DOCUMENT", MARGIN, PAGE_H - 10, {
+           width: PAGE_W - MARGIN * 2,
+           align: "center",
+           characterSpacing: 0.5
+         });
     };
 
-    for (let i = 0; i < students.length; i++) {
-      const s = students[i];
+    // ---- Watermark (school logo) on current page ----
+    const drawWatermark = () => {
+      if (!schoolLogo) return;
+      try {
+        doc.save();
+        doc.opacity(0.04);
+        const size = 400;
+        doc.image(schoolLogo, (PAGE_W - size) / 2, (PAGE_H - size) / 2, { width: size, height: size });
+        doc.restore();
+      } catch (e) {}
+    };
 
-      if (y + ROW_H_BASE + 4 > FOOTER_SAFE_Y) {
-        drawFooter(pageNum);
-        pageNum++;
-        doc.addPage();
-        drawHeader(pageNum);
-        y = TABLE_TOP_OFFSET;
-        y = drawTableHeader(y);
+    // ---- Add a new page (with header, footer, watermark) ----
+    const addPage = (pageTitle) => {
+      doc.addPage();
+      pageNum++;
+      // Watermark first (bottom layer)
+      drawWatermark();
+      // Header
+      drawPageHeader(pageTitle);
+    };
+
+    // ============================================================
+    // Card Layout Config
+    // ============================================================
+    // Cards grid: 2 columns × N rows
+    const GRID_COLS = 2;
+    const GRID_GAP = 8;
+    const CARD_W = (CONTENT_W - (GRID_COLS - 1) * GRID_GAP) / GRID_COLS;
+    const CARD_H = 132; // height per card
+    const CARDS_TOP = BODY_TOP + 4;
+
+    // Rows per page
+    const CARD_ROWS_PER_PAGE = Math.floor((BODY_H - 8) / (CARD_H + GRID_GAP));
+
+    // Section title height
+    const SECTION_TITLE_H = 20;
+
+    // ============================================================
+    // Draw a single student card
+    // ============================================================
+    const drawStudentCard = (s, x, y, idx) => {
+      // Card background
+      doc.rect(x, y, CARD_W, CARD_H).fillAndStroke("#ffffff", "#e2e8f0");
+
+      // Left gold accent bar
+      doc.rect(x, y, 3, CARD_H).fill("#c9972b");
+
+      // Photo box (left)  — 60x72
+      const PHOTO_W = 58;
+      const PHOTO_H = 68;
+      const PHOTO_X = x + 12;
+      const PHOTO_Y = y + 10;
+
+      // Photo border + background
+      doc.rect(PHOTO_X, PHOTO_Y, PHOTO_W, PHOTO_H).fillAndStroke("#f8fafc", "#c9972b");
+
+      if (needPhotos && photoMap[s.id]) {
+        try {
+          doc.image(photoMap[s.id], PHOTO_X + 1.5, PHOTO_Y + 1.5, {
+            fit: [PHOTO_W - 3, PHOTO_H - 3],
+            align: "center",
+            valign: "center"
+          });
+        } catch (e) {
+          doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+             .text("No Photo", PHOTO_X, PHOTO_Y + PHOTO_H / 2 - 3, { width: PHOTO_W, align: "center" });
+        }
+      } else {
+        doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+           .text("No Photo", PHOTO_X, PHOTO_Y + PHOTO_H / 2 - 3, { width: PHOTO_W, align: "center" });
       }
 
-      if (i % 2 === 1) {
-        doc.rect(MARGIN, y, CONTENT_W, ROW_H_BASE).fill("#f8fafc");
+      // Signature box (below photo)
+      const SIG_W = 58;
+      const SIG_H = 22;
+      const SIG_X = PHOTO_X;
+      const SIG_Y = PHOTO_Y + PHOTO_H + 4;
+
+      doc.rect(SIG_X, SIG_Y, SIG_W, SIG_H).fillAndStroke("#fef8ed", "#c9972b");
+      if (needSigs && sigMap[s.id]) {
+        try {
+          doc.image(sigMap[s.id], SIG_X + 1.5, SIG_Y + 1.5, {
+            fit: [SIG_W - 3, SIG_H - 3],
+            align: "center",
+            valign: "center"
+          });
+        } catch (e) {
+          doc.font("Helvetica").fontSize(5.5).fillColor("#94a3b8")
+             .text("No Sign", SIG_X, SIG_Y + SIG_H / 2 - 2.5, { width: SIG_W, align: "center" });
+        }
+      } else {
+        doc.font("Helvetica").fontSize(5.5).fillColor("#94a3b8")
+           .text("No Sign", SIG_X, SIG_Y + SIG_H / 2 - 2.5, { width: SIG_W, align: "center" });
       }
 
-      let x = MARGIN;
-      finalColumns.forEach(c => {
-        const def = COLUMN_DEFS[c] || { label: c, width: 70, align: "left" };
-        const w = scaledWidths[c];
+      // Right side (details)
+      const INFO_X = PHOTO_X + PHOTO_W + 10;
+      const INFO_W = CARD_W - (INFO_X - x) - 8;
+      let iy = y + 8;
 
-        if (c === "photo" && needPhotos && photoMap[s.id]) {
-          const px = x + (w - 34) / 2;
-          const py = y + (ROW_H_BASE - 38) / 2;
-          try {
-            doc.image(photoMap[s.id], px, py, { fit: [34, 38], align: "center", valign: "center" });
-          } catch (e) {
-            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
-               .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
-          }
-        } else if (c === "signature" && needSigs && sigMap[s.id]) {
-          const px = x + (w - 40) / 2;
-          const py = y + (ROW_H_BASE - 20) / 2;
-          try {
-            doc.image(sigMap[s.id], px, py, { fit: [40, 20], align: "center", valign: "center" });
-          } catch (e) {
-            doc.font("Helvetica").fontSize(7).fillColor("#94a3b8")
-               .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
-          }
-        } else if (c === "photo" || c === "signature") {
-          doc.font("Helvetica").fontSize(7).fillColor("#cbd5e1")
-             .text("N/A", x, y + ROW_H_BASE / 2 - 4, { width: w, align: "center" });
-        } else {
-          const text = getCellText(s, c, i);
-          doc.font("Helvetica").fontSize(8).fillColor("#1a2332")
-             .text(text, x + ROW_PADDING, y + (ROW_H_BASE / 2) - 5, {
-               width: w - ROW_PADDING * 2,
-               align: def.align,
-               lineBreak: false,
-               ellipsis: true
+      // Serial number circle
+      doc.circle(x + CARD_W - 14, y + 12, 8).fill("#0d1b2a");
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#ffffff")
+         .text(String(idx + 1), x + CARD_W - 22, y + 9, { width: 16, align: "center" });
+
+      // Name (bold)
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0d1b2a")
+         .text(String(s.name || "—").toUpperCase(), INFO_X, iy, { width: INFO_W - 24, lineBreak: false, ellipsis: true });
+      iy += 13;
+
+      // Class + Roll + Session chip
+      const chipY = iy;
+      const chipText = `Class ${s.class || "-"}  ·  Roll ${s.roll_number || "-"}  ·  ${s.session || "-"}`;
+      doc.roundedRect(INFO_X, chipY, INFO_W - 24, 12, 3).fill("#fef8ed");
+      doc.font("Helvetica-Bold").fontSize(7).fillColor("#92400e")
+         .text(chipText, INFO_X + 4, chipY + 3, { width: INFO_W - 32, lineBreak: false, ellipsis: true });
+      iy = chipY + 16;
+
+      // Two-column info rows
+      const rowH = 11;
+      const halfW = (INFO_W - 24) / 2;
+
+      const drawRow = (label, value, col) => {
+        const lx = INFO_X + col * halfW;
+        doc.font("Helvetica-Bold").fontSize(6.5).fillColor("#64748b")
+           .text(label + ":", lx, iy, { width: 42, lineBreak: false });
+        doc.font("Helvetica").fontSize(7).fillColor("#1a2332")
+           .text(String(value || "—"), lx + 44, iy, { width: halfW - 46, lineBreak: false, ellipsis: true });
+      };
+
+      // Row 1
+      drawRow("ID", s.student_id, 0);
+      drawRow("Adm", s.admission_number, 1);
+      iy += rowH;
+
+      // Row 2
+      drawRow("Father", s.father_name, 0);
+      drawRow("Mother", s.mother_name, 1);
+      iy += rowH;
+
+      // Row 3
+      drawRow("DOB", s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—", 0);
+      drawRow("Gender", s.gender, 1);
+      iy += rowH;
+
+      // Row 4
+      drawRow("Category", s.category, 0);
+      drawRow("Stream", s.stream || "Non-Specialized", 1);
+      iy += rowH;
+
+      // Row 5
+      drawRow("Mobile", s.mobile_number, 0);
+      drawRow("Status", s.status || "Active", 1);
+    };
+
+    // ============================================================
+    // Main rendering loop — class-wise sections with cards
+    // ============================================================
+    const allClasses = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
+
+    // Compute positions
+    let cursorY = CARDS_TOP;
+    let colIdx = 0;
+    let rowIdx = 0;
+    let firstSection = true;
+
+    // Start with a page
+    addPage(title);
+
+    const ensureSpace = (neededH) => {
+      if (cursorY + neededH > BODY_BOTTOM) {
+        drawPageFooter();
+        addPage(title);
+        cursorY = CARDS_TOP;
+        colIdx = 0;
+        rowIdx = 0;
+      }
+    };
+
+    // A student needs a card. Cards fit in grid 2 columns.
+    // If a section title needs to be drawn, ensure space for title + at least 1 card.
+
+    allClasses.forEach((className) => {
+      const classStudents = grouped[className];
+
+      // Section header
+      ensureSpace(SECTION_TITLE_H + CARD_H + 4);
+
+      // Draw class title bar
+      const barY = cursorY;
+      doc.rect(MARGIN, barY, CONTENT_W, SECTION_TITLE_H - 4).fill("#0d1b2a");
+      doc.rect(MARGIN, barY, 5, SECTION_TITLE_H - 4).fill("#c9972b");
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff")
+         .text(`CLASS: ${className}`, MARGIN + 10, barY + 3, {
+           width: CONTENT_W - 100,
+           align: "left",
+           characterSpacing: 1
+         });
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#c9972b")
+         .text(`${classStudents.length} Student${classStudents.length > 1 ? "s" : ""}`, MARGIN, barY + 3, {
+           width: CONTENT_W - 10,
+           align: "right"
+         });
+
+      cursorY += SECTION_TITLE_H;
+
+      // Reset grid for new section
+      colIdx = 0;
+      rowIdx = 0;
+
+      // Draw each student's card
+      for (let i = 0; i < classStudents.length; i++) {
+        const s = classStudents[i];
+
+        // Compute position
+        const col = colIdx;
+        const row = rowIdx;
+
+        const x = MARGIN + col * (CARD_W + GRID_GAP);
+        const y = cursorY + row * (CARD_H + GRID_GAP);
+
+        // If card doesn't fit in current page → new page
+        if (y + CARD_H > BODY_BOTTOM) {
+          drawPageFooter();
+          addPage(title);
+          cursorY = CARDS_TOP;
+          colIdx = 0;
+          rowIdx = 0;
+          // Redraw section header on new page
+          doc.rect(MARGIN, cursorY, CONTENT_W, SECTION_TITLE_H - 4).fill("#0d1b2a");
+          doc.rect(MARGIN, cursorY, 5, SECTION_TITLE_H - 4).fill("#c9972b");
+          doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff")
+             .text(`CLASS: ${className} (contd.)`, MARGIN + 10, cursorY + 3, {
+               width: CONTENT_W - 100, align: "left", characterSpacing: 1
              });
+          cursorY += SECTION_TITLE_H;
         }
 
-        doc.strokeColor("#e2e8f0").lineWidth(0.3)
-           .moveTo(x + w, y).lineTo(x + w, y + ROW_H_BASE).stroke();
+        const finalX = MARGIN + colIdx * (CARD_W + GRID_GAP);
+        const finalY = cursorY + rowIdx * (CARD_H + GRID_GAP);
 
-        x += w;
-      });
+        drawStudentCard(s, finalX, finalY, i);
 
-      doc.strokeColor("#e2e8f0").lineWidth(0.3)
-         .moveTo(MARGIN, y + ROW_H_BASE).lineTo(MARGIN + CONTENT_W, y + ROW_H_BASE).stroke();
+        // Advance grid
+        colIdx++;
+        if (colIdx >= GRID_COLS) {
+          colIdx = 0;
+          rowIdx++;
+        }
+      }
 
-      y += ROW_H_BASE;
-    }
+      // After section: advance cursor by full rows used
+      const rowsUsed = Math.ceil(classStudents.length / GRID_COLS);
+      cursorY += rowsUsed * (CARD_H + GRID_GAP);
+      colIdx = 0;
+      rowIdx = 0;
+      cursorY += 4; // small gap between sections
+    });
 
-    drawFooter(pageNum);
+    // Final footer
+    drawPageFooter();
 
     doc.end();
 
@@ -2864,10 +3142,9 @@ router.get("/list-pdf", async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------
-// BACKUP ROUTES
-// ------------------------------------------------------------
-
+// ============================================================
+// ✅ BACKUP ROUTES
+// ============================================================
 router.get("/backup/list", verifyBackupAuth, async (req, res) => {
   try {
     const files = fs.readdirSync(BACKUP_DIR)
@@ -2913,17 +3190,14 @@ router.post("/backup/create", verifyBackupAuth, async (req, res) => {
 router.get("/backup/download/:filename", verifyBackupAuth, async (req, res) => {
   try {
     const filename = req.params.filename;
-
     if (!filename.startsWith("backup_") || !filename.endsWith(".json") ||
         filename.includes("..") || filename.includes("/")) {
       return res.status(400).json({ success: false, message: "Invalid filename" });
     }
-
     const filepath = path.join(BACKUP_DIR, filename);
     if (!fs.existsSync(filepath)) {
       return res.status(404).json({ success: false, message: "Backup not found" });
     }
-
     res.download(filepath, filename);
   } catch (err) {
     if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
@@ -2955,21 +3229,14 @@ router.post("/backup/restore/:filename", verifyBackupAuth, async (req, res) => {
         filename.includes("..") || filename.includes("/")) {
       return res.status(400).json({ success: false, message: "Invalid filename" });
     }
-
     const filepath = path.join(BACKUP_DIR, filename);
     if (!fs.existsSync(filepath)) {
       return res.status(404).json({ success: false, message: "Backup not found" });
     }
-
     const data = JSON.parse(fs.readFileSync(filepath, "utf8"));
     const mode = req.body.mode === "replace" ? "replace" : "merge";
 
-    try {
-      await createBackup("prebak");
-      console.log("[Backup] Safety backup created before restore");
-    } catch (e) {
-      console.warn("[Backup] Safety backup failed:", e.message);
-    }
+    try { await createBackup("prebak"); } catch (e) {}
 
     const stats = await restoreBackupData(data, mode);
 
@@ -2993,29 +3260,21 @@ router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("bac
     if (!req.file) {
       return res.status(400).json({ success: false, message: "No file uploaded" });
     }
-
     let data;
     try {
       data = JSON.parse(req.file.buffer.toString("utf8"));
     } catch (e) {
       return res.status(400).json({ success: false, message: "Invalid JSON file" });
     }
-
     if (!data.tables || !data.tables[BACKUP_TABLE]) {
       return res.status(400).json({
         success: false,
         message: `Backup file must contain "${BACKUP_TABLE}" table data`
       });
     }
-
     const mode = req.body.mode === "replace" ? "replace" : "merge";
 
-    try {
-      await createBackup("prebak");
-      console.log("[Backup] Safety backup created before upload-restore");
-    } catch (e) {
-      console.warn("[Backup] Safety backup failed:", e.message);
-    }
+    try { await createBackup("prebak"); } catch (e) {}
 
     const stats = await restoreBackupData(data, mode);
 
@@ -3034,7 +3293,7 @@ router.post("/backup/restore-upload", verifyBackupAuth, backupUpload.single("bac
   }
 });
 
-// Cron: Daily 2 AM IST auto-backup
+// Cron: 2 AM IST daily backup
 cron.schedule("0 2 * * *", async () => {
   console.log("[Cron] Running daily 2 AM backup...");
   try {
@@ -3080,14 +3339,19 @@ router.put(
       const newEmail = String(req.body.emailId || existing.email_id || "").toLowerCase().trim();
       const newMobile = String(req.body.mobileNumber || existing.mobile_number || "").trim();
       const newApaar = String(req.body.apaarId || existing.apaar_id || "").replace(/\s/g, "");
+      const newAadhaar = req.body.aadharNumber !== undefined
+        ? normalizeAadhaar(req.body.aadharNumber)
+        : existing.aadhar_number;
+      const newStudentId = String(req.body.studentId || existing.student_id || "").trim();
+      const newAdmissionNumber = String(req.body.admissionNumber || existing.admission_number || "").trim();
+      const newClass = String(req.body.class || existing.class || "").trim();
+      const newRollNumber = String(req.body.rollNumber || existing.roll_number || "").trim();
+      const newSession = String(req.body.session || existing.session || "").trim();
 
       const emailChanged = newEmail !== (existing.email_id || "").toLowerCase().trim();
       const mobileChanged = newMobile !== (existing.mobile_number || "").trim();
-      const apaarChanged = newApaar !== (existing.apaar_id || "").replace(/\s/g, "").trim();
 
       if (emailChanged) {
-        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE LOWER(email_id) = ? AND id != ?`, [newEmail, id]);
-        if (dup.length >= EMAIL_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Email already registered with ${dup[0].name}`, code: "EMAIL_ALREADY_REGISTERED" });
         const v = await q(`SELECT id FROM student_otps WHERE type='email' AND target=? AND verified=1 AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR) LIMIT 1`, [newEmail]);
         if (!v.length) return res.status(400).json({ success: false, message: "New email must be OTP-verified", code: "EMAIL_NOT_VERIFIED" });
       }
@@ -3095,9 +3359,35 @@ router.put(
         const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE mobile_number = ? AND id != ?`, [newMobile, id]);
         if (dup.length >= MOBILE_MAX_STUDENTS) return res.status(409).json({ success: false, message: `Mobile limit reached`, code: "MOBILE_LIMIT_REACHED" });
       }
-      if (apaarChanged && newApaar) {
-        const dup = await q(`SELECT id, name, student_id FROM Nstudent WHERE apaar_id = ? AND id != ?`, [newApaar, id]);
-        if (dup.length > 0) return res.status(409).json({ success: false, message: `APAAR ID already registered`, code: "APAAR_ALREADY_REGISTERED" });
+
+      // ✅ UNIQUENESS CHECK (includes session-wise roll number)
+      const conflict = await checkUniqueness({
+        studentId: newStudentId !== existing.student_id ? newStudentId : null,
+        admissionNumber: newAdmissionNumber !== existing.admission_number ? newAdmissionNumber : null,
+        apaarId: newApaar !== (existing.apaar_id || "").replace(/\s/g, "") ? newApaar : null,
+        aadharNumber: newAadhaar !== existing.aadhar_number ? newAadhaar : null,
+        emailId: emailChanged ? newEmail : null,
+        class: newClass,
+        rollNumber: newRollNumber,
+        session: newSession,
+        excludeId: Number(id)
+      });
+
+      if (conflict) {
+        if (req.files) {
+          for (const f of DOC_FIELDS) {
+            if (req.files[f] && req.files[f][0] && req.files[f][0].filename) {
+              try { await cloudinary.uploader.destroy(req.files[f][0].filename); } catch (e) {}
+            }
+          }
+        }
+        return res.status(409).json({
+          success: false,
+          field: conflict.field,
+          code: conflict.code,
+          message: conflict.message,
+          existing: conflict.existing || null
+        });
       }
 
       const finalCategory = req.body.category || existing.category;
@@ -3175,7 +3465,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ============================================================
-// ✅ STUDENT PDF (full admission record)
+// ✅ STUDENT PDF (single admission record)
 // ============================================================
 router.get("/:id/pdf", async (req, res) => {
   try {
