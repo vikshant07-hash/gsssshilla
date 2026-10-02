@@ -2,7 +2,12 @@
 // SCHOOL EXAMINATION & RESULT MANAGEMENT SYSTEM
 // Complete Production Backend — resultRoutes.js
 // 4-Table + 2-Backup Design
-// Uses existing Nstudent table (read-only reference)
+//
+// ✅ Nstudent is the SINGLE SOURCE OF TRUTH for all student data
+//    (class, section, stream, session, photo, etc.)
+// ✅ erp_* tables only store config, exams, marks, results
+// ✅ Permanent snapshots in backup tables (survive everything)
+// ✅ No student data duplication
 // ============================================================
 
 const express = require("express");
@@ -12,7 +17,6 @@ const db = require("../config/db");
 // ============================================================
 // CORE UTILITIES
 // ============================================================
-
 const q = (sql, params = []) => db.query(sql, params);
 const asyncHandler = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
@@ -33,23 +37,6 @@ const log = {
 // ============================================================
 // CONSTANTS
 // ============================================================
-
-const MASTER_TYPES = {
-    SESSION: "SESSION",
-    CLASS: "CLASS",
-    SECTION: "SECTION",
-    STREAM: "STREAM",
-    SUBJECT: "SUBJECT",
-    CLASS_SUBJECT: "CLASS_SUBJECT",
-    EXAM_TEMPLATE: "EXAM_TEMPLATE",
-    EXAM_TEMPLATE_ITEM: "EXAM_TEMPLATE_ITEM",
-    GRADING_SCHEME: "GRADING_SCHEME",
-    GRADING_ITEM: "GRADING_ITEM",
-    ASSESSMENT_POLICY: "ASSESSMENT_POLICY",
-    ASSESSMENT_POLICY_ITEM: "ASSESSMENT_POLICY_ITEM",
-    SETTING: "SETTING"
-};
-
 const EXAM_STATUS = {
     DRAFT: "DRAFT",
     IN_PROGRESS: "IN_PROGRESS",
@@ -60,28 +47,14 @@ const EXAM_STATUS = {
     UNPUBLISHED: "UNPUBLISHED"
 };
 
-const MARKS_STATUS = {
-    DRAFT: "DRAFT",
-    SUBMITTED: "SUBMITTED",
-    VERIFIED: "VERIFIED",
-    FINALIZED: "FINALIZED",
-    PUBLISHED: "PUBLISHED",
-    UNPUBLISHED: "UNPUBLISHED",
-    ACTIVE: "ACTIVE",
-    INACTIVE: "INACTIVE",
-    REJECTED: "REJECTED"
-};
-
 const ABSENT_TYPES = ["Present", "Absent", "Medical", "Not_Appeared", "Withheld"];
 const VALID_CLASS_GROUPS = ["PRIMARY", "MIDDLE", "SECONDARY", "SENIOR"];
-
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 200;
 
 // ============================================================
-// HELPERS — VALIDATION & PARSING
+// VALIDATION HELPERS
 // ============================================================
-
 function requireFields(body, fields) {
     const missing = [];
     for (const f of fields) {
@@ -112,20 +85,12 @@ function parsePagination(query) {
 function safeJSONParse(raw, fallback = null) {
     if (raw === null || raw === undefined || raw === "") return fallback;
     if (typeof raw === "object") return raw;
-    try {
-        return JSON.parse(raw);
-    } catch (e) {
-        return fallback;
-    }
+    try { return JSON.parse(raw); } catch (e) { return fallback; }
 }
 
 function safeJSONStringify(obj) {
     if (obj === null || obj === undefined) return null;
-    try {
-        return JSON.stringify(obj);
-    } catch (e) {
-        return null;
-    }
+    try { return JSON.stringify(obj); } catch (e) { return null; }
 }
 
 function trimStr(v, maxLen = 500) {
@@ -147,10 +112,15 @@ function toInt(v) {
     return isNaN(n) ? null : n;
 }
 
-// ============================================================
-// HELPER — USER CONTEXT (from auth middleware)
-// ============================================================
+function toFloatSafe(v) {
+    if (v === null || v === undefined || v === "") return 0;
+    const n = parseFloat(v);
+    return isNaN(n) ? 0 : n;
+}
 
+// ============================================================
+// USER CONTEXT (from auth middleware)
+// ============================================================
 function getUserContext(req) {
     const u = req.user || req.admin || {};
     return {
@@ -165,7 +135,6 @@ function getUserContext(req) {
 // ============================================================
 // AUDIT LOGGING
 // ============================================================
-
 async function auditLog({
     action, entity_type, entity_id = null,
     student_id = null, session_id = null, exam_id = null, subject_id = null,
@@ -194,16 +163,204 @@ async function auditLog({
 }
 
 // ============================================================
+// ✅ STUDENT DATA — SINGLE SOURCE OF TRUTH: Nstudent
+// ============================================================
+/**
+ * Fetch complete student data from Nstudent table.
+ * This is the ONLY function that reads student details.
+ * Class, section, stream, session — sab Nstudent se aata hai.
+ */
+async function getStudentFromNstudent(studentId) {
+    const rows = await q(`
+        SELECT
+            id, student_id, admission_number, apaar_id,
+            name, father_name, mother_name, dob, gender, category,
+            class, section, stream, session, roll_number,
+            student_photo_url AS photo,
+            signature_url,
+            aadhar_number,
+            mobile_number, email_id,
+            status,
+            address, village, post_office, tehsil, district, state, pincode,
+            promoted_from, promotion_date
+        FROM Nstudent
+        WHERE student_id = ?
+        LIMIT 1
+    `, [studentId]);
+
+    if (rows.length === 0) {
+        throw new Error(`Student not found: ${studentId}`);
+    }
+    return rows[0];
+}
+
+/**
+ * Resolve class_id, section_id, stream_id, session_id
+ * from erp_master using the student's class/session values.
+ * Fallback graceful — agar match nahi mila to null return.
+ */
+async function resolveMasterIdsFromStudent(student, sessionId = null) {
+    const result = {
+        class_id: null,
+        section_id: null,
+        stream_id: null,
+        session_id: sessionId || null
+    };
+
+    // Class
+    if (student.class) {
+        const cls = await q(
+            `SELECT id FROM erp_master WHERE master_type = 'CLASS' AND master_key = ? LIMIT 1`,
+            [String(student.class)]
+        );
+        if (cls.length) result.class_id = cls[0].id;
+    }
+
+    // Section
+    if (student.section && result.class_id) {
+        const sec = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'SECTION' AND parent_id = ? AND master_key = ? LIMIT 1`,
+            [result.class_id, String(student.section)]
+        );
+        if (sec.length) result.section_id = sec[0].id;
+    }
+
+    // Stream
+    if (student.stream) {
+        const str = await q(
+            `SELECT id FROM erp_master WHERE master_type = 'STREAM' AND master_key = ? LIMIT 1`,
+            [String(student.stream).toUpperCase()]
+        );
+        if (str.length) result.stream_id = str[0].id;
+    }
+
+    // Session
+    if (!result.session_id && student.session) {
+        const ses = await q(
+            `SELECT id FROM erp_master WHERE master_type = 'SESSION' AND master_key = ? LIMIT 1`,
+            [String(student.session)]
+        );
+        if (ses.length) result.session_id = ses[0].id;
+    }
+
+    return result;
+}
+
+// ============================================================
+// GRADING HELPERS
+// ============================================================
+let _gradeCache = { scheme_id: null, items: null, ts: 0 };
+
+async function getGradingItems(schemeId = null) {
+    const now = Date.now();
+    if (_gradeCache.items && _gradeCache.scheme_id === schemeId && (now - _gradeCache.ts) < 60000) {
+        return _gradeCache.items;
+    }
+
+    let scheme;
+    if (schemeId) {
+        const rows = await q(
+            `SELECT id FROM erp_master WHERE id = ? AND master_type = 'GRADING_SCHEME' LIMIT 1`,
+            [schemeId]
+        );
+        scheme = rows[0];
+    } else {
+        const rows = await q(
+            `SELECT id FROM erp_master WHERE master_type = 'GRADING_SCHEME' 
+             AND (data->>'$.is_default' = 'true' OR data->>'$.is_default' = '1') LIMIT 1`
+        );
+        scheme = rows[0];
+        if (!scheme) {
+            const rows2 = await q(
+                `SELECT id FROM erp_master WHERE master_type = 'GRADING_SCHEME' 
+                 ORDER BY display_order ASC LIMIT 1`
+            );
+            scheme = rows2[0];
+        }
+    }
+
+    if (!scheme) return getDefaultGrading();
+
+    const items = await q(`
+        SELECT master_key, name, data
+        FROM erp_master
+        WHERE master_type = 'GRADING_ITEM' AND parent_id = ? AND is_active = 1
+        ORDER BY display_order ASC
+    `, [scheme.id]);
+
+    if (items.length === 0) return getDefaultGrading();
+
+    const parsed = items.map(i => {
+        const d = safeJSONParse(i.data, {});
+        return {
+            min: parseFloat(d.min_percent ?? 0),
+            max: parseFloat(d.max_percent ?? 100),
+            grade: i.name || i.master_key,
+            grade_point: parseFloat(d.grade_point ?? 0)
+        };
+    });
+
+    _gradeCache = { scheme_id: scheme.id, items: parsed, ts: now };
+    return parsed;
+}
+
+function getDefaultGrading() {
+    return [
+        { min: 90, max: 100, grade: "A+", grade_point: 10 },
+        { min: 80, max: 89.99, grade: "A", grade_point: 9 },
+        { min: 70, max: 79.99, grade: "B+", grade_point: 8 },
+        { min: 60, max: 69.99, grade: "B", grade_point: 7 },
+        { min: 50, max: 59.99, grade: "C", grade_point: 6 },
+        { min: 40, max: 49.99, grade: "D", grade_point: 5 },
+        { min: 0, max: 39.99, grade: "E", grade_point: 0 }
+    ];
+}
+
+async function calculateGrade(percentage) {
+    const items = await getGradingItems();
+    for (const g of items) {
+        if (percentage >= g.min && percentage <= g.max) return g.grade;
+    }
+    return "E";
+}
+
+function getGradeSync(percentage) {
+    const items = getDefaultGrading();
+    for (const g of items) {
+        if (percentage >= g.min && percentage <= g.max) return g.grade;
+    }
+    return "E";
+}
+
+// ============================================================
+// VALIDATION HELPERS
+// ============================================================
+async function getMasterById(id, expectedType = null) {
+    const rows = await q(`SELECT * FROM erp_master WHERE id = ? LIMIT 1`, [id]);
+    if (rows.length === 0) throw new Error(`Master record not found: ${id}`);
+    if (expectedType && rows[0].master_type !== expectedType) {
+        throw new Error(`Expected ${expectedType}, got ${rows[0].master_type}`);
+    }
+    return rows[0];
+}
+
+async function getMasterByKey(type, key) {
+    const rows = await q(
+        `SELECT * FROM erp_master WHERE master_type = ? AND master_key = ? LIMIT 1`,
+        [type, key]
+    );
+    return rows[0] || null;
+}
+
+// ============================================================
 // BACKUP SNAPSHOT HELPERS
 // ============================================================
-
 /**
  * Snapshot marks into erp_marks_backup.
  * Called when result is FINALIZED or PUBLISHED.
  */
-async function snapshotMarks({
-    student_id, session_id, exam_id, reason = "FINALIZED", user
-}) {
+async function snapshotMarks({ student_id, session_id, exam_id, reason = "FINALIZED", user }) {
     const rows = await q(`
         SELECT m.*, sub.name AS subject_name
         FROM erp_marks m
@@ -256,34 +413,22 @@ async function snapshotMarks({
 }
 
 /**
- * Snapshot consolidated result into erp_results_backup.
+ * ✅ Snapshot consolidated result into erp_results_backup.
+ * Reads student data from Nstudent — COMPLETE fields.
+ * This snapshot is PERMANENT until admin deletes it.
  */
 async function snapshotResult({
     student_id, session_id, class_id, exam_id,
     result_type = "EXAM", reason = "FINALIZED", user
 }) {
-    // Fetch student info from Nstudent
-    const students = await q(
-        `SELECT student_id, name, father_name, mother_name, roll_number, class, session
-         FROM Nstudent WHERE student_id = ? LIMIT 1`,
-        [student_id]
-    );
-    if (students.length === 0) return 0;
-    const stu = students[0];
-
-    // Fetch session name
-    const sessions = await q(
-        `SELECT name FROM erp_master WHERE id = ? AND master_type = 'SESSION' LIMIT 1`,
-        [session_id]
-    );
-    const sessionName = sessions[0]?.name || null;
-
-    // Fetch class name
-    const classes = await q(
-        `SELECT name FROM erp_master WHERE id = ? AND master_type = 'CLASS' LIMIT 1`,
-        [class_id]
-    );
-    const className = classes[0]?.name || null;
+    // ✅ Fetch COMPLETE student data from Nstudent
+    let stu;
+    try {
+        stu = await getStudentFromNstudent(student_id);
+    } catch (err) {
+        log.warn("Cannot snapshot — student not found", { student_id });
+        return 0;
+    }
 
     // Fetch exam name
     let examName = null;
@@ -309,7 +454,6 @@ async function snapshotResult({
             ORDER BY sub.display_order ASC
         `, [student_id, session_id, exam_id]);
     } else {
-        // For annual/final result — fetch all exams of this session
         marksRows = await q(`
             SELECT m.*, sub.name AS subject_name
             FROM erp_marks m
@@ -332,7 +476,8 @@ async function snapshotResult({
         const max = parseFloat(m.max_marks) || 0;
         grandTotal += total;
         maxTotal += max;
-        if (m.absent_type === "Absent" || m.absent_type === "Medical" || m.absent_type === "Not_Appeared") hasAbsent = true;
+
+        if (["Absent", "Medical", "Not_Appeared"].includes(m.absent_type)) hasAbsent = true;
         if (m.absent_type === "Withheld") hasWithheld = true;
 
         subjectWise.push({
@@ -345,64 +490,80 @@ async function snapshotResult({
             total: m.total_marks,
             max: m.max_marks,
             grade: m.grade,
-            absent_type: m.absent_type
+            absent_type: m.absent_type,
+            remarks: m.remarks
         });
 
-        // Subject-level fail check (needs passing marks from exam_subject config)
+        // Subject-level pass/fail check
         const examSub = await q(`
             SELECT data FROM erp_exams
             WHERE record_type = 'EXAM_SUBJECT'
-              AND exam_id = ?
-              AND subject_id = ?
+              AND exam_id = ? AND subject_id = ?
             LIMIT 1
         `, [exam_id, m.subject_id]);
-        const passMarks = examSub[0]?.data ? (safeJSONParse(examSub[0].data)?.pass_marks || 33) : 33;
+        const passMarks = examSub[0]?.data
+            ? (safeJSONParse(examSub[0].data)?.pass_marks || 33)
+            : 33;
 
         if (m.absent_type === "Present" && total < passMarks) {
             failedSubjects.push(m.subject_name);
         }
     }
 
-    const percentage = maxTotal > 0 ? parseFloat(((grandTotal / maxTotal) * 100).toFixed(2)) : 0;
-    const overallGrade = getGradeFromScheme(percentage);
+    const percentage = maxTotal > 0
+        ? parseFloat(((grandTotal / maxTotal) * 100).toFixed(2))
+        : 0;
+    const overallGrade = await calculateGrade(percentage);
 
-    // Determine result status
     let resultStatus = "Pass";
     if (hasWithheld) resultStatus = "Withheld";
     else if (hasAbsent) resultStatus = "Absent";
     else if (failedSubjects.length > 0) resultStatus = "Fail";
     else if (percentage < 33) resultStatus = "Fail";
 
-    const snapshotPayload = {
-        student_id, session_id, class_id, exam_id, result_type,
-        student_name: stu.name,
-        roll_number: stu.roll_number,
-        father_name: stu.father_name,
-        mother_name: stu.mother_name,
-        class_name: className,
-        session_name: sessionName,
-        exam_name: examName,
-        grand_total: grandTotal,
-        max_total: maxTotal,
-        percentage,
-        overall_grade: overallGrade,
-        result_status: resultStatus,
-        failed_subjects: failedSubjects,
-        subject_wise_marks: subjectWise,
-        snapshot_reason: reason,
-        snapshot_by: user?.user_id || null
-    };
-
+    // ✅ Insert with COMPLETE student details from Nstudent
     await q(`
         INSERT INTO erp_results_backup (
             student_id, session_id, class_id, exam_id, result_type,
-            student_name, roll_number, father_name, mother_name,
-            class_name, session_name, exam_name,
-            grand_total, max_total, percentage, overall_grade,
+            student_name, admission_number, apaar_id, roll_number,
+            father_name, mother_name, dob, gender, category,
+            class_name, section_name, stream, session_name,
+            mobile_number, email_id, address,
+            photo_url, signature_url,
+            exam_name, grand_total, max_total, percentage, overall_grade,
             result_status, failed_subjects, subject_wise_marks,
             snapshot_reason, snapshot_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?,
+            ?, ?,
+            ?, ?, ?, ?, ?,
+            ?, ?, ?,
+            ?, ?
+        )
         ON DUPLICATE KEY UPDATE
+            student_name = VALUES(student_name),
+            admission_number = VALUES(admission_number),
+            apaar_id = VALUES(apaar_id),
+            roll_number = VALUES(roll_number),
+            father_name = VALUES(father_name),
+            mother_name = VALUES(mother_name),
+            dob = VALUES(dob),
+            gender = VALUES(gender),
+            category = VALUES(category),
+            class_name = VALUES(class_name),
+            section_name = VALUES(section_name),
+            stream = VALUES(stream),
+            session_name = VALUES(session_name),
+            mobile_number = VALUES(mobile_number),
+            email_id = VALUES(email_id),
+            address = VALUES(address),
+            photo_url = VALUES(photo_url),
+            signature_url = VALUES(signature_url),
+            exam_name = VALUES(exam_name),
             grand_total = VALUES(grand_total),
             max_total = VALUES(max_total),
             percentage = VALUES(percentage),
@@ -415,145 +576,19 @@ async function snapshotResult({
             snapshot_at = CURRENT_TIMESTAMP
     `, [
         student_id, session_id, class_id, exam_id, result_type,
-        stu.name, stu.roll_number, stu.father_name, stu.mother_name,
-        className, sessionName, examName,
-        grandTotal, maxTotal, percentage, overallGrade,
-        resultStatus, safeJSONStringify(failedSubjects), safeJSONStringify(subjectWise),
+        stu.name, stu.admission_number, stu.apaar_id, stu.roll_number,
+        stu.father_name, stu.mother_name, stu.dob, stu.gender, stu.category,
+        stu.class, stu.section, stu.stream, stu.session,
+        stu.mobile_number, stu.email_id, stu.address,
+        stu.photo, stu.signature_url,
+        examName, grandTotal, maxTotal, percentage, overallGrade,
+        resultStatus,
+        safeJSONStringify(failedSubjects),
+        safeJSONStringify(subjectWise),
         reason, user?.user_id || null
     ]);
 
     return 1;
-}
-
-// ============================================================
-// GRADING HELPERS
-// ============================================================
-
-let _gradeCache = { scheme_id: null, items: null, ts: 0 };
-
-async function getGradingItems(schemeId = null) {
-    // Cache for 60 seconds
-    const now = Date.now();
-    if (_gradeCache.items && _gradeCache.scheme_id === schemeId && (now - _gradeCache.ts) < 60000) {
-        return _gradeCache.items;
-    }
-
-    let scheme;
-    if (schemeId) {
-        const rows = await q(
-            `SELECT id FROM erp_master WHERE id = ? AND master_type = 'GRADING_SCHEME' LIMIT 1`,
-            [schemeId]
-        );
-        scheme = rows[0];
-    } else {
-        const rows = await q(
-            `SELECT id FROM erp_master WHERE master_type = 'GRADING_SCHEME' AND (data->>'$.is_default' = 'true' OR data->>'$.is_default' = '1') LIMIT 1`
-        );
-        scheme = rows[0];
-        if (!scheme) {
-            const rows2 = await q(
-                `SELECT id FROM erp_master WHERE master_type = 'GRADING_SCHEME' ORDER BY display_order ASC LIMIT 1`
-            );
-            scheme = rows2[0];
-        }
-    }
-
-    if (!scheme) return getDefaultGrading();
-
-    const items = await q(`
-        SELECT master_key, name, data
-        FROM erp_master
-        WHERE master_type = 'GRADING_ITEM' AND parent_id = ? AND is_active = 1
-        ORDER BY display_order ASC
-    `, [scheme.id]);
-
-    if (items.length === 0) return getDefaultGrading();
-
-    const parsed = items.map(i => {
-        const d = safeJSONParse(i.data, {});
-        return {
-            min: parseFloat(d.min_percent ?? 0),
-            max: parseFloat(d.max_percent ?? 100),
-            grade: i.name || i.master_key,
-            grade_point: parseFloat(d.grade_point ?? 0)
-        };
-    });
-
-    _gradeCache = { scheme_id: scheme.id, items: parsed, ts: now };
-    return parsed;
-}
-
-function getDefaultGrading() {
-    return [
-        { min: 90, max: 100, grade: "A+", grade_point: 10 },
-        { min: 80, max: 89.99, grade: "A", grade_point: 9 },
-        { min: 70, max: 79.99, grade: "B+", grade_point: 8 },
-        { min: 60, max: 69.99, grade: "B", grade_point: 7 },
-        { min: 50, max: 59.99, grade: "C", grade_point: 6 },
-        { min: 40, max: 49.99, grade: "D", grade_point: 5 },
-        { min: 0, max: 39.99, grade: "E", grade_point: 0 }
-    ];
-}
-
-function getGradeFromScheme(percentage) {
-    const items = getDefaultGrading(); // sync fallback — actual uses cached async
-    for (const g of items) {
-        if (percentage >= g.min && percentage <= g.max) return g.grade;
-    }
-    return "E";
-}
-
-async function calculateGrade(percentage) {
-    const items = await getGradingItems();
-    for (const g of items) {
-        if (percentage >= g.min && percentage <= g.max) return g.grade;
-    }
-    return "E";
-}
-
-// ============================================================
-// VALIDATION HELPERS
-// ============================================================
-
-async function getMasterById(id, expectedType = null) {
-    const rows = await q(
-        `SELECT * FROM erp_master WHERE id = ? LIMIT 1`,
-        [id]
-    );
-    if (rows.length === 0) throw new Error(`Master record not found: ${id}`);
-    if (expectedType && rows[0].master_type !== expectedType) {
-        throw new Error(`Expected ${expectedType}, got ${rows[0].master_type}`);
-    }
-    return rows[0];
-}
-
-async function getMasterByKey(type, key) {
-    const rows = await q(
-        `SELECT * FROM erp_master WHERE master_type = ? AND master_key = ? LIMIT 1`,
-        [type, key]
-    );
-    return rows[0] || null;
-}
-
-async function getCurrentSession() {
-    const rows = await q(
-        `SELECT * FROM erp_master WHERE master_type = 'SESSION' AND is_current = 1 LIMIT 1`
-    );
-    if (rows.length > 0) return rows[0];
-    const fallback = await q(
-        `SELECT * FROM erp_master WHERE master_type = 'SESSION' AND is_active = 1 ORDER BY display_order DESC LIMIT 1`
-    );
-    return fallback[0] || null;
-}
-
-async function getStudentFromNstudent(studentId) {
-    const rows = await q(
-        `SELECT student_id, name, father_name, mother_name, dob, class, session, roll_number, student_photo_url
-         FROM Nstudent WHERE student_id = ? LIMIT 1`,
-        [studentId]
-    );
-    if (rows.length === 0) throw new Error(`Student not found: ${studentId}`);
-    return rows[0];
 }
 
 // ============================================================
@@ -584,13 +619,11 @@ router.get("/sessions", asyncHandler(async (req, res) => {
 router.post("/sessions", asyncHandler(async (req, res) => {
     requireFields(req.body, ["session_code", "session_name"]);
     const user = getUserContext(req);
-
     const { session_code, session_name, start_date, end_date, is_current } = req.body;
 
     const existing = await getMasterByKey("SESSION", session_code);
     if (existing) return fail(res, `Session already exists: ${session_code}`, 409);
 
-    // If new session is current, unset others
     if (is_current) {
         await q(`UPDATE erp_master SET is_current = 0 WHERE master_type = 'SESSION'`);
     }
@@ -615,7 +648,6 @@ router.post("/sessions", asyncHandler(async (req, res) => {
         new_value: { session_code, session_name, start_date, end_date, is_current }
     });
 
-    log.success("Session created", { id: result.insertId, session_code });
     return ok(res, { id: result.insertId, session_code }, "Session created successfully", 201);
 }));
 
@@ -623,7 +655,6 @@ router.put("/sessions/:id", asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     const user = getUserContext(req);
     const session = await getMasterById(id, "SESSION");
-
     const { session_name, start_date, end_date, is_active, is_current } = req.body;
 
     if (is_current) {
@@ -641,15 +672,13 @@ router.put("/sessions/:id", asyncHandler(async (req, res) => {
         SET name = COALESCE(?, name),
             is_active = COALESCE(?, is_active),
             is_current = COALESCE(?, is_current),
-            data = ?,
-            updated_by = ?
+            data = ?, updated_by = ?
         WHERE id = ?
     `, [
         session_name ?? null,
         is_active !== undefined ? (is_active ? 1 : 0) : null,
         is_current !== undefined ? (is_current ? 1 : 0) : null,
-        safeJSONStringify(newData),
-        user.user_id, id
+        safeJSONStringify(newData), user.user_id, id
     ]);
 
     await auditLog({
@@ -665,17 +694,13 @@ router.delete("/sessions/:id", asyncHandler(async (req, res) => {
     const user = getUserContext(req);
     await getMasterById(id, "SESSION");
 
-    // Check if exams exist
     const exams = await q(`SELECT COUNT(*) AS cnt FROM erp_exams WHERE session_id = ?`, [id]);
     if (exams[0].cnt > 0) {
         return fail(res, `Cannot delete session: ${exams[0].cnt} exam(s) exist`, 400);
     }
 
     await q(`DELETE FROM erp_master WHERE id = ?`, [id]);
-
-    await auditLog({
-        action: "SESSION_DELETED", entity_type: "SESSION", entity_id: id, user
-    });
+    await auditLog({ action: "SESSION_DELETED", entity_type: "SESSION", entity_id: id, user });
 
     return ok(res, null, "Session deleted successfully");
 }));
@@ -683,16 +708,12 @@ router.delete("/sessions/:id", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 2: CLASSES
 // ============================================================
-
 router.get("/classes", asyncHandler(async (req, res) => {
     const { group } = req.query;
     let sql = `SELECT id, master_key AS class_name, name, display_order, is_active, data, created_at
                FROM erp_master WHERE master_type = 'CLASS'`;
     const params = [];
-    if (group) {
-        sql += ` AND data->>'$.class_group' = ?`;
-        params.push(group);
-    }
+    if (group) { sql += ` AND data->>'$.class_group' = ?`; params.push(group); }
     sql += ` ORDER BY display_order ASC`;
 
     const rows = await q(sql, params);
@@ -710,7 +731,7 @@ router.post("/classes", asyncHandler(async (req, res) => {
     const { class_name, class_group, display_order } = req.body;
 
     if (!VALID_CLASS_GROUPS.includes(class_group)) {
-        return fail(res, `Invalid class_group. Allowed: ${VALID_CLASS_GROUPS.join(", ")}`, 400);
+        return fail(res, `Invalid class_group`, 400);
     }
 
     const existing = await getMasterByKey("CLASS", class_name);
@@ -726,12 +747,12 @@ router.post("/classes", asyncHandler(async (req, res) => {
     `, [
         class_name, `Class ${class_name}`,
         display_order || maxOrder[0].next_order,
-        safeJSONStringify({ class_group }),
-        user.user_id
+        safeJSONStringify({ class_group }), user.user_id
     ]);
 
     await auditLog({
-        action: "CLASS_CREATED", entity_type: "CLASS", entity_id: result.insertId, user,
+        action: "CLASS_CREATED", entity_type: "CLASS",
+        entity_id: result.insertId, user,
         new_value: { class_name, class_group }
     });
 
@@ -741,17 +762,13 @@ router.post("/classes", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 3: SECTIONS
 // ============================================================
-
 router.get("/sections", asyncHandler(async (req, res) => {
     const { class_id } = req.query;
-    let sql = `SELECT s.id, s.master_key AS section_name, s.name, s.parent_id, s.display_order, s.is_active, s.data
-               FROM erp_master s
-               WHERE s.master_type = 'SECTION'`;
+    let sql = `SELECT s.id, s.master_key AS section_name, s.name, s.parent_id,
+                      s.display_order, s.is_active, s.data
+               FROM erp_master s WHERE s.master_type = 'SECTION'`;
     const params = [];
-    if (class_id) {
-        sql += ` AND s.parent_id = ?`;
-        params.push(parseId(class_id, "class_id"));
-    }
+    if (class_id) { sql += ` AND s.parent_id = ?`; params.push(parseId(class_id, "class_id")); }
     sql += ` ORDER BY s.display_order ASC`;
 
     const rows = await q(sql, params);
@@ -766,12 +783,11 @@ router.post("/sections", asyncHandler(async (req, res) => {
     const classId = parseId(class_id, "class_id");
     await getMasterById(classId, "CLASS");
 
-    // Check duplicate within same class
     const dup = await q(
         `SELECT id FROM erp_master WHERE master_type = 'SECTION' AND master_key = ? AND parent_id = ? LIMIT 1`,
         [section_name, classId]
     );
-    if (dup.length > 0) return fail(res, `Section ${section_name} already exists in this class`, 409);
+    if (dup.length > 0) return fail(res, `Section ${section_name} already exists`, 409);
 
     const result = await q(`
         INSERT INTO erp_master (master_type, master_key, name, parent_id, display_order, is_active, data, created_by)
@@ -784,7 +800,8 @@ router.post("/sections", asyncHandler(async (req, res) => {
     ]);
 
     await auditLog({
-        action: "SECTION_CREATED", entity_type: "SECTION", entity_id: result.insertId, user,
+        action: "SECTION_CREATED", entity_type: "SECTION",
+        entity_id: result.insertId, user,
         new_value: { section_name, class_id: classId }
     });
 
@@ -794,10 +811,10 @@ router.post("/sections", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 4: STREAMS
 // ============================================================
-
 router.get("/streams", asyncHandler(async (req, res) => {
     const rows = await q(`
-        SELECT id, master_key AS stream_code, name AS stream_name, display_order, is_active, data
+        SELECT id, master_key AS stream_code, name AS stream_name,
+               display_order, is_active, data
         FROM erp_master WHERE master_type = 'STREAM' AND is_active = 1
         ORDER BY display_order ASC
     `);
@@ -807,8 +824,8 @@ router.get("/streams", asyncHandler(async (req, res) => {
 router.post("/streams", asyncHandler(async (req, res) => {
     requireFields(req.body, ["stream_name", "stream_code"]);
     const user = getUserContext(req);
-
     const { stream_name, stream_code } = req.body;
+
     const existing = await getMasterByKey("STREAM", stream_code);
     if (existing) return fail(res, `Stream already exists: ${stream_code}`, 409);
 
@@ -824,7 +841,8 @@ router.post("/streams", asyncHandler(async (req, res) => {
 
     await auditLog({
         action: "STREAM_CREATED", entity_type: "STREAM",
-        entity_id: result.insertId, user, new_value: { stream_name, stream_code }
+        entity_id: result.insertId, user,
+        new_value: { stream_name, stream_code }
     });
 
     return ok(res, { id: result.insertId, stream_code }, "Stream created successfully", 201);
@@ -833,11 +851,11 @@ router.post("/streams", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 5: SUBJECTS
 // ============================================================
-
 router.get("/subjects", asyncHandler(async (req, res) => {
     const { type, search, is_active } = req.query;
 
-    let sql = `SELECT id, master_key AS subject_code, name AS subject_name, display_order, is_active, data, created_at
+    let sql = `SELECT id, master_key AS subject_code, name AS subject_name,
+                      display_order, is_active, data, created_at
                FROM erp_master WHERE master_type = 'SUBJECT'`;
     const params = [];
 
@@ -864,7 +882,6 @@ router.get("/subjects", asyncHandler(async (req, res) => {
 router.post("/subjects", asyncHandler(async (req, res) => {
     requireFields(req.body, ["subject_code", "subject_name"]);
     const user = getUserContext(req);
-
     const {
         subject_code, subject_name, subject_short_name,
         subject_type = "Core", component_type = "Theory", display_order
@@ -903,7 +920,6 @@ router.put("/subjects/:id", asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     const user = getUserContext(req);
     const subject = await getMasterById(id, "SUBJECT");
-
     const { subject_name, subject_short_name, subject_type, component_type, is_active } = req.body;
 
     const newData = {
@@ -917,19 +933,17 @@ router.put("/subjects/:id", asyncHandler(async (req, res) => {
         UPDATE erp_master
         SET name = COALESCE(?, name),
             is_active = COALESCE(?, is_active),
-            data = ?,
-            updated_by = ?
+            data = ?, updated_by = ?
         WHERE id = ?
     `, [
         subject_name ?? null,
         is_active !== undefined ? (is_active ? 1 : 0) : null,
-        safeJSONStringify(newData),
-        user.user_id, id
+        safeJSONStringify(newData), user.user_id, id
     ]);
 
     await auditLog({
-        action: "SUBJECT_UPDATED", entity_type: "SUBJECT", entity_id: id, user,
-        old_value: subject, new_value: req.body
+        action: "SUBJECT_UPDATED", entity_type: "SUBJECT", entity_id: id,
+        user, old_value: subject, new_value: req.body
     });
 
     return ok(res, { id }, "Subject updated successfully");
@@ -938,7 +952,6 @@ router.put("/subjects/:id", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 6: CLASS-SUBJECT MAPPING
 // ============================================================
-
 router.get("/class-subjects", asyncHandler(async (req, res) => {
     const { class_id, stream_id } = req.query;
     requireFields(req.query, ["class_id"]);
@@ -982,7 +995,9 @@ router.post("/class-subjects", asyncHandler(async (req, res) => {
     const classId = parseId(req.body.class_id, "class_id");
     await getMasterById(classId, "CLASS");
 
-    const subjectIds = Array.isArray(req.body.subject_ids) ? req.body.subject_ids : [req.body.subject_ids];
+    const subjectIds = Array.isArray(req.body.subject_ids)
+        ? req.body.subject_ids
+        : [req.body.subject_ids];
     const streamId = req.body.stream_id ? parseId(req.body.stream_id, "stream_id") : null;
 
     let added = 0;
@@ -990,7 +1005,6 @@ router.post("/class-subjects", asyncHandler(async (req, res) => {
         const subjectId = parseId(sid, "subject_id");
         await getMasterById(subjectId, "SUBJECT");
 
-        // Check duplicate
         const dup = await q(`
             SELECT id FROM erp_master
             WHERE master_type = 'CLASS_SUBJECT' AND parent_id = ?
@@ -1002,7 +1016,8 @@ router.post("/class-subjects", asyncHandler(async (req, res) => {
         if (dup.length > 0) continue;
 
         const maxOrder = await q(
-            `SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order FROM erp_master WHERE master_type = 'CLASS_SUBJECT' AND parent_id = ?`,
+            `SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order 
+             FROM erp_master WHERE master_type = 'CLASS_SUBJECT' AND parent_id = ?`,
             [classId]
         );
 
@@ -1010,8 +1025,7 @@ router.post("/class-subjects", asyncHandler(async (req, res) => {
             INSERT INTO erp_master (master_type, master_key, name, parent_id, display_order, is_active, data, created_by)
             VALUES ('CLASS_SUBJECT', ?, ?, ?, ?, 1, ?, ?)
         `, [
-            `CS_${classId}_${subjectId}`,
-            `Class-Subject ${classId}-${subjectId}`,
+            `CS_${classId}_${subjectId}`, `Class-Subject ${classId}-${subjectId}`,
             classId, maxOrder[0].next_order,
             safeJSONStringify({ subject_id: subjectId, stream_id: streamId, is_optional: false }),
             user.user_id
@@ -1033,7 +1047,8 @@ router.delete("/class-subjects/:id", asyncHandler(async (req, res) => {
     await getMasterById(id, "CLASS_SUBJECT");
     await q(`DELETE FROM erp_master WHERE id = ?`, [id]);
     await auditLog({
-        action: "CLASS_SUBJECT_REMOVED", entity_type: "CLASS_SUBJECT", entity_id: id, user
+        action: "CLASS_SUBJECT_REMOVED", entity_type: "CLASS_SUBJECT",
+        entity_id: id, user
     });
     return ok(res, null, "Class-subject removed successfully");
 }));
@@ -1041,17 +1056,23 @@ router.delete("/class-subjects/:id", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 7: STUDENT-SUBJECT ASSIGNMENT
 // ============================================================
-
+/**
+ * Student-subject assignment.
+ * Uses Nstudent for class/section/stream — reads them there.
+ */
 router.get("/student-subjects/:studentId", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const { session_id } = req.query;
 
-    await getStudentFromNstudent(studentId);
+    // Verify student exists
+    const student = await getStudentFromNstudent(studentId);
 
     let sql = `
-        SELECT ss.id, ss.student_id, ss.session_id, ss.class_id, ss.section_id, ss.stream_id,
-               ss.subject_id, ss.status, ss.data, ss.created_at,
-               sub.master_key AS subject_code, sub.name AS subject_name, sub.data AS subject_data
+        SELECT ss.id, ss.student_id, ss.session_id, ss.class_id,
+               ss.section_id, ss.stream_id, ss.subject_id,
+               ss.status, ss.data, ss.created_at,
+               sub.master_key AS subject_code, sub.name AS subject_name,
+               sub.data AS subject_data
         FROM erp_marks ss
         JOIN erp_master sub ON sub.id = ss.subject_id
         WHERE ss.record_type = 'STUDENT_SUBJECT' AND ss.student_id = ?
@@ -1080,26 +1101,41 @@ router.get("/student-subjects/:studentId", asyncHandler(async (req, res) => {
         status: r.status,
         is_active: r.status === "ACTIVE"
     }));
-    return ok(res, result, "Student subjects fetched successfully");
+
+    return ok(res, {
+        student: {
+            student_id: student.student_id,
+            name: student.name,
+            class: student.class,
+            section: student.section,
+            stream: student.stream,
+            session: student.session,
+            roll_number: student.roll_number
+        },
+        subjects: result
+    }, "Student subjects fetched successfully");
 }));
 
 router.post("/student-subjects/assign", asyncHandler(async (req, res) => {
-    requireFields(req.body, ["student_id", "session_id", "class_id", "subject_ids"]);
+    requireFields(req.body, ["student_id", "session_id", "subject_ids"]);
     const user = getUserContext(req);
 
     const studentId = String(req.body.student_id).trim();
     const sessionId = parseId(req.body.session_id, "session_id");
-    const classId = parseId(req.body.class_id, "class_id");
-    const sectionId = req.body.section_id ? parseId(req.body.section_id, "section_id") : null;
-    const streamId = req.body.stream_id ? parseId(req.body.stream_id, "stream_id") : null;
 
-    await getStudentFromNstudent(studentId);
-    await getMasterById(sessionId, "SESSION");
-    await getMasterById(classId, "CLASS");
+    // ✅ Fetch student — class/section/stream automatically derived
+    const student = await getStudentFromNstudent(studentId);
+    const masterIds = await resolveMasterIdsFromStudent(student, sessionId);
 
-    const subjectIds = Array.isArray(req.body.subject_ids) ? req.body.subject_ids : [req.body.subject_ids];
+    if (!masterIds.class_id) {
+        return fail(res, `Class "${student.class}" not found in master config.`, 400);
+    }
+
+    const subjectIds = Array.isArray(req.body.subject_ids)
+        ? req.body.subject_ids
+        : [req.body.subject_ids];
+
     let added = 0, skipped = 0;
-
     for (const sid of subjectIds) {
         const subjectId = parseId(sid, "subject_id");
         await getMasterById(subjectId, "SUBJECT");
@@ -1115,11 +1151,12 @@ router.post("/student-subjects/assign", asyncHandler(async (req, res) => {
 
         await q(`
             INSERT INTO erp_marks (
-                record_type, student_id, session_id, class_id, section_id, stream_id,
-                subject_id, status, data, created_at
+                record_type, student_id, session_id, class_id,
+                section_id, stream_id, subject_id, status, data, created_at
             ) VALUES ('STUDENT_SUBJECT', ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, NOW())
         `, [
-            studentId, sessionId, classId, sectionId, streamId, subjectId,
+            studentId, sessionId, masterIds.class_id,
+            masterIds.section_id, masterIds.stream_id, subjectId,
             safeJSONStringify({ is_optional: false, assigned_by: user.user_id })
         ]);
         added++;
@@ -1128,10 +1165,17 @@ router.post("/student-subjects/assign", asyncHandler(async (req, res) => {
     await auditLog({
         action: "STUDENT_SUBJECTS_ASSIGNED", entity_type: "STUDENT_SUBJECT",
         student_id: studentId, session_id: sessionId, user,
-        new_value: { class_id: classId, subject_ids: subjectIds, added, skipped }
+        new_value: { class_id: masterIds.class_id, subject_ids: subjectIds, added, skipped }
     });
 
-    return ok(res, { added, skipped, requested: subjectIds.length }, `${added} subject(s) assigned`);
+    return ok(res, {
+        added, skipped, requested: subjectIds.length,
+        student: {
+            class: student.class,
+            section: student.section,
+            stream: student.stream
+        }
+    }, `${added} subject(s) assigned`);
 }));
 
 router.delete("/student-subjects/:id", asyncHandler(async (req, res) => {
@@ -1157,10 +1201,10 @@ router.delete("/student-subjects/:id", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 8: EXAM TEMPLATES
 // ============================================================
-
 router.get("/exam-templates", asyncHandler(async (req, res) => {
     const templates = await q(`
-        SELECT id, master_key AS template_code, name AS template_name, display_order, is_active, data, created_at
+        SELECT id, master_key AS template_code, name AS template_name,
+               display_order, is_active, data, created_at
         FROM erp_master WHERE master_type = 'EXAM_TEMPLATE' ORDER BY display_order ASC
     `);
 
@@ -1191,7 +1235,6 @@ router.get("/exam-templates", asyncHandler(async (req, res) => {
 router.post("/exam-templates", asyncHandler(async (req, res) => {
     requireFields(req.body, ["template_name", "class_group"]);
     const user = getUserContext(req);
-
     const { template_name, class_group, description, items = [] } = req.body;
 
     const masterKey = template_name.toUpperCase().replace(/[^A-Z0-9_]/g, "_").slice(0, 100);
@@ -1213,7 +1256,6 @@ router.post("/exam-templates", asyncHandler(async (req, res) => {
 
     for (const item of items) {
         if (!item.exam_code || !item.exam_name) continue;
-
         await q(`
             INSERT INTO erp_master (master_type, master_key, name, parent_id, display_order, is_active, data, created_by)
             VALUES ('EXAM_TEMPLATE_ITEM', ?, ?, ?, ?, 1, ?, ?)
@@ -1241,16 +1283,9 @@ router.post("/exam-templates", asyncHandler(async (req, res) => {
         "Exam template created successfully", 201);
 }));
 
-function toFloatSafe(v) {
-    if (v === null || v === undefined || v === "") return 0;
-    const n = parseFloat(v);
-    return isNaN(n) ? 0 : n;
-}
-
 // ============================================================
 // SECTION 9: EXAMS — Generate Structure & CRUD
 // ============================================================
-
 router.get("/exams", asyncHandler(async (req, res) => {
     const { session_id, class_id, status } = req.query;
     const { page, limit, offset } = parsePagination(req.query);
@@ -1283,10 +1318,7 @@ router.get("/exams", asyncHandler(async (req, res) => {
         LIMIT ? OFFSET ?
     `, [...params, limit, offset]);
 
-    const exams = rows.map(r => ({
-        ...r,
-        data: safeJSONParse(r.data, {})
-    }));
+    const exams = rows.map(r => ({ ...r, data: safeJSONParse(r.data, {}) }));
 
     return ok(res, exams, "Exams fetched successfully", 200, {
         pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) }
@@ -1310,9 +1342,9 @@ router.get("/exams/:id", asyncHandler(async (req, res) => {
 
     const exam = { ...rows[0], data: safeJSONParse(rows[0].data, {}) };
 
-    // Fetch exam subjects
     const subjects = await q(`
-        SELECT es.id, es.subject_id, es.name AS subject_name, es.data, es.display_order, es.status,
+        SELECT es.id, es.subject_id, es.name AS subject_name,
+               es.data, es.display_order, es.status,
                sub.master_key AS subject_code, sub.name AS actual_subject_name,
                sub.data AS subject_data
         FROM erp_exams es
@@ -1330,11 +1362,6 @@ router.get("/exams/:id", asyncHandler(async (req, res) => {
     return ok(res, exam, "Exam fetched successfully");
 }));
 
-/**
- * POST /exams/generate-structure
- * Auto-generate exam structure for a session + class group using a template.
- * Body: { session_id, class_ids: [], template_id }
- */
 router.post("/exams/generate-structure", asyncHandler(async (req, res) => {
     requireFields(req.body, ["session_id", "class_ids", "template_id"]);
     const user = getUserContext(req);
@@ -1355,9 +1382,7 @@ router.post("/exams/generate-structure", asyncHandler(async (req, res) => {
         ORDER BY display_order ASC
     `, [templateId]);
 
-    if (templateItems.length === 0) {
-        return fail(res, "Template has no exam items", 400);
-    }
+    if (templateItems.length === 0) return fail(res, "Template has no exam items", 400);
 
     const created = [], skipped = [];
 
@@ -1367,7 +1392,6 @@ router.post("/exams/generate-structure", asyncHandler(async (req, res) => {
         for (const item of templateItems) {
             const itemData = safeJSONParse(item.data, {});
 
-            // Check if exam already exists
             const dup = await q(`
                 SELECT id FROM erp_exams
                 WHERE record_type = 'EXAM' AND session_id = ? AND class_id = ? AND exam_code = ?
@@ -1408,22 +1432,21 @@ router.post("/exams/generate-structure", asyncHandler(async (req, res) => {
 
     await auditLog({
         action: "EXAM_STRUCTURE_GENERATED", entity_type: "EXAM", user,
-        new_value: { session_id: sessionId, class_ids: classIds, template_id: templateId, created: created.length, skipped: skipped.length }
+        new_value: {
+            session_id: sessionId, class_ids: classIds, template_id: templateId,
+            created: created.length, skipped: skipped.length
+        }
     });
 
-    return ok(res, { created, skipped, total_created: created.length }, 
+    return ok(res, { created, skipped, total_created: created.length },
         `Exam structure generated: ${created.length} exam(s) created`, 201);
 }));
 
-/**
- * POST /exams/:id/subjects
- * Add subjects to an exam with config (max_marks, pass_marks, etc.)
- */
 router.post("/exams/:id/subjects", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.id);
     const user = getUserContext(req);
-
     requireFields(req.body, ["subject_ids"]);
+
     const subjectIds = Array.isArray(req.body.subject_ids)
         ? req.body.subject_ids
         : [req.body.subject_ids];
@@ -1435,10 +1458,9 @@ router.post("/exams/:id/subjects", asyncHandler(async (req, res) => {
     if (examRows.length === 0) return fail(res, "Exam not found", 404);
     const exam = examRows[0];
 
-    if (exam.is_locked) return fail(res, "Exam is locked, cannot modify", 400);
+    if (exam.is_locked) return fail(res, "Exam is locked", 400);
 
     let added = 0, skipped = 0;
-
     for (const sid of subjectIds) {
         const subjectId = parseId(sid, "subject_id");
         await getMasterById(subjectId, "SUBJECT");
@@ -1466,7 +1488,8 @@ router.post("/exams/:id/subjects", asyncHandler(async (req, res) => {
         };
 
         const maxOrder = await q(
-            `SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order FROM erp_exams WHERE record_type = 'EXAM_SUBJECT' AND exam_id = ?`,
+            `SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order 
+             FROM erp_exams WHERE record_type = 'EXAM_SUBJECT' AND exam_id = ?`,
             [examId]
         );
 
@@ -1479,10 +1502,8 @@ router.post("/exams/:id/subjects", asyncHandler(async (req, res) => {
             ) VALUES ('EXAM_SUBJECT', ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)
         `, [
             exam.session_id, exam.class_id, examId, subjectId,
-            subjRow.name,
-            maxOrder[0].next_order,
-            safeJSONStringify(examSubjectData),
-            user.user_id
+            subjRow.name, maxOrder[0].next_order,
+            safeJSONStringify(examSubjectData), user.user_id
         ]);
         added++;
     }
@@ -1509,9 +1530,9 @@ router.delete("/exams/:id/subjects/:subjectId", asyncHandler(async (req, res) =>
 
     if (rows.length === 0) return fail(res, "Exam subject not found", 404);
 
-    // Check marks exist
     const marks = await q(
-        `SELECT COUNT(*) AS cnt FROM erp_marks WHERE record_type = 'MARKS' AND exam_id = ? AND subject_id = ?`,
+        `SELECT COUNT(*) AS cnt FROM erp_marks 
+         WHERE record_type = 'MARKS' AND exam_id = ? AND subject_id = ?`,
         [examId, subjectId]
     );
     if (marks[0].cnt > 0) {
@@ -1531,17 +1552,11 @@ router.delete("/exams/:id/subjects/:subjectId", asyncHandler(async (req, res) =>
 // ============================================================
 // SECTION 10: MARKS ENTRY & WORKFLOW
 // ============================================================
-
-/**
- * GET /marks-entry/:examId/:subjectId
- * Returns students (who are assigned this subject) with their current marks.
- */
 router.get("/marks-entry/:examId/:subjectId", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.examId, "examId");
     const subjectId = parseId(req.params.subjectId, "subjectId");
     const { section_id } = req.query;
 
-    // Fetch exam
     const examRows = await q(
         `SELECT * FROM erp_exams WHERE id = ? AND record_type = 'EXAM' LIMIT 1`,
         [examId]
@@ -1549,9 +1564,8 @@ router.get("/marks-entry/:examId/:subjectId", asyncHandler(async (req, res) => {
     if (examRows.length === 0) return fail(res, "Exam not found", 404);
     const exam = examRows[0];
 
-    if (exam.is_locked) return fail(res, "Exam is locked, marks entry disabled", 400);
+    if (exam.is_locked) return fail(res, "Exam is locked", 400);
 
-    // Fetch exam-subject config
     const examSub = await q(`
         SELECT * FROM erp_exams
         WHERE record_type = 'EXAM_SUBJECT' AND exam_id = ? AND subject_id = ?
@@ -1560,11 +1574,13 @@ router.get("/marks-entry/:examId/:subjectId", asyncHandler(async (req, res) => {
     if (examSub.length === 0) return fail(res, "Subject not configured for this exam", 404);
     const examSubjectConfig = safeJSONParse(examSub[0].data, {});
 
-    // Fetch students assigned this subject (from erp_marks STUDENT_SUBJECT + Nstudent)
+    // ✅ Fetch students from Nstudent (JOIN with student-subject assignment)
     let sql = `
         SELECT ss.student_id, ss.class_id, ss.section_id, ss.stream_id,
                n.name AS student_name, n.father_name, n.mother_name, n.roll_number,
                n.student_photo_url AS photo,
+               n.class AS student_class, n.section AS student_section,
+               n.stream AS student_stream, n.session AS student_session,
                m.id AS marks_id, m.theory_marks, m.practical_marks,
                m.internal_marks, m.project_marks, m.total_marks, m.max_marks,
                m.grade, m.is_absent, m.absent_type, m.remarks, m.status AS marks_status
@@ -1605,11 +1621,6 @@ router.get("/marks-entry/:examId/:subjectId", asyncHandler(async (req, res) => {
     }, "Marks entry data fetched successfully");
 }));
 
-/**
- * POST /marks/save
- * Bulk save marks (draft mode allowed). Validates everything.
- * Body: { exam_id, subject_id, marks: [{ student_id, theory, practical, internal, project, absent_type, remarks }] }
- */
 router.post("/marks/save", asyncHandler(async (req, res) => {
     requireFields(req.body, ["exam_id", "subject_id", "marks"]);
     const user = getUserContext(req);
@@ -1622,7 +1633,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
         return fail(res, "marks array is required", 400);
     }
 
-    // Validate exam
     const examRows = await q(
         `SELECT * FROM erp_exams WHERE id = ? AND record_type = 'EXAM' LIMIT 1`,
         [examId]
@@ -1635,7 +1645,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
         return fail(res, "Exam is published, cannot modify marks", 400);
     }
 
-    // Validate subject config for exam
     const examSub = await q(`
         SELECT * FROM erp_exams
         WHERE record_type = 'EXAM_SUBJECT' AND exam_id = ? AND subject_id = ?
@@ -1670,7 +1679,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
                 throw new Error(`Student ${studentId} not assigned to this subject`);
             }
 
-            // Parse marks
             const theory = toDecimal(item.theory);
             const practical = toDecimal(item.practical);
             const internal = toDecimal(item.internal);
@@ -1681,7 +1689,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
                 throw new Error(`Invalid absent_type: ${absentType}`);
             }
 
-            // Validation
             if (theory !== null && (theory < 0 || theory > theoryMax)) {
                 throw new Error(`Theory must be 0-${theoryMax}`);
             }
@@ -1695,18 +1702,15 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
                 throw new Error(`Project must be 0-${projectMax}`);
             }
 
-            // Calculate total
             let total = 0;
             const isAbsent = absentType !== "Present";
             if (!isAbsent) {
                 total = (theory || 0) + (practical || 0) + (internal || 0) + (project || 0);
             }
 
-            // Grade
             const pct = maxMarks > 0 ? (total / maxMarks) * 100 : 0;
             const grade = await calculateGrade(pct);
 
-            // Upsert marks
             const existing = await q(`
                 SELECT id, theory_marks, practical_marks, internal_marks, project_marks,
                        total_marks, status
@@ -1719,7 +1723,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
             const remarks = trimStr(item.remarks, 500);
 
             if (existing.length > 0) {
-                // Prevent editing if already VERIFIED/FINALIZED/PUBLISHED
                 if (["VERIFIED", "FINALIZED", "PUBLISHED"].includes(existing[0].status)) {
                     throw new Error(`Marks already ${existing[0].status}, cannot edit`);
                 }
@@ -1749,8 +1752,9 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
             } else {
                 const result = await q(`
                     INSERT INTO erp_marks (
-                        record_type, student_id, session_id, class_id, section_id, stream_id,
-                        exam_id, subject_id, theory_marks, practical_marks, internal_marks, project_marks,
+                        record_type, student_id, session_id, class_id,
+                        section_id, stream_id, exam_id, subject_id,
+                        theory_marks, practical_marks, internal_marks, project_marks,
                         total_marks, max_marks, grade, is_absent, absent_type, remarks,
                         status, entered_by, created_at
                     ) VALUES ('MARKS', ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, NOW())
@@ -1773,19 +1777,13 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
 
             saved.push({ student_id: studentId, total, grade });
         } catch (err) {
-            failed.push({
-                student_id: item.student_id,
-                error: err.message
-            });
+            failed.push({ student_id: item.student_id, error: err.message });
         }
     }
 
-    // Update exam status to IN_PROGRESS if it was DRAFT
     if (saved.length > 0 && exam.status === "DRAFT") {
         await q(`UPDATE erp_exams SET status = 'IN_PROGRESS' WHERE id = ?`, [examId]);
     }
-
-    log.success("Marks saved", { examId, subjectId, saved: saved.length, failed: failed.length });
 
     return ok(res, {
         saved_count: saved.length,
@@ -1794,10 +1792,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
     }, `${saved.length} marks saved, ${failed.length} failed`);
 }));
 
-/**
- * POST /marks/submit
- * Change marks status from DRAFT → SUBMITTED for a whole exam+subject.
- */
 router.post("/marks/submit", asyncHandler(async (req, res) => {
     requireFields(req.body, ["exam_id", "subject_id"]);
     const user = getUserContext(req);
@@ -1822,10 +1816,6 @@ router.post("/marks/submit", asyncHandler(async (req, res) => {
     return ok(res, { submitted: result.affectedRows }, `${result.affectedRows} marks submitted`);
 }));
 
-/**
- * POST /marks/verify
- * SUBMITTED → VERIFIED
- */
 router.post("/marks/verify", asyncHandler(async (req, res) => {
     requireFields(req.body, ["exam_id", "subject_id"]);
     const user = getUserContext(req);
@@ -1850,10 +1840,6 @@ router.post("/marks/verify", asyncHandler(async (req, res) => {
     return ok(res, { verified: result.affectedRows }, `${result.affectedRows} marks verified`);
 }));
 
-/**
- * POST /marks/return-for-correction
- * VERIFIED/SUBMITTED → REJECTED with reason
- */
 router.post("/marks/return-for-correction", asyncHandler(async (req, res) => {
     requireFields(req.body, ["exam_id", "subject_id", "reason"]);
     const user = getUserContext(req);
@@ -1864,7 +1850,8 @@ router.post("/marks/return-for-correction", asyncHandler(async (req, res) => {
 
     const result = await q(`
         UPDATE erp_marks
-        SET status = 'DRAFT', remarks = CONCAT(COALESCE(remarks, ''), ' | RETURNED: ', ?),
+        SET status = 'DRAFT',
+            remarks = CONCAT(COALESCE(remarks, ''), ' | RETURNED: ', ?),
             updated_at = NOW()
         WHERE record_type = 'MARKS'
           AND exam_id = ? AND subject_id = ?
@@ -1883,11 +1870,6 @@ router.post("/marks/return-for-correction", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 11: RESULT FINALIZATION
 // ============================================================
-
-/**
- * POST /exams/:id/finalize
- * Finalize the entire exam — locks it, snapshots marks.
- */
 router.post("/exams/:id/finalize", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.id);
     const user = getUserContext(req);
@@ -1901,7 +1883,6 @@ router.post("/exams/:id/finalize", asyncHandler(async (req, res) => {
 
     if (exam.is_locked) return fail(res, "Exam already finalized", 400);
 
-    // Check all marks are VERIFIED
     const pending = await q(`
         SELECT COUNT(*) AS cnt FROM erp_marks
         WHERE record_type = 'MARKS' AND exam_id = ?
@@ -1912,13 +1893,12 @@ router.post("/exams/:id/finalize", asyncHandler(async (req, res) => {
         return fail(res, `${pending[0].cnt} marks are not verified yet`, 400);
     }
 
-    // Fetch all distinct students for this exam
+    // Get all distinct students
     const students = await q(`
         SELECT DISTINCT student_id FROM erp_marks
         WHERE record_type = 'MARKS' AND exam_id = ?
     `, [examId]);
 
-    // Snapshot marks and result for each student
     let snapshots = 0;
     for (const s of students) {
         try {
@@ -1944,14 +1924,13 @@ router.post("/exams/:id/finalize", asyncHandler(async (req, res) => {
         }
     }
 
-    // Lock exam
     await q(`
         UPDATE erp_exams
-        SET status = 'FINALIZED', is_locked = 1, updated_by = ?, updated_at = NOW()
+        SET status = 'FINALIZED', is_locked = 1,
+            updated_by = ?, updated_at = NOW()
         WHERE id = ?
     `, [user.user_id, examId]);
 
-    // Mark all marks as FINALIZED
     await q(`
         UPDATE erp_marks
         SET status = 'FINALIZED', finalized_by = ?, finalized_at = NOW(), updated_at = NOW()
@@ -1964,14 +1943,9 @@ router.post("/exams/:id/finalize", asyncHandler(async (req, res) => {
         new_value: { snapshots, total_students: students.length }
     });
 
-    log.success("Exam finalized", { examId, snapshots });
     return ok(res, { snapshots, total_students: students.length }, "Exam finalized successfully");
 }));
 
-/**
- * POST /exams/:id/unlock
- * Unlock a finalized exam with reason (for correction).
- */
 router.post("/exams/:id/unlock", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.id);
     const user = getUserContext(req);
@@ -2013,7 +1987,6 @@ router.post("/exams/:id/unlock", asyncHandler(async (req, res) => {
 // ============================================================
 // SECTION 12: PUBLISH / UNPUBLISH
 // ============================================================
-
 router.post("/exams/:id/publish", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.id);
     const user = getUserContext(req);
@@ -2032,7 +2005,8 @@ router.post("/exams/:id/publish", asyncHandler(async (req, res) => {
 
     await q(`
         UPDATE erp_exams
-        SET status = 'PUBLISHED', result_date = COALESCE(?, result_date), updated_by = ?, updated_at = NOW()
+        SET status = 'PUBLISHED', result_date = COALESCE(?, result_date),
+            updated_by = ?, updated_at = NOW()
         WHERE id = ?
     `, [result_date || null, user.user_id, examId]);
 
@@ -2048,7 +2022,6 @@ router.post("/exams/:id/publish", asyncHandler(async (req, res) => {
         new_value: { result_date }
     });
 
-    log.success("Exam published", { examId });
     return ok(res, { result_date }, "Exam published successfully");
 }));
 
@@ -2056,16 +2029,10 @@ router.post("/exams/:id/unpublish", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.id);
     const user = getUserContext(req);
 
-    const examRows = await q(
-        `SELECT * FROM erp_exams WHERE id = ? AND record_type = 'EXAM' LIMIT 1`,
-        [examId]
-    );
-    if (examRows.length === 0) return fail(res, "Exam not found", 404);
-
     await q(`
         UPDATE erp_exams
         SET status = 'FINALIZED', updated_by = ?, updated_at = NOW()
-        WHERE id = ?
+        WHERE id = ? AND record_type = 'EXAM'
     `, [user.user_id, examId]);
 
     await q(`
@@ -2083,13 +2050,245 @@ router.post("/exams/:id/unpublish", asyncHandler(async (req, res) => {
 }));
 
 // ============================================================
-// SECTION 13: STUDENT RESULTS
+// ✅ SECTION 13: STUDENT SELF-SERVICE (PERMANENT RESULTS)
 // ============================================================
-
 /**
- * GET /student/:studentId/results
- * All published results for a student across sessions.
+ * GET /student/:studentId/permanent
+ * Fetches complete, permanent results for a student.
+ * - Student data comes from Nstudent (single source of truth)
+ * - Results come from erp_results_backup (permanent snapshots)
+ * - Auto-snapshots any newly published exam
+ * - Only admin can delete (via /admin/result/:resultId)
  */
+router.get("/student/:studentId/permanent", asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+    const { session_id } = req.query;
+
+    if (!studentId || studentId.trim() === "") {
+        return fail(res, "Student ID is required", 400);
+    }
+
+    const sid = studentId.trim();
+
+    // ✅ STEP 1: Fetch student from Nstudent
+    let student;
+    try {
+        student = await getStudentFromNstudent(sid);
+    } catch (err) {
+        return fail(res, err.message, 404);
+    }
+
+    if (student.status && student.status.toLowerCase() === "inactive") {
+        return fail(res, "Student account is inactive. Contact school office.", 403);
+    }
+
+    // ✅ STEP 2: Resolve master IDs from Nstudent values
+    const masterIds = await resolveMasterIdsFromStudent(student, session_id);
+
+    // ✅ STEP 3: Auto-snapshot any PUBLISHED exam not yet in backup
+    if (masterIds.class_id) {
+        try {
+            const publishedExams = await q(`
+                SELECT id, session_id, class_id, exam_code, name AS exam_name
+                FROM erp_exams
+                WHERE record_type = 'EXAM'
+                  AND status = 'PUBLISHED'
+                  AND class_id = ?
+                  ${session_id ? "AND session_id = ?" : ""}
+            `, session_id
+                ? [masterIds.class_id, parseId(session_id)]
+                : [masterIds.class_id]
+            );
+
+            for (const exam of publishedExams) {
+                const existing = await q(`
+                    SELECT id FROM erp_results_backup
+                    WHERE student_id = ? AND exam_id = ? AND result_type = 'EXAM'
+                    LIMIT 1
+                `, [sid, exam.id]);
+
+                if (existing.length === 0) {
+                    log.info("Auto-snapshotting published exam", { sid, examId: exam.id });
+                    await snapshotMarks({
+                        student_id: sid,
+                        session_id: exam.session_id,
+                        exam_id: exam.id,
+                        reason: "AUTO_ON_VIEW",
+                        user: { user_id: "SYSTEM", user_name: "System", user_role: "SYSTEM" }
+                    });
+                    await snapshotResult({
+                        student_id: sid,
+                        session_id: exam.session_id,
+                        class_id: exam.class_id,
+                        exam_id: exam.id,
+                        result_type: "EXAM",
+                        reason: "AUTO_ON_VIEW",
+                        user: { user_id: "SYSTEM", user_name: "System", user_role: "SYSTEM" }
+                    });
+                }
+            }
+        } catch (snapshotErr) {
+            log.warn("Auto-snapshot warning (non-fatal)", {
+                error: snapshotErr.message, studentId: sid
+            });
+        }
+    }
+
+    // ✅ STEP 4: Fetch permanent results
+    let sql = `
+        SELECT * FROM erp_results_backup
+        WHERE student_id = ? AND result_type = 'EXAM'
+    `;
+    const params = [sid];
+    if (session_id) {
+        sql += " AND session_id = ?";
+        params.push(parseId(session_id));
+    }
+    sql += " ORDER BY session_id DESC, snapshot_at DESC";
+
+    const resultsRows = await q(sql, params);
+
+    // ✅ STEP 5: Attach subject-wise marks from backup
+    const results = [];
+    for (const r of resultsRows) {
+        const marksRows = await q(`
+            SELECT subject_id, subject_name,
+                   theory_marks, practical_marks, internal_marks, project_marks,
+                   total_marks, max_marks, grade,
+                   is_absent, absent_type, remarks
+            FROM erp_marks_backup
+            WHERE student_id = ? AND session_id = ? AND exam_id = ?
+            ORDER BY subject_id ASC
+        `, [sid, r.session_id, r.exam_id]);
+
+        results.push({
+            result_id: r.id,
+            exam_id: r.exam_id,
+            exam_name: r.exam_name,
+            session_id: r.session_id,
+            session_name: r.session_name,
+            class_name: r.class_name,
+            section_name: r.section_name,
+            stream: r.stream,
+            result_type: r.result_type,
+            grand_total: r.grand_total,
+            max_total: r.max_total,
+            percentage: r.percentage,
+            overall_grade: r.overall_grade,
+            result_status: r.result_status,
+            failed_subjects: safeJSONParse(r.failed_subjects, []),
+            subject_wise_marks: marksRows,
+            subject_count: marksRows.length,
+            remarks: r.remarks,
+            snapshot_at: r.snapshot_at,
+            snapshot_reason: r.snapshot_reason
+        });
+    }
+
+    log.info("Permanent result fetched", {
+        studentId: sid,
+        total_results: results.length
+    });
+
+    return ok(res, {
+        student: {
+            student_id: student.student_id,
+            admission_number: student.admission_number,
+            apaar_id: student.apaar_id,
+            name: student.name,
+            father_name: student.father_name,
+            mother_name: student.mother_name,
+            dob: student.dob,
+            gender: student.gender,
+            category: student.category,
+            class: student.class,
+            section: student.section,
+            stream: student.stream,
+            session: student.session,
+            roll_number: student.roll_number,
+            photo: student.photo,
+            signature: student.signature_url,
+            mobile: student.mobile_number,
+            email: student.email_id,
+            address: student.address,
+            village: student.village,
+            district: student.district,
+            state: student.state
+        },
+        results,
+        total_results: results.length,
+        is_permanent: true
+    }, results.length > 0
+        ? "Permanent results loaded successfully"
+        : "No published result available yet"
+    );
+}));
+
+// ============================================================
+// SECTION 14: ADMIN — DELETE PERMANENT RESULT
+// ============================================================
+router.delete("/admin/result/:resultId", asyncHandler(async (req, res) => {
+    const resultId = parseId(req.params.resultId, "resultId");
+    const user = getUserContext(req);
+
+    const rows = await q(
+        `SELECT * FROM erp_results_backup WHERE id = ? LIMIT 1`,
+        [resultId]
+    );
+    if (rows.length === 0) return fail(res, "Result not found", 404);
+
+    const result = rows[0];
+
+    await q(`DELETE FROM erp_results_backup WHERE id = ?`, [resultId]);
+    await q(
+        `DELETE FROM erp_marks_backup 
+         WHERE student_id = ? AND session_id = ? AND exam_id = ?`,
+        [result.student_id, result.session_id, result.exam_id]
+    );
+
+    await auditLog({
+        action: "RESULT_SNAPSHOT_DELETED", entity_type: "RESULT",
+        entity_id: resultId, student_id: result.student_id,
+        session_id: result.session_id, exam_id: result.exam_id,
+        user, old_value: result, reason: req.body.reason || "Admin manual delete"
+    });
+
+    return ok(res, null, "Result deleted permanently by admin");
+}));
+
+router.delete("/admin/student/:studentId/all-results", asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+    const user = getUserContext(req);
+    const sid = studentId.trim();
+
+    const cnt = await q(
+        `SELECT COUNT(*) AS total FROM erp_results_backup WHERE student_id = ?`,
+        [sid]
+    );
+    if (cnt[0].total === 0) return fail(res, `No results found for: ${sid}`, 404);
+
+    const delResults = await q(`DELETE FROM erp_results_backup WHERE student_id = ?`, [sid]);
+    const delMarks = await q(`DELETE FROM erp_marks_backup WHERE student_id = ?`, [sid]);
+
+    await auditLog({
+        action: "ALL_RESULTS_DELETED", entity_type: "RESULT",
+        student_id: sid, user,
+        reason: req.body.reason || "Admin bulk delete",
+        old_value: {
+            results_deleted: delResults.affectedRows,
+            marks_deleted: delMarks.affectedRows
+        }
+    });
+
+    return ok(res, {
+        results_deleted: delResults.affectedRows,
+        marks_deleted: delMarks.affectedRows
+    }, `All results deleted for student ${sid}`);
+}));
+
+// ============================================================
+// SECTION 15: STUDENT RESULTS (Admin view - from backup)
+// ============================================================
 router.get("/student/:studentId/results", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const { session_id } = req.query;
@@ -2097,13 +2296,12 @@ router.get("/student/:studentId/results", asyncHandler(async (req, res) => {
     const student = await getStudentFromNstudent(studentId);
 
     let sql = `
-        SELECT rb.*
-        FROM erp_results_backup rb
-        WHERE rb.student_id = ? AND rb.result_type = 'EXAM'
+        SELECT * FROM erp_results_backup
+        WHERE student_id = ? AND result_type = 'EXAM'
     `;
     const params = [studentId];
-    if (session_id) { sql += ` AND rb.session_id = ?`; params.push(parseId(session_id)); }
-    sql += ` ORDER BY rb.session_id DESC, rb.exam_id ASC`;
+    if (session_id) { sql += " AND session_id = ?"; params.push(parseId(session_id)); }
+    sql += " ORDER BY session_id DESC, exam_id ASC";
 
     const results = await q(sql, params);
 
@@ -2129,71 +2327,29 @@ router.get("/student/:studentId/results", asyncHandler(async (req, res) => {
             student_id: student.student_id,
             name: student.name,
             father_name: student.father_name,
-            mother_name: student.mother_name,
             class: student.class,
+            section: student.section,
+            stream: student.stream,
+            session: student.session,
             roll_number: student.roll_number,
-            photo: student.student_photo_url
+            photo: student.photo
         },
         results: formatted,
         total: formatted.length
     }, "Student results fetched successfully");
 }));
 
-/**
- * GET /student/:studentId/result/:examId
- * Detailed result for a specific exam (from backup snapshot).
- */
-router.get("/student/:studentId/result/:examId", asyncHandler(async (req, res) => {
-    const { studentId } = req.params;
-    const examId = parseId(req.params.examId, "examId");
-
-    const rows = await q(`
-        SELECT * FROM erp_results_backup
-        WHERE student_id = ? AND exam_id = ? AND result_type = 'EXAM'
-        LIMIT 1
-    `, [studentId, examId]);
-
-    if (rows.length === 0) {
-        return fail(res, "Result not found for this exam", 404);
-    }
-
-    const r = rows[0];
-    return ok(res, {
-        id: r.id,
-        student_id: r.student_id,
-        student_name: r.student_name,
-        roll_number: r.roll_number,
-        father_name: r.father_name,
-        mother_name: r.mother_name,
-        class_name: r.class_name,
-        session_name: r.session_name,
-        exam_name: r.exam_name,
-        grand_total: r.grand_total,
-        max_total: r.max_total,
-        percentage: r.percentage,
-        overall_grade: r.overall_grade,
-        result_status: r.result_status,
-        failed_subjects: safeJSONParse(r.failed_subjects, []),
-        subject_wise_marks: safeJSONParse(r.subject_wise_marks, []),
-        snapshot_at: r.snapshot_at
-    }, "Result fetched successfully");
-}));
-
 // ============================================================
-// SECTION 14: PUBLIC APIs
+// SECTION 16: PUBLIC APIs
 // ============================================================
-
-/**
- * POST /public/search
- * Public result lookup — student_id + dob.
- */
 router.post("/public/search", asyncHandler(async (req, res) => {
     requireFields(req.body, ["student_id", "dob"]);
     const { student_id, dob, session_id } = req.body;
 
     const students = await q(`
-        SELECT student_id, name, father_name, mother_name, dob, class, session, roll_number,
-               student_photo_url
+        SELECT student_id, name, father_name, mother_name, dob,
+               class, section, stream, session, roll_number,
+               student_photo_url AS photo
         FROM Nstudent
         WHERE student_id = ? AND DATE(dob) = DATE(?)
         LIMIT 1
@@ -2210,8 +2366,8 @@ router.post("/public/search", asyncHandler(async (req, res) => {
         WHERE student_id = ? AND result_type = 'EXAM'
     `;
     const params = [student_id];
-    if (session_id) { sql += ` AND session_id = ?`; params.push(parseId(session_id)); }
-    sql += ` ORDER BY session_id DESC, exam_id ASC`;
+    if (session_id) { sql += " AND session_id = ?"; params.push(parseId(session_id)); }
+    sql += " ORDER BY session_id DESC, exam_id ASC";
 
     const results = await q(sql, params);
 
@@ -2219,6 +2375,8 @@ router.post("/public/search", asyncHandler(async (req, res) => {
         exam_name: r.exam_name,
         session_name: r.session_name,
         class_name: r.class_name,
+        section_name: r.section_name,
+        stream: r.stream,
         grand_total: r.grand_total,
         max_total: r.max_total,
         percentage: r.percentage,
@@ -2235,25 +2393,24 @@ router.post("/public/search", asyncHandler(async (req, res) => {
             name: student.name,
             father_name: student.father_name,
             class: student.class,
+            section: student.section,
+            stream: student.stream,
             roll_number: student.roll_number,
-            photo: student.student_photo_url
+            photo: student.photo
         },
         results: formatted,
         total: formatted.length
     }, "Results fetched successfully");
 }));
 
-/**
- * GET /public/verify/:studentId/:examId
- * QR verification endpoint — returns minimal safe info.
- */
 router.get("/public/verify/:studentId/:examId", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const examId = parseId(req.params.examId, "examId");
 
     const rows = await q(`
-        SELECT student_name, roll_number, class_name, session_name, exam_name,
-               result_status, percentage, overall_grade, snapshot_at
+        SELECT student_name, roll_number, class_name, section_name, stream,
+               session_name, exam_name, result_status, percentage,
+               overall_grade, snapshot_at
         FROM erp_results_backup
         WHERE student_id = ? AND exam_id = ? AND result_type = 'EXAM'
         LIMIT 1
@@ -2273,6 +2430,8 @@ router.get("/public/verify/:studentId/:examId", asyncHandler(async (req, res) =>
         student_name: r.student_name,
         roll_number: r.roll_number,
         class: r.class_name,
+        section: r.section_name,
+        stream: r.stream,
         session: r.session_name,
         exam: r.exam_name,
         result_status: r.result_status,
@@ -2283,17 +2442,16 @@ router.get("/public/verify/:studentId/:examId", asyncHandler(async (req, res) =>
 }));
 
 // ============================================================
-// SECTION 15: DASHBOARD & ANALYTICS
+// SECTION 17: DASHBOARD & ANALYTICS
 // ============================================================
-
 router.get("/dashboard/stats", asyncHandler(async (req, res) => {
     const { session_id } = req.query;
-
     const sessionFilter = session_id ? ` AND e.session_id = ${parseId(session_id)}` : "";
 
     const overall = await q(`
         SELECT
-            (SELECT COUNT(DISTINCT student_id) FROM erp_marks WHERE record_type = 'STUDENT_SUBJECT' ${session_id ? `AND session_id = ${parseId(session_id)}` : ""}) AS total_students,
+            (SELECT COUNT(DISTINCT student_id) FROM erp_marks 
+             WHERE record_type = 'STUDENT_SUBJECT' ${session_id ? `AND session_id = ${parseId(session_id)}` : ""}) AS total_students,
             (SELECT COUNT(*) FROM erp_exams WHERE record_type = 'EXAM' ${sessionFilter}) AS total_exams,
             (SELECT COUNT(*) FROM erp_exams WHERE record_type = 'EXAM' AND status = 'PUBLISHED' ${sessionFilter}) AS published_exams,
             (SELECT COUNT(*) FROM erp_marks WHERE record_type = 'MARKS' ${session_id ? `AND session_id = ${parseId(session_id)}` : ""}) AS total_marks,
@@ -2303,20 +2461,12 @@ router.get("/dashboard/stats", asyncHandler(async (req, res) => {
             (SELECT COUNT(*) FROM erp_results_backup WHERE result_type = 'EXAM' AND result_status = 'Fail' ${session_id ? `AND session_id = ${parseId(session_id)}` : ""}) AS fail_count
     `);
 
-    return ok(res, {
-        overall: overall[0] || {},
-        // Additional stats can be fetched here
-    }, "Dashboard stats fetched successfully");
+    return ok(res, { overall: overall[0] || {} }, "Dashboard stats fetched successfully");
 }));
 
-/**
- * GET /analytics/exam/:examId
- * Detailed analytics for a specific exam.
- */
 router.get("/analytics/exam/:examId", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.examId, "examId");
 
-    // Subject-wise stats
     const subjectStats = await q(`
         SELECT
             m.subject_id,
@@ -2335,7 +2485,6 @@ router.get("/analytics/exam/:examId", asyncHandler(async (req, res) => {
         GROUP BY m.subject_id, sub.name
     `, [examId, examId]);
 
-    // Grade distribution
     const gradeDist = await q(`
         SELECT grade, COUNT(*) AS count
         FROM erp_marks
@@ -2343,7 +2492,6 @@ router.get("/analytics/exam/:examId", asyncHandler(async (req, res) => {
         GROUP BY grade
     `, [examId]);
 
-    // Result status breakdown
     const statusDist = await q(`
         SELECT result_status, COUNT(*) AS count
         FROM erp_results_backup
@@ -2359,9 +2507,8 @@ router.get("/analytics/exam/:examId", asyncHandler(async (req, res) => {
 }));
 
 // ============================================================
-// SECTION 16: AUDIT LOGS
+// SECTION 18: AUDIT LOGS
 // ============================================================
-
 router.get("/audit-logs", asyncHandler(async (req, res) => {
     const { action, student_id, exam_id, entity_type, from_date, to_date } = req.query;
     const { page, limit, offset } = parsePagination(req.query);
@@ -2402,7 +2549,6 @@ router.get("/audit-logs", asyncHandler(async (req, res) => {
 // ============================================================
 // GLOBAL ERROR HANDLER
 // ============================================================
-
 router.use((err, req, res, next) => {
     log.error("Route error", {
         path: req.originalUrl,
