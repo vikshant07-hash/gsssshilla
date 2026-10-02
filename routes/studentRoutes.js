@@ -2765,7 +2765,8 @@ async function restoreBackupData(data, mode = "merge") {
 // ============================================================
 // ✅ PROFESSIONAL PDF LIST — Table + Card Modes
 // ============================================================
-router.get("/list-pdf", async (req, res) => {
+
+            router.get("/list-pdf", async (req, res) => {
   try {
     const {
       class: cls, gender, stream, category, status, session, search,
@@ -2874,19 +2875,52 @@ router.get("/list-pdf", async (req, res) => {
     });
 
     // ============================================================
-    // FETCH IMAGES
+    // FETCH IMAGES — with concurrency limit (SAFE)
     // ============================================================
     const photoMap = {}, sigMap = {};
     if (needPhotos || needSigs) {
       console.log(`[List PDF] Fetching images for ${students.length} students...`);
-      await Promise.all(students.map(async (s) => {
-        if (needPhotos && s.student_photo_url) {
-          try { photoMap[s.id] = await fetchImageBuffer(s.student_photo_url); } catch (e) {}
-        }
-        if (needSigs && s.signature_url) {
-          try { sigMap[s.id] = await fetchImageBuffer(s.signature_url); } catch (e) {}
-        }
-      }));
+
+      const CONCURRENCY = 10;
+      const queue = [...students];
+      let activeCount = 0;
+      let doneCount = 0;
+
+      await new Promise((resolve) => {
+        const next = () => {
+          if (queue.length === 0 && activeCount === 0) return resolve();
+          while (activeCount < CONCURRENCY && queue.length > 0) {
+            const s = queue.shift();
+            activeCount++;
+            (async () => {
+              try {
+                if (needPhotos && s.student_photo_url) {
+                  try {
+                    const buf = await fetchImageBuffer(s.student_photo_url);
+                    if (buf) photoMap[s.id] = buf;
+                  } catch (e) {}
+                }
+                if (needSigs && s.signature_url) {
+                  try {
+                    const buf = await fetchImageBuffer(s.signature_url);
+                    if (buf) sigMap[s.id] = buf;
+                  } catch (e) {}
+                }
+              } finally {
+                activeCount--;
+                doneCount++;
+                if (doneCount % 50 === 0) {
+                  console.log(`[List PDF] Images: ${doneCount}/${students.length}`);
+                }
+                next();
+              }
+            })();
+          }
+        };
+        next();
+      });
+
+      console.log(`[List PDF] Images fetched: photo=${Object.keys(photoMap).length}, sig=${Object.keys(sigMap).length}`);
     }
 
     const schoolLogo = await fetchImageBuffer(SCHOOL_LOGO_URL);
@@ -2912,27 +2946,20 @@ router.get("/list-pdf", async (req, res) => {
       bgPage: "#f0f4f8",
       bgCard: "#ffffff",
       bgAlt: "#f8fafc",
-
-      // Header gradient bands
-      headerDark: "#1e1b4b",           // deep indigo
-      headerMid: "#312e81",            // indigo
-      sectionBg: "#4338ca",             // indigo-600
-
-      // Accent colors
-      accent: "#f59e0b",                // amber
+      headerDark: "#1e1b4b",
+      headerMid: "#312e81",
+      sectionBg: "#4338ca",
+      accent: "#f59e0b",
       accentDark: "#d97706",
-      teal: "#14b8a6",                  // teal
-      coral: "#f87171",                 // coral red
-      purple: "#a855f7",                // purple
-
-      // Text
+      teal: "#14b8a6",
+      coral: "#f87171",
+      purple: "#a855f7",
       textPrimary: "#0f172a",
       textSecondary: "#475569",
-      textLabel: "#4338ca",             // indigo for labels
+      textLabel: "#4338ca",
       textLabelValue: "#1e293b",
       textWhite: "#ffffff",
       textMuted: "#94a3b8",
-
       border: "#e2e8f0",
       borderAccent: "#c7d2fe",
       shadowLight: "#ffffff",
@@ -3002,7 +3029,6 @@ router.get("/list-pdf", async (req, res) => {
         } catch (e) {}
       }
 
-      // Diagonal text watermark
       doc.save();
       doc.opacity(0.07);
       doc.font("Helvetica-Bold").fontSize(80).fillColor("#1e1b4b");
@@ -3013,21 +3039,18 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // PAGE HEADER — Logo centered with school name
+    // PAGE HEADER
     // ============================================================
     const drawPageHeader = (currentTitle) => {
-      // Header background — deep indigo
       doc.rect(0, 0, PAGE_W, HEADER_H).fill(THEME.headerDark);
       doc.rect(0, HEADER_H * 0.5, PAGE_W, HEADER_H * 0.5).fill(THEME.headerMid);
       doc.rect(0, HEADER_H - 4, PAGE_W, 4).fill(THEME.accent);
 
       const LOGO_SIZE = 68;
       const gap = 14;
-
       const schoolName = "GOVT. SR. SEC. SCHOOL SHILLA";
       doc.font("Helvetica-Bold").fontSize(18);
       const nameWidth = doc.widthOfString(schoolName);
-
       const totalWidth = LOGO_SIZE + gap + nameWidth + 20;
       const startX = (PAGE_W - totalWidth) / 2;
       const logoX = startX;
@@ -3035,7 +3058,6 @@ router.get("/list-pdf", async (req, res) => {
       const nameX = startX + LOGO_SIZE + gap;
       const nameY = logoY + LOGO_SIZE / 2 - 10;
 
-      // Logo
       if (schoolLogo) {
         try {
           doc.save();
@@ -3048,19 +3070,16 @@ router.get("/list-pdf", async (req, res) => {
         } catch (e) {}
       }
 
-      // School name
       doc.font("Helvetica-Bold").fontSize(18).fillColor(THEME.textWhite)
          .text(schoolName, nameX, nameY, {
            width: nameWidth + 20, align: "left", characterSpacing: 1.3, lineBreak: false
          });
 
-      // Address
       doc.font("Helvetica").fontSize(9).fillColor("#c7d2fe")
          .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN, 74, {
            width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.4
          });
 
-      // Title pill
       const displayTitle = String(currentTitle || title).toUpperCase();
       doc.font("Helvetica-Bold").fontSize(9);
       const tW = Math.min(CONTENT_W - 200, doc.widthOfString(displayTitle) + 40);
@@ -3071,7 +3090,6 @@ router.get("/list-pdf", async (req, res) => {
            width: tW, align: "center", characterSpacing: 1, lineBreak: false
          });
 
-      // Filter band
       const bandY = HEADER_H + 2;
       drawNeoBox(MARGIN, bandY, CONTENT_W, FILTER_BAND_H - 4, 6, THEME.bgCard, true);
       doc.roundedRect(MARGIN, bandY, 4, FILTER_BAND_H - 4, 2).fill(THEME.teal);
@@ -3085,7 +3103,6 @@ router.get("/list-pdf", async (req, res) => {
            width: 190, align: "right", lineBreak: false
          });
 
-      // Reason
       if (hasReason) {
         doc.font("Helvetica-Oblique").fontSize(8.5).fillColor(THEME.accentDark)
            .text(`Reason: ${String(reason).trim()}`, MARGIN, bandY + FILTER_BAND_H + 1, {
@@ -3244,86 +3261,296 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // CARD MODE ROW — with field LABELS
+    // ✅ CARD MODE ROW — Simple Professional (Label : Value)
+    // Auto-fit columns + dynamic height
     // ============================================================
-    
-// ============================================================
-// ✅ CARD MODE ROW — Simple Professional (Label : Value)
-// ============================================================
-// MAIN LOOP — isko replace karein
-let cursorY = BODY_TOP;
-const classList = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
-let globalIdx = 0;
+    const drawCardRow = (s, y, idx) => {
+      // ---- Config ----
+      const hasPhoto = activeCols.includes("photo");
+      const hasSig = activeCols.includes("signature");
+      const photoBlockW = hasPhoto ? 62 : 0;
+      const sigBlockW = hasSig ? 78 : 0;
+      const rightReserve = photoBlockW + sigBlockW + 20;
+      const innerPad = 10;
 
-addPage(title);
+      const bodyX = MARGIN + innerPad + 4;
+      const bodyW = Math.max(100, CONTENT_W - innerPad * 2 - rightReserve - 8);
 
-classList.forEach((className) => {
-  const classStudents = grouped[className];
+      const HEADER_H_CARD = 20;
+      const ROW_H_INNER = 18;
+      const BODY_TOP_PAD = 4;
+      const BODY_BOTTOM_PAD = 6;
 
-  // Minimum space check — section title + at least 2 cards ka space
-  const minNeeded = SECTION_TITLE_H + (isCard ? 100 : TABLE_HEADER_H + ROW_UNIT * 2) + 10;
-  if (cursorY + minNeeded > BODY_BOTTOM) {
-    drawPageFooter();
-    addPage(title);
-    cursorY = BODY_TOP;
-  }
+      // ---- Fields ----
+      const fields = activeCols.filter(c =>
+        c !== "photo" && c !== "signature" && c !== "sl" && c !== "name"
+      );
 
-  cursorY = drawSectionTitle(cursorY, className, classStudents.length);
-
-  if (!isCard) {
-    cursorY = drawTableHeader(cursorY);
-  }
-
-  for (let i = 0; i < classStudents.length; i++) {
-    const s = classStudents[i];
-
-    // ✅ For card mode: check if card fits (estimate minimum needed)
-    if (isCard) {
-      // Estimate card height (roughly — actual will be computed inside)
-      const estimatedCardH = ROW_H + 20;
-      if (cursorY + estimatedCardH > BODY_BOTTOM) {
-        drawPageFooter();
-        addPage(title);
-        cursorY = BODY_TOP;
-        cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
+      // ✅ SAFE: no fields case
+      if (!fields.length) {
+        const CARD_H = 40;
+        doc.roundedRect(MARGIN, y, CONTENT_W, CARD_H, 8).fill(THEME.bgCard);
+        doc.roundedRect(MARGIN, y, CONTENT_W, CARD_H, 8)
+           .lineWidth(1.4).strokeColor(THEME.sectionBg).stroke();
+        doc.font("Helvetica-Bold").fontSize(11).fillColor(THEME.headerDark)
+           .text(`#${idx + 1}  ${String(s.name || "—").toUpperCase()}`,
+                 MARGIN + 16, y + 14, { width: CONTENT_W - 32, lineBreak: false, ellipsis: true });
+        return y + CARD_H + STUDENT_GAP;
       }
-      // Draw card — it returns its actual new Y
-      cursorY = drawCardRow(s, cursorY, globalIdx);
-      globalIdx++;
-    } else {
-      // Table mode — fixed height check
-      if (cursorY + ROW_UNIT > BODY_BOTTOM) {
+
+      // ---- Measure each field ----
+      const measured = [];
+      for (const colKey of fields) {
+        try {
+          const def = COLUMN_DEFS[colKey];
+          if (!def) continue;
+
+          doc.font("Helvetica-Bold").fontSize(6.5);
+          const labelText = def.label + " :";
+          const labelW = doc.widthOfString(labelText) || 40;
+
+          const value = String(getCellValue(s, colKey, idx) || "—");
+          doc.font(def.bold ? "Helvetica-Bold" : "Helvetica").fontSize(8);
+          const valueW = doc.widthOfString(value) || 40;
+
+          const total = labelW + 4 + Math.min(valueW, 140) + 14;
+          measured.push({ key: colKey, total: isFinite(total) ? total : 100 });
+        } catch (e) {
+          measured.push({ key: colKey, total: 100 });
+        }
+      }
+
+      let avgFieldW = 100;
+      if (measured.length) {
+        const sum = measured.reduce((a, m) => a + m.total, 0);
+        avgFieldW = sum / measured.length;
+        if (!isFinite(avgFieldW) || avgFieldW <= 0) avgFieldW = 100;
+      }
+
+      // ---- Choose COLS (3-5) ----
+      let COLS = 3;
+      for (let tryCols = 5; tryCols >= 3; tryCols--) {
+        const colW = bodyW / tryCols;
+        if (colW >= avgFieldW) {
+          COLS = tryCols;
+          break;
+        }
+      }
+      if (!isFinite(COLS) || COLS < 3) COLS = 3;
+      if (COLS > 5) COLS = 5;
+
+      const COL_W = bodyW / COLS;
+      const totalRows = Math.max(1, Math.ceil(fields.length / COLS));
+
+      // ---- Dynamic card height ----
+      let CARD_H = HEADER_H_CARD + BODY_TOP_PAD + totalRows * ROW_H_INNER + BODY_BOTTOM_PAD;
+      if (!isFinite(CARD_H) || CARD_H < 40) CARD_H = 40;
+      if (CARD_H > 500) CARD_H = 500;
+
+      // ---- Outer card ----
+      doc.save();
+      doc.opacity(0.10);
+      doc.roundedRect(MARGIN + 2, y + 2, CONTENT_W, CARD_H, 8).fill(THEME.shadowDark);
+      doc.restore();
+
+      doc.roundedRect(MARGIN, y, CONTENT_W, CARD_H, 8).fill(THEME.bgCard);
+      doc.roundedRect(MARGIN, y, CONTENT_W, CARD_H, 8)
+         .lineWidth(1.4).strokeColor(THEME.sectionBg).stroke();
+
+      doc.roundedRect(MARGIN + 4, y + 6, 5, CARD_H - 12, 2).fill(THEME.accent);
+
+      // ---- Header strip ----
+      doc.roundedRect(MARGIN + 12, y + 4, CONTENT_W - 24, HEADER_H_CARD, 5).fill("#eef2ff");
+      doc.strokeColor(THEME.sectionBg).lineWidth(0.6)
+         .moveTo(MARGIN + 12, y + 4 + HEADER_H_CARD)
+         .lineTo(MARGIN + CONTENT_W - 12, y + 4 + HEADER_H_CARD)
+         .stroke();
+
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(THEME.sectionBg)
+         .text(`#${String(idx + 1).padStart(2, "0")}`, MARGIN + 20, y + 8, {
+           width: 30, align: "left", lineBreak: false
+         });
+
+      doc.font("Helvetica-Bold").fontSize(12).fillColor(THEME.headerDark)
+         .text(String(s.name || "—").toUpperCase(), MARGIN + 54, y + 6, {
+           width: CONTENT_W - 70, align: "left", lineBreak: false, ellipsis: true
+         });
+
+      // ---- Body ----
+      const bodyStartY = y + 4 + HEADER_H_CARD + BODY_TOP_PAD;
+
+      const drawLabelValueCell = (colKey, cellX, cellY, cellW) => {
+        try {
+          const def = COLUMN_DEFS[colKey];
+          if (!def) return;
+
+          const labelText = def.label + " :";
+          doc.font("Helvetica-Bold").fontSize(6.5).fillColor(THEME.textLabel)
+             .text(labelText, cellX + 4, cellY + 3, {
+               width: cellW - 8, align: "left", lineBreak: false, ellipsis: true
+             });
+
+          doc.font("Helvetica-Bold").fontSize(6.5);
+          const labelW = doc.widthOfString(labelText) || 40;
+
+          const value = getCellValue(s, colKey, idx);
+          doc.font(def.bold ? "Helvetica-Bold" : "Helvetica")
+             .fontSize(8)
+             .fillColor(THEME.textPrimary)
+             .text(String(value), cellX + 4 + labelW + 3, cellY + 3, {
+               width: Math.max(20, cellW - labelW - 12),
+               align: "left", lineBreak: false, ellipsis: true
+             });
+        } catch (e) {}
+      };
+
+      for (let r = 0; r < totalRows; r++) {
+        const rowY = bodyStartY + r * ROW_H_INNER;
+
+        if (r > 0) {
+          doc.strokeColor("#eef2f7").lineWidth(0.4)
+             .moveTo(bodyX, rowY - 1).lineTo(bodyX + bodyW, rowY - 1).stroke();
+        }
+
+        for (let c = 0; c < COLS; c++) {
+          const fieldIdx = r * COLS + c;
+          if (fieldIdx >= fields.length) break;
+          const colKey = fields[fieldIdx];
+          const cellX = bodyX + c * COL_W;
+          drawLabelValueCell(colKey, cellX, rowY, COL_W);
+        }
+      }
+
+      // ---- Photo ----
+      let rx = MARGIN + CONTENT_W - rightReserve;
+      if (hasPhoto) {
+        const pW = 54;
+        const pH = Math.min(CARD_H - 12, 72);
+        const px = rx + 4;
+        const py = y + (CARD_H - pH) / 2;
+
+        doc.roundedRect(px, py, pW, pH, 5)
+           .fillAndStroke("#ffffff", THEME.sectionBg).lineWidth(1).stroke();
+
+        if (photoMap[s.id]) {
+          try {
+            doc.image(photoMap[s.id], px + 2, py + 2, {
+              fit: [pW - 4, pH - 4], align: "center", valign: "center"
+            });
+          } catch (e) {
+            doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
+               .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
+          }
+        } else {
+          doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
+             .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
+        }
+        rx += photoBlockW;
+      }
+
+      // ---- Signature ----
+      if (hasSig) {
+        const sW = 66, sH = 34;
+        const sx = rx + 6;
+        const sy = y + (CARD_H - sH) / 2;
+
+        doc.roundedRect(sx, sy, sW, sH, 5)
+           .fillAndStroke("#fef8ed", THEME.accent).lineWidth(1).stroke();
+
+        if (sigMap[s.id]) {
+          try {
+            doc.image(sigMap[s.id], sx + 2, sy + 2, {
+              fit: [sW - 4, sH - 4], align: "center", valign: "center"
+            });
+          } catch (e) {
+            doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
+               .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
+          }
+        } else {
+          doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
+             .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
+        }
+      }
+
+      return y + CARD_H + STUDENT_GAP;
+    };
+
+    // ============================================================
+    // MAIN LOOP — SAFE with HARD LIMITS
+    // ============================================================
+    let cursorY = BODY_TOP;
+    const classList = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
+    let globalIdx = 0;
+
+    addPage(title);
+
+    let totalPagesAdded = 0;
+    const MAX_PAGES = 200;
+
+    classList.forEach((className) => {
+      const classStudents = grouped[className];
+
+      const minNeeded = isCard
+        ? SECTION_TITLE_H + 100
+        : SECTION_TITLE_H + TABLE_HEADER_H + ROW_UNIT * 2 + 10;
+
+      if (cursorY + minNeeded > BODY_BOTTOM) {
+        if (totalPagesAdded >= MAX_PAGES) return;
         drawPageFooter();
         addPage(title);
+        totalPagesAdded++;
         cursorY = BODY_TOP;
-        cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
+      }
+
+      cursorY = drawSectionTitle(cursorY, className, classStudents.length);
+
+      if (!isCard) {
         cursorY = drawTableHeader(cursorY);
       }
-      cursorY = drawTableRow(s, cursorY, globalIdx);
-      globalIdx++;
-    }
-  }
 
-  cursorY += SECTION_GAP;
-});
+      for (let i = 0; i < classStudents.length; i++) {
+        const s = classStudents[i];
 
-drawPageFooter();
-doc.end();
+        if (isCard) {
+          const estimatedCardH = 140;
+          if (cursorY + estimatedCardH > BODY_BOTTOM) {
+            if (totalPagesAdded >= MAX_PAGES) break;
+            drawPageFooter();
+            addPage(title);
+            totalPagesAdded++;
+            cursorY = BODY_TOP;
+            cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
+          }
 
-  // ---- Draw field rows (2 columns) ----
-  
-  // ============================================================
-  // PHOTO (right block)
-  // ============================================================
-  
+          const beforeY = cursorY;
+          cursorY = drawCardRow(s, cursorY, globalIdx);
 
-        
+          if (cursorY <= beforeY || !isFinite(cursorY)) {
+            console.error("[PDF] Card cursor stuck at:", beforeY, "→", cursorY);
+            break;
+          }
+          globalIdx++;
+        } else {
+          if (cursorY + ROW_UNIT > BODY_BOTTOM) {
+            if (totalPagesAdded >= MAX_PAGES) break;
+            drawPageFooter();
+            addPage(title);
+            totalPagesAdded++;
+            cursorY = BODY_TOP;
+            cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
+            cursorY = drawTableHeader(cursorY);
+          }
+          cursorY = drawTableRow(s, cursorY, globalIdx);
+          globalIdx++;
+        }
+      }
 
-    // ============================================================
-    // MAIN LOOP
-    // ============================================================
-    
-    
+      cursorY += SECTION_GAP;
+    });
+
+    drawPageFooter();
+    doc.end();
+
   } catch (err) {
     console.error("❌ List PDF error:", err.message);
     if (!res.headersSent) {
@@ -3331,20 +3558,6 @@ doc.end();
     }
   }
 });
-
-
-
-
-    
-// ============================================================
-// ✅ PROFESSIONAL PDF LIST — Table + Card Modes with Neumorphism
-// ============================================================
-                
-      
-            
-      
-
-            
         
 
 
