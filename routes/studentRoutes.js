@@ -3322,49 +3322,8 @@ doc.end();
     // ============================================================
     // MAIN LOOP
     // ============================================================
-    let cursorY = BODY_TOP;
-    const classList = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
-    let globalIdx = 0;
-
-    addPage(title);
-
-    classList.forEach((className) => {
-      const classStudents = grouped[className];
-      const minNeeded = SECTION_TITLE_H + TABLE_HEADER_H + ROW_UNIT * 2 + 10;
-      if (cursorY + minNeeded > BODY_BOTTOM) {
-        drawPageFooter();
-        addPage(title);
-        cursorY = BODY_TOP;
-      }
-
-      cursorY = drawSectionTitle(cursorY, className, classStudents.length);
-
-      if (!isCard) {
-        cursorY = drawTableHeader(cursorY);
-      }
-
-      for (let i = 0; i < classStudents.length; i++) {
-        const s = classStudents[i];
-
-        if (cursorY + ROW_UNIT > BODY_BOTTOM) {
-          drawPageFooter();
-          addPage(title);
-          cursorY = BODY_TOP;
-          cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
-          if (!isCard) cursorY = drawTableHeader(cursorY);
-        }
-
-        if (isCard) cursorY = drawCardRow(s, cursorY, globalIdx);
-        else cursorY = drawTableRow(s, cursorY, globalIdx);
-        globalIdx++;
-      }
-
-      cursorY += SECTION_GAP;
-    });
-
-    drawPageFooter();
-    doc.end();
-
+    
+    
   } catch (err) {
     console.error("❌ List PDF error:", err.message);
     if (!res.headersSent) {
