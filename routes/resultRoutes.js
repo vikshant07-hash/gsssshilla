@@ -2547,6 +2547,126 @@ router.get("/audit-logs", asyncHandler(async (req, res) => {
 }));
 
 // ============================================================
+// PUBLIC RESULT LOOKUP — Roll Number + DOB
+// POST /public/lookup
+// Body: { roll_number, dob, class?, session? }
+// ============================================================
+router.post("/public/lookup", asyncHandler(async (req, res) => {
+    requireFields(req.body, ["roll_number", "dob"]);
+    const { roll_number, dob, class: cls, session: sess } = req.body;
+
+    const roll = String(roll_number).trim();
+    const dobStr = String(dob).trim();
+
+    if (!roll || !dobStr) {
+        return fail(res, "Roll number and Date of Birth are required", 400);
+    }
+
+    // Validate DOB format
+    if (isNaN(Date.parse(dobStr))) {
+        return fail(res, "Invalid date of birth", 400);
+    }
+
+    // ✅ Build query dynamically based on provided filters
+    let sql = `
+        SELECT
+            student_id, name, father_name, mother_name, dob,
+            class, section, stream, session, roll_number, admission_number,
+            student_photo_url AS photo, status
+        FROM Nstudent
+        WHERE LOWER(roll_number) = LOWER(?)
+          AND DATE(dob) = DATE(?)
+    `;
+    const params = [roll, dobStr];
+
+    if (cls) {
+        sql += ` AND LOWER(class) = LOWER(?)`;
+        params.push(String(cls).trim());
+    }
+    if (sess) {
+        sql += ` AND session = ?`;
+        params.push(String(sess).trim());
+    }
+    sql += ` LIMIT 1`;
+
+    const students = await q(sql, params);
+
+    if (students.length === 0) {
+        return fail(res, "No student found with the provided Roll Number and Date of Birth", 404);
+    }
+
+    const student = students[0];
+
+    if (student.status && student.status.toLowerCase() === "inactive") {
+        return fail(res, "Student account is inactive. Please contact the school office.", 403);
+    }
+
+    // ✅ Fetch permanent results from backup
+    const results = await q(`
+        SELECT *
+        FROM erp_results_backup
+        WHERE student_id = ? AND result_type = 'EXAM'
+        ORDER BY session_id DESC, exam_id ASC
+    `, [student.student_id]);
+
+    // ✅ Attach subject-wise marks from marks_backup
+    const finalResults = [];
+    for (const r of results) {
+        const marks = await q(`
+            SELECT subject_id, subject_name,
+                   theory_marks, practical_marks, internal_marks, project_marks,
+                   total_marks, max_marks, grade,
+                   is_absent, absent_type, remarks
+            FROM erp_marks_backup
+            WHERE student_id = ? AND session_id = ? AND exam_id = ?
+            ORDER BY subject_id ASC
+        `, [student.student_id, r.session_id, r.exam_id]);
+
+        finalResults.push({
+            result_id: r.id,
+            exam_id: r.exam_id,
+            exam_name: r.exam_name,
+            session_name: r.session_name,
+            class_name: r.class_name,
+            section_name: r.section_name,
+            stream: r.stream,
+            grand_total: r.grand_total,
+            max_total: r.max_total,
+            percentage: r.percentage,
+            overall_grade: r.overall_grade,
+            result_status: r.result_status,
+            failed_subjects: safeJSONParse(r.failed_subjects, []),
+            subject_wise_marks: marks,
+            subject_count: marks.length,
+            remarks: r.remarks,
+            snapshot_at: r.snapshot_at
+        });
+    }
+
+    return ok(res, {
+        student: {
+            student_id: student.student_id,
+            admission_number: student.admission_number,
+            name: student.name,
+            father_name: student.father_name,
+            mother_name: student.mother_name,
+            dob: student.dob,
+            class: student.class,
+            section: student.section,
+            stream: student.stream,
+            session: student.session,
+            roll_number: student.roll_number,
+            photo: student.photo
+        },
+        results: finalResults,
+        total_results: finalResults.length
+    }, finalResults.length > 0
+        ? "Results fetched successfully"
+        : "No published results available yet"
+    );
+}));
+
+// ============================================================
 // GLOBAL ERROR HANDLER
 // ============================================================
 router.use((err, req, res, next) => {
