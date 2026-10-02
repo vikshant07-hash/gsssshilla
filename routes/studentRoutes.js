@@ -3246,160 +3246,191 @@ router.get("/list-pdf", async (req, res) => {
     // ============================================================
     // CARD MODE ROW — with field LABELS
     // ============================================================
-    const drawCardRow = (s, y, idx) => {
-      const CARD_H = ROW_H - 4;
+    
+// ============================================================
+// ✅ CARD MODE ROW — Simple Professional (Label : Value)
+// ============================================================
+const drawCardRow = (s, y, idx) => {
+  const CARD_H = ROW_H - 4;
 
-      // Neumorphism card
-      drawNeoBox(MARGIN, y, CONTENT_W, CARD_H, 10, THEME.bgCard, true);
+  // ---- Outer card box (bold border) ----
+  doc.save();
+  doc.opacity(0.10);
+  doc.roundedRect(MARGIN + 2, y + 2, CONTENT_W, CARD_H, 8).fill(THEME.shadowDark);
+  doc.restore();
 
-      // Left indigo accent bar
-      doc.roundedRect(MARGIN + 4, y + 8, 4, CARD_H - 16, 2).fill(THEME.sectionBg);
+  // White card background
+  doc.roundedRect(MARGIN, y, CONTENT_W, CARD_H, 8).fill(THEME.bgCard);
 
-      // Reserve space for photo/signature on right
-      const hasPhoto = activeCols.includes("photo");
-      const hasSig = activeCols.includes("signature");
-      const photoW = hasPhoto ? 70 : 0;
-      const sigW = hasSig ? 80 : 0;
-      const rightReserve = photoW + sigW + 20;
-      const contentAreaW = CONTENT_W - rightReserve - 28;
+  // ✅ BOLD outer border
+  doc.roundedRect(MARGIN, y, CONTENT_W, CARD_H, 8)
+     .lineWidth(1.4).strokeColor(THEME.sectionBg).stroke();
 
-      // Fields to show (excluding photo/signature)
-      const fields = activeCols.filter(c => c !== "photo" && c !== "signature");
+  // ---- Left accent bar (thick) ----
+  doc.roundedRect(MARGIN + 4, y + 6, 5, CARD_H - 12, 2).fill(THEME.accent);
 
-      // Serial number circle (top-left)
-      const snY = y + 10;
-      const snX = MARGIN + 14;
-      doc.circle(snX + 11, snY + 8, 11).fill(THEME.sectionBg);
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(THEME.textWhite)
-         .text(String(idx + 1).padStart(2, "0"), snX, snY + 3, { width: 22, align: "center", lineBreak: false });
+  // ============================================================
+  // TOP HEADER STRIP — Serial + Student Name (bold)
+  // ============================================================
+  const HEADER_STRIP_H = 22;
 
-      // Student name heading
-      const nameField = fields.find(c => c === "name");
-      let fieldsToRender = fields.filter(c => c !== "name");
+  // Header strip background (light indigo tint)
+  doc.roundedRect(MARGIN + 12, y + 4, CONTENT_W - 24, HEADER_STRIP_H, 5)
+     .fill("#eef2ff");
 
-      const nameText = nameField ? (s.name || "—") : "";
-      doc.font("Helvetica-Bold").fontSize(13).fillColor(THEME.headerDark)
-         .text(nameText, snX + 30, snY + 1, {
-           width: contentAreaW - 30, align: "left", lineBreak: false, ellipsis: true
-         });
+  // Header strip bottom border (thin)
+  doc.strokeColor(THEME.sectionBg).lineWidth(0.6)
+     .moveTo(MARGIN + 12, y + 4 + HEADER_STRIP_H)
+     .lineTo(MARGIN + CONTENT_W - 12, y + 4 + HEADER_STRIP_H)
+     .stroke();
 
-      // Split fields into 2 rows
-      const half = Math.ceil(fieldsToRender.length / 2);
-      const topFields = fieldsToRender.slice(0, half);
-      const botFields = fieldsToRender.slice(half);
+  // Serial number — bold, indigo
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(THEME.sectionBg)
+     .text(`#${String(idx + 1).padStart(2, "0")}`, MARGIN + 20, y + 9, {
+       width: 30, align: "left", lineBreak: false
+     });
 
-      const row1Y = y + 34;
-      const row2Y = y + 60;
+  // Student name — big & bold
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(THEME.headerDark)
+     .text(String(s.name || "—").toUpperCase(), MARGIN + 54, y + 7, {
+       width: CONTENT_W - 70, align: "left", lineBreak: false, ellipsis: true
+     });
 
-      // ✅ Draw field with LABEL on top, value below
-      const drawLabeledField = (colKey, x, fieldY, w) => {
-        const def = COLUMN_DEFS[colKey];
-        if (!def) return;
+  // ============================================================
+  // FIELDS — Label : Value rows (2 columns per row)
+  // ============================================================
+  const fields = activeCols.filter(c => c !== "photo" && c !== "signature" && c !== "sl" && c !== "name");
 
-        // Label — bold indigo
-        doc.font("Helvetica-Bold").fontSize(6.5).fillColor(THEME.textLabel)
-           .text(def.label.toUpperCase(), x, fieldY, {
-             width: w, align: "left", lineBreak: false, ellipsis: true
-           });
+  const photoBlockW = activeCols.includes("photo") ? 70 : 0;
+  const sigBlockW = activeCols.includes("signature") ? 80 : 0;
+  const rightReserve = photoBlockW + sigBlockW + 16;
 
-        // Value
-        const value = getCellValue(s, colKey, idx);
-        doc.font(def.bold ? "Helvetica-Bold" : "Helvetica")
-           .fontSize(8.5)
-           .fillColor(THEME.textLabelValue)
-           .text(String(value), x, fieldY + 9, {
-             width: w, align: "left", lineBreak: false, ellipsis: true
-           });
-      };
+  const bodyStartX = MARGIN + 16;
+  const bodyWidth = CONTENT_W - 32 - rightReserve;
+  const COL_W = bodyWidth / 2;   // 2 columns
 
-      // Compute field widths
-      const fieldsRawW = [...topFields, ...botFields].reduce((sum, c) => sum + COLUMN_DEFS[c].width, 0);
-      const fieldsScale = contentAreaW / fieldsRawW;
+  // Rows calculation — 2 fields per row
+  const totalRows = Math.ceil(fields.length / 2);
+  const ROW_H_INNER = 20;                        // each inner row height
+  const bodyStartY = y + 4 + HEADER_STRIP_H + 4; // just below header strip
 
-      // Row 1
-      let x = MARGIN + 46;
-      topFields.forEach((c, i) => {
-        const w = COLUMN_DEFS[c].width * fieldsScale;
-        drawLabeledField(c, x, row1Y, w - 6);
-        if (i > 0) {
-          doc.strokeColor(THEME.border).lineWidth(0.4)
-             .moveTo(x - 3, row1Y).lineTo(x - 3, row1Y + 22).stroke();
-        }
-        x += w;
-      });
+  // Helper — draw one "Label : Value" cell
+  const drawLabelValueCell = (colKey, cellX, cellY, cellW) => {
+    const def = COLUMN_DEFS[colKey];
+    if (!def) return;
 
-      // Row 2
-      x = MARGIN + 46;
-      botFields.forEach((c, i) => {
-        const w = COLUMN_DEFS[c].width * fieldsScale;
-        drawLabeledField(c, x, row2Y, w - 6);
-        if (i > 0) {
-          doc.strokeColor(THEME.border).lineWidth(0.4)
-             .moveTo(x - 3, row2Y).lineTo(x - 3, row2Y + 22).stroke();
-        }
-        x += w;
-      });
+    // ✅ Bold LABEL
+    doc.font("Helvetica-Bold").fontSize(7.5).fillColor(THEME.textLabel)
+       .text(def.label + " :", cellX + 4, cellY + 4, {
+         width: cellW - 8, align: "left", lineBreak: false, ellipsis: true
+       });
 
-      // ---- Photo (right) ----
-      let rx = MARGIN + CONTENT_W - rightReserve + 4;
-      if (hasPhoto) {
-        const pW = 52, pH = 68;
-        const px = rx + 6;
-        const py = y + (CARD_H - pH) / 2;
+    // Label ki actual width measure karo
+    const labelText = def.label + " :";
+    doc.font("Helvetica-Bold").fontSize(7.5);
+    const labelW = doc.widthOfString(labelText);
 
-        doc.save();
-        doc.opacity(0.15);
-        doc.roundedRect(px + 2, py + 2, pW, pH, 6).fill(THEME.shadowDark);
-        doc.restore();
+    // Value — right after label with small gap
+    const value = getCellValue(s, colKey, idx);
+    doc.font(def.bold ? "Helvetica-Bold" : "Helvetica")
+       .fontSize(8.5)
+       .fillColor(THEME.textPrimary)
+       .text(String(value), cellX + 4 + labelW + 3, cellY + 4, {
+         width: cellW - labelW - 12, align: "left", lineBreak: false, ellipsis: true
+       });
+  };
 
-        doc.roundedRect(px, py, pW, pH, 6).fillAndStroke("#ffffff", THEME.sectionBg);
+  // ---- Draw field rows (2 columns) ----
+  for (let r = 0; r < totalRows; r++) {
+    const rowY = bodyStartY + r * ROW_H_INNER;
+    const leftCol = fields[r * 2];
+    const rightCol = fields[r * 2 + 1];
 
-        if (photoMap[s.id]) {
-          try {
-            doc.image(photoMap[s.id], px + 3, py + 3, {
-              fit: [pW - 6, pH - 6], align: "center", valign: "center"
-            });
-          } catch (e) {
-            doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
-               .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
-          }
-        } else {
-          doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
-             .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
-        }
-        rx += photoW;
+    // Row separator line (light) — every row
+    if (r > 0) {
+      doc.strokeColor(THEME.border).lineWidth(0.4)
+         .moveTo(bodyStartX, rowY)
+         .lineTo(bodyStartX + bodyWidth, rowY)
+         .stroke();
+    }
+
+    // Vertical divider between 2 columns
+    doc.strokeColor(THEME.border).lineWidth(0.4)
+       .moveTo(bodyStartX + COL_W, rowY)
+       .lineTo(bodyStartX + COL_W, rowY + ROW_H_INNER)
+       .stroke();
+
+    // Left cell
+    if (leftCol) {
+      drawLabelValueCell(leftCol, bodyStartX, rowY, COL_W);
+    }
+
+    // Right cell
+    if (rightCol) {
+      drawLabelValueCell(rightCol, bodyStartX + COL_W, rowY, COL_W);
+    }
+  }
+
+  // ============================================================
+  // PHOTO (right block)
+  // ============================================================
+  let rx = MARGIN + CONTENT_W - rightReserve;
+  if (activeCols.includes("photo")) {
+    const pW = 54, pH = CARD_H - 12;
+    const px = rx + 4;
+    const py = y + 6;
+
+    doc.roundedRect(px, py, pW, pH, 5)
+       .fillAndStroke("#ffffff", THEME.sectionBg)
+       .lineWidth(1).stroke();
+
+    if (photoMap[s.id]) {
+      try {
+        doc.image(photoMap[s.id], px + 2, py + 2, {
+          fit: [pW - 4, pH - 4], align: "center", valign: "center"
+        });
+      } catch (e) {
+        doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
+           .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
       }
+    } else {
+      doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
+         .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
+    }
+    rx += photoBlockW;
+  }
 
-      // ---- Signature ----
-      if (hasSig) {
-        const sW = 68, sH = 34;
-        const sx = rx + 10;
-        const sy = y + (CARD_H - sH) / 2;
+  // ============================================================
+  // SIGNATURE (right block)
+  // ============================================================
+  if (activeCols.includes("signature")) {
+    const sW = 66, sH = 34;
+    const sx = rx + 6;
+    const sy = y + (CARD_H - sH) / 2;
 
-        doc.save();
-        doc.opacity(0.15);
-        doc.roundedRect(sx + 2, sy + 2, sW, sH, 6).fill(THEME.shadowDark);
-        doc.restore();
+    doc.roundedRect(sx, sy, sW, sH, 5)
+       .fillAndStroke("#fef8ed", THEME.accent)
+       .lineWidth(1).stroke();
 
-        doc.roundedRect(sx, sy, sW, sH, 6).fillAndStroke("#fef8ed", THEME.accent);
-
-        if (sigMap[s.id]) {
-          try {
-            doc.image(sigMap[s.id], sx + 2, sy + 2, {
-              fit: [sW - 4, sH - 4], align: "center", valign: "center"
-            });
-          } catch (e) {
-            doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
-               .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
-          }
-        } else {
-          doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
-             .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
-        }
+    if (sigMap[s.id]) {
+      try {
+        doc.image(sigMap[s.id], sx + 2, sy + 2, {
+          fit: [sW - 4, sH - 4], align: "center", valign: "center"
+        });
+      } catch (e) {
+        doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
+           .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
       }
+    } else {
+      doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
+         .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
+    }
+  }
 
-      return y + CARD_H + STUDENT_GAP;
-    };
+  return y + CARD_H + STUDENT_GAP;
+};
+
+        
 
     // ============================================================
     // MAIN LOOP
