@@ -3250,185 +3250,72 @@ router.get("/list-pdf", async (req, res) => {
 // ============================================================
 // ✅ CARD MODE ROW — Simple Professional (Label : Value)
 // ============================================================
-const drawCardRow = (s, y, idx) => {
-  const CARD_H = ROW_H - 4;
+// MAIN LOOP — isko replace karein
+let cursorY = BODY_TOP;
+const classList = [...classOrder, "Other"].filter(c => grouped[c] && grouped[c].length > 0);
+let globalIdx = 0;
 
-  // ---- Outer card box (bold border) ----
-  doc.save();
-  doc.opacity(0.10);
-  doc.roundedRect(MARGIN + 2, y + 2, CONTENT_W, CARD_H, 8).fill(THEME.shadowDark);
-  doc.restore();
+addPage(title);
 
-  // White card background
-  doc.roundedRect(MARGIN, y, CONTENT_W, CARD_H, 8).fill(THEME.bgCard);
+classList.forEach((className) => {
+  const classStudents = grouped[className];
 
-  // ✅ BOLD outer border
-  doc.roundedRect(MARGIN, y, CONTENT_W, CARD_H, 8)
-     .lineWidth(1.4).strokeColor(THEME.sectionBg).stroke();
+  // Minimum space check — section title + at least 2 cards ka space
+  const minNeeded = SECTION_TITLE_H + (isCard ? 100 : TABLE_HEADER_H + ROW_UNIT * 2) + 10;
+  if (cursorY + minNeeded > BODY_BOTTOM) {
+    drawPageFooter();
+    addPage(title);
+    cursorY = BODY_TOP;
+  }
 
-  // ---- Left accent bar (thick) ----
-  doc.roundedRect(MARGIN + 4, y + 6, 5, CARD_H - 12, 2).fill(THEME.accent);
+  cursorY = drawSectionTitle(cursorY, className, classStudents.length);
 
-  // ============================================================
-  // TOP HEADER STRIP — Serial + Student Name (bold)
-  // ============================================================
-  const HEADER_STRIP_H = 22;
+  if (!isCard) {
+    cursorY = drawTableHeader(cursorY);
+  }
 
-  // Header strip background (light indigo tint)
-  doc.roundedRect(MARGIN + 12, y + 4, CONTENT_W - 24, HEADER_STRIP_H, 5)
-     .fill("#eef2ff");
+  for (let i = 0; i < classStudents.length; i++) {
+    const s = classStudents[i];
 
-  // Header strip bottom border (thin)
-  doc.strokeColor(THEME.sectionBg).lineWidth(0.6)
-     .moveTo(MARGIN + 12, y + 4 + HEADER_STRIP_H)
-     .lineTo(MARGIN + CONTENT_W - 12, y + 4 + HEADER_STRIP_H)
-     .stroke();
-
-  // Serial number — bold, indigo
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(THEME.sectionBg)
-     .text(`#${String(idx + 1).padStart(2, "0")}`, MARGIN + 20, y + 9, {
-       width: 30, align: "left", lineBreak: false
-     });
-
-  // Student name — big & bold
-  doc.font("Helvetica-Bold").fontSize(12).fillColor(THEME.headerDark)
-     .text(String(s.name || "—").toUpperCase(), MARGIN + 54, y + 7, {
-       width: CONTENT_W - 70, align: "left", lineBreak: false, ellipsis: true
-     });
-
-  // ============================================================
-  // FIELDS — Label : Value rows (2 columns per row)
-  // ============================================================
-  const fields = activeCols.filter(c => c !== "photo" && c !== "signature" && c !== "sl" && c !== "name");
-
-  const photoBlockW = activeCols.includes("photo") ? 70 : 0;
-  const sigBlockW = activeCols.includes("signature") ? 80 : 0;
-  const rightReserve = photoBlockW + sigBlockW + 16;
-
-  const bodyStartX = MARGIN + 16;
-  const bodyWidth = CONTENT_W - 32 - rightReserve;
-  const COL_W = bodyWidth / 2;   // 2 columns
-
-  // Rows calculation — 2 fields per row
-  const totalRows = Math.ceil(fields.length / 2);
-  const ROW_H_INNER = 20;                        // each inner row height
-  const bodyStartY = y + 4 + HEADER_STRIP_H + 4; // just below header strip
-
-  // Helper — draw one "Label : Value" cell
-  const drawLabelValueCell = (colKey, cellX, cellY, cellW) => {
-    const def = COLUMN_DEFS[colKey];
-    if (!def) return;
-
-    // ✅ Bold LABEL
-    doc.font("Helvetica-Bold").fontSize(7.5).fillColor(THEME.textLabel)
-       .text(def.label + " :", cellX + 4, cellY + 4, {
-         width: cellW - 8, align: "left", lineBreak: false, ellipsis: true
-       });
-
-    // Label ki actual width measure karo
-    const labelText = def.label + " :";
-    doc.font("Helvetica-Bold").fontSize(7.5);
-    const labelW = doc.widthOfString(labelText);
-
-    // Value — right after label with small gap
-    const value = getCellValue(s, colKey, idx);
-    doc.font(def.bold ? "Helvetica-Bold" : "Helvetica")
-       .fontSize(8.5)
-       .fillColor(THEME.textPrimary)
-       .text(String(value), cellX + 4 + labelW + 3, cellY + 4, {
-         width: cellW - labelW - 12, align: "left", lineBreak: false, ellipsis: true
-       });
-  };
-
-  // ---- Draw field rows (2 columns) ----
-  for (let r = 0; r < totalRows; r++) {
-    const rowY = bodyStartY + r * ROW_H_INNER;
-    const leftCol = fields[r * 2];
-    const rightCol = fields[r * 2 + 1];
-
-    // Row separator line (light) — every row
-    if (r > 0) {
-      doc.strokeColor(THEME.border).lineWidth(0.4)
-         .moveTo(bodyStartX, rowY)
-         .lineTo(bodyStartX + bodyWidth, rowY)
-         .stroke();
-    }
-
-    // Vertical divider between 2 columns
-    doc.strokeColor(THEME.border).lineWidth(0.4)
-       .moveTo(bodyStartX + COL_W, rowY)
-       .lineTo(bodyStartX + COL_W, rowY + ROW_H_INNER)
-       .stroke();
-
-    // Left cell
-    if (leftCol) {
-      drawLabelValueCell(leftCol, bodyStartX, rowY, COL_W);
-    }
-
-    // Right cell
-    if (rightCol) {
-      drawLabelValueCell(rightCol, bodyStartX + COL_W, rowY, COL_W);
+    // ✅ For card mode: check if card fits (estimate minimum needed)
+    if (isCard) {
+      // Estimate card height (roughly — actual will be computed inside)
+      const estimatedCardH = ROW_H + 20;
+      if (cursorY + estimatedCardH > BODY_BOTTOM) {
+        drawPageFooter();
+        addPage(title);
+        cursorY = BODY_TOP;
+        cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
+      }
+      // Draw card — it returns its actual new Y
+      cursorY = drawCardRow(s, cursorY, globalIdx);
+      globalIdx++;
+    } else {
+      // Table mode — fixed height check
+      if (cursorY + ROW_UNIT > BODY_BOTTOM) {
+        drawPageFooter();
+        addPage(title);
+        cursorY = BODY_TOP;
+        cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
+        cursorY = drawTableHeader(cursorY);
+      }
+      cursorY = drawTableRow(s, cursorY, globalIdx);
+      globalIdx++;
     }
   }
 
+  cursorY += SECTION_GAP;
+});
+
+drawPageFooter();
+doc.end();
+
+  // ---- Draw field rows (2 columns) ----
+  
   // ============================================================
   // PHOTO (right block)
   // ============================================================
-  let rx = MARGIN + CONTENT_W - rightReserve;
-  if (activeCols.includes("photo")) {
-    const pW = 54, pH = CARD_H - 12;
-    const px = rx + 4;
-    const py = y + 6;
-
-    doc.roundedRect(px, py, pW, pH, 5)
-       .fillAndStroke("#ffffff", THEME.sectionBg)
-       .lineWidth(1).stroke();
-
-    if (photoMap[s.id]) {
-      try {
-        doc.image(photoMap[s.id], px + 2, py + 2, {
-          fit: [pW - 4, pH - 4], align: "center", valign: "center"
-        });
-      } catch (e) {
-        doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
-           .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
-      }
-    } else {
-      doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
-         .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
-    }
-    rx += photoBlockW;
-  }
-
-  // ============================================================
-  // SIGNATURE (right block)
-  // ============================================================
-  if (activeCols.includes("signature")) {
-    const sW = 66, sH = 34;
-    const sx = rx + 6;
-    const sy = y + (CARD_H - sH) / 2;
-
-    doc.roundedRect(sx, sy, sW, sH, 5)
-       .fillAndStroke("#fef8ed", THEME.accent)
-       .lineWidth(1).stroke();
-
-    if (sigMap[s.id]) {
-      try {
-        doc.image(sigMap[s.id], sx + 2, sy + 2, {
-          fit: [sW - 4, sH - 4], align: "center", valign: "center"
-        });
-      } catch (e) {
-        doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
-           .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
-      }
-    } else {
-      doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
-         .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
-    }
-  }
-
-  return y + CARD_H + STUDENT_GAP;
-};
+  
 
         
 
