@@ -2762,10 +2762,8 @@ async function restoreBackupData(data, mode = "merge") {
 // ✅ PROFESSIONAL PDF LIST — Adaptive Layout (Table / Card)
 // ============================================================
 
-
-    
 // ============================================================
-// ✅ PROFESSIONAL PDF LIST — Table + Card Modes with Neumorphism
+// ✅ PROFESSIONAL PDF LIST — Table + Card Modes
 // ============================================================
 router.get("/list-pdf", async (req, res) => {
   try {
@@ -2815,10 +2813,8 @@ router.get("/list-pdf", async (req, res) => {
     const filterSummary = filterParts.length ? filterParts.join("  •  ") : "All Students";
 
     // ============================================================
-    // ✅ COLUMN ORDER — Frontend se jis order me aaye, usi order me rakho
+    // COLUMN ORDER
     // ============================================================
-    // Frontend `columns=name,class,rollNumber,fatherName` bhejta hai
-    // Isko split karo, filter karo, aur exactly isi order me activeCols banao
     const requestedColsRaw = columns
       ? columns.split(",").map(c => c.trim()).filter(Boolean)
       : ["sl","studentId","admissionNumber","name","fatherName","class","rollNumber","session","gender","category","mobile"];
@@ -2830,33 +2826,30 @@ router.get("/list-pdf", async (req, res) => {
     // COLUMN DEFS
     // ============================================================
     const COLUMN_DEFS = {
-      sl:              { label: "#",            width: 22,  align: "center", key: "sl" },
-      photo:           { label: "PHOTO",         width: 48,  align: "center", key: "photo", isImage: true },
-      signature:       { label: "SIGN",          width: 60,  align: "center", key: "signature", isImage: true },
-      studentId:       { label: "STUDENT ID",   width: 78,  align: "left",   key: "studentId" },
-      admissionNumber: { label: "ADM. NO",       width: 64,  align: "left",   key: "admissionNumber" },
-      name:            { label: "STUDENT NAME",  width: 135, align: "left",   key: "name", bold: true },
-      fatherName:      { label: "FATHER'S NAME", width: 122, align: "left",   key: "fatherName" },
-      motherName:      { label: "MOTHER'S NAME", width: 112, align: "left",   key: "motherName" },
-      class:           { label: "CLASS",         width: 44,  align: "center", key: "class" },
-      rollNumber:      { label: "ROLL NO",       width: 46,  align: "center", key: "rollNumber" },
-      session:         { label: "SESSION",       width: 62,  align: "center", key: "session" },
-      gender:          { label: "GENDER",        width: 52,  align: "center", key: "gender" },
-      category:        { label: "CATEGORY",      width: 66,  align: "center", key: "category" },
-      stream:          { label: "STREAM",        width: 82,  align: "center", key: "stream" },
-      dob:             { label: "DATE OF BIRTH", width: 76,  align: "center", key: "dob" },
-      mobile:          { label: "MOBILE",        width: 78,  align: "left",   key: "mobile" },
-      email:           { label: "EMAIL",         width: 140, align: "left",   key: "email" },
-      aadhar:          { label: "AADHAAR NO",    width: 96,  align: "left",   key: "aadhar" },
-      apaar:           { label: "APAAR ID",      width: 92,  align: "left",   key: "apaar" },
-      status:          { label: "STATUS",        width: 60,  align: "center", key: "status" },
-      address:         { label: "ADDRESS",       width: 180, align: "left",   key: "address" }
+      sl:              { label: "S.No",           width: 22,  align: "center" },
+      photo:           { label: "PHOTO",           width: 48,  align: "center", isImage: true },
+      signature:       { label: "SIGN",            width: 60,  align: "center", isImage: true },
+      studentId:       { label: "Student ID",     width: 78,  align: "left" },
+      admissionNumber: { label: "Admission No",    width: 64,  align: "left" },
+      name:            { label: "Student Name",    width: 135, align: "left", bold: true },
+      fatherName:      { label: "Father's Name",   width: 122, align: "left" },
+      motherName:      { label: "Mother's Name",   width: 112, align: "left" },
+      class:           { label: "Class",           width: 44,  align: "center" },
+      rollNumber:      { label: "Roll No",         width: 46,  align: "center" },
+      session:         { label: "Session",         width: 62,  align: "center" },
+      gender:          { label: "Gender",          width: 52,  align: "center" },
+      category:        { label: "Category",        width: 66,  align: "center" },
+      stream:          { label: "Stream",          width: 82,  align: "center" },
+      dob:             { label: "Date of Birth",   width: 76,  align: "center" },
+      mobile:          { label: "Mobile",          width: 78,  align: "left" },
+      email:           { label: "Email",           width: 140, align: "left" },
+      aadhar:          { label: "Aadhaar No",      width: 96,  align: "left" },
+      apaar:           { label: "APAAR ID",        width: 92,  align: "left" },
+      status:          { label: "Status",          width: 60,  align: "center" },
+      address:         { label: "Address",         width: 180, align: "left" }
     };
 
-    // ✅ Preserve order — sirf valid columns rakho, order mat badlo
     let activeCols = requestedColsRaw.filter(c => COLUMN_DEFS[c]);
-
-    // Agar photo/signature flag true hai but column list me nahi, to end me add karo
     if (needPhotos && !activeCols.includes("photo")) {
       const nameIdx = activeCols.indexOf("name");
       if (nameIdx >= 0) activeCols.splice(nameIdx + 1, 0, "photo");
@@ -2912,35 +2905,53 @@ router.get("/list-pdf", async (req, res) => {
 
     const isCard = layout === "card";
 
-    // Neumorphism color palette (soft, subtle)
-    const NEO = {
-      bgPage: "#eef2f7",         // soft grey-blue background
-      bgCard: "#ffffff",          // card white
-      bgAlt:  "#f5f8fc",          // alternate row
-      bgHeader: "#4a6fa5",        // soft navy blue
-      bgSection: "#3d5a80",       // section bar
-      textPrimary: "#1a2332",
-      textSecondary: "#5a6a7e",
+    // ============================================================
+    // ✅ THEME — Deep Indigo + Teal + Coral
+    // ============================================================
+    const THEME = {
+      bgPage: "#f0f4f8",
+      bgCard: "#ffffff",
+      bgAlt: "#f8fafc",
+
+      // Header gradient bands
+      headerDark: "#1e1b4b",           // deep indigo
+      headerMid: "#312e81",            // indigo
+      sectionBg: "#4338ca",             // indigo-600
+
+      // Accent colors
+      accent: "#f59e0b",                // amber
+      accentDark: "#d97706",
+      teal: "#14b8a6",                  // teal
+      coral: "#f87171",                 // coral red
+      purple: "#a855f7",                // purple
+
+      // Text
+      textPrimary: "#0f172a",
+      textSecondary: "#475569",
+      textLabel: "#4338ca",             // indigo for labels
+      textLabelValue: "#1e293b",
       textWhite: "#ffffff",
       textMuted: "#94a3b8",
-      accent: "#c9972b",
-      border: "#cbd5e1",
+
+      border: "#e2e8f0",
+      borderAccent: "#c7d2fe",
       shadowLight: "#ffffff",
-      shadowDark: "#c8d1dc"
+      shadowDark: "#cbd5e1"
     };
 
     // Layout metrics
-    const HEADER_H = 90;
-    const FILTER_BAND_H = 22;
+    const HEADER_H = 100;
+    const FILTER_BAND_H = 24;
     const FOOTER_H = 34;
-    const BODY_TOP = HEADER_H + FILTER_BAND_H + 8;
+    const hasReason = includeReason === "true" && reason && reason.trim();
+    const BODY_TOP = HEADER_H + FILTER_BAND_H + 8 + (hasReason ? 14 : 0);
     const BODY_BOTTOM = PAGE_H - FOOTER_H - 8;
 
-    // Table row dimensions (based on mode)
-    const ROW_H = isCard ? 78 : 22;
-    const STUDENT_GAP = isCard ? 6 : 0;
+    // Table row dimensions
+    const ROW_H = isCard ? 92 : 22;
+    const STUDENT_GAP = isCard ? 8 : 0;
     const ROW_UNIT = ROW_H + STUDENT_GAP;
-    const TABLE_HEADER_H = isCard ? 0 : 26;  // no header row in card mode
+    const TABLE_HEADER_H = isCard ? 0 : 26;
     const SECTION_TITLE_H = 24;
     const SECTION_GAP = 14;
 
@@ -2956,95 +2967,129 @@ router.get("/list-pdf", async (req, res) => {
     let pageNum = 0;
 
     // ============================================================
-    // NEUMORPHISM HELPER: Soft shadow box
+    // NEUMORPHISM BOX HELPER
     // ============================================================
-    const drawNeoBox = (x, y, w, h, radius = 6, bgColor = NEO.bgCard, withShadow = true) => {
+    const drawNeoBox = (x, y, w, h, radius = 6, bgColor = THEME.bgCard, withShadow = true) => {
       if (withShadow) {
-        // Dark shadow (bottom-right)
         doc.save();
-        doc.opacity(0.15);
-        doc.roundedRect(x + 2, y + 2, w, h, radius).fill(NEO.shadowDark);
+        doc.opacity(0.12);
+        doc.roundedRect(x + 2, y + 2, w, h, radius).fill(THEME.shadowDark);
         doc.restore();
 
-        // Light shadow (top-left)
         doc.save();
-        doc.opacity(0.7);
-        doc.roundedRect(x - 1.5, y - 1.5, w, h, radius).fill(NEO.shadowLight);
+        doc.opacity(0.5);
+        doc.roundedRect(x - 1.5, y - 1.5, w, h, radius).fill(THEME.shadowLight);
         doc.restore();
       }
-
-      // Main box
       doc.roundedRect(x, y, w, h, radius).fill(bgColor);
     };
 
     // ============================================================
-    // PAGE HEADER — logo centered, big
+    // WATERMARK
     // ============================================================
-    const drawPageHeader = (currentTitle) => {
-      // Soft header band with subtle shadow
-      drawNeoBox(0, 0, PAGE_W, HEADER_H, 0, NEO.bgHeader, true);
-
-      // Logo (centered, above text)
-      const LOGO_SIZE = 58;
-      const logoX = (PAGE_W - LOGO_SIZE) / 2;
-      const logoY = 6;
+    const drawWatermark = () => {
+      doc.rect(0, 0, PAGE_W, PAGE_H).fill(THEME.bgPage);
 
       if (schoolLogo) {
         try {
-          // White circular back
           doc.save();
-          doc.circle(PAGE_W / 2, logoY + LOGO_SIZE / 2, LOGO_SIZE / 2).fill("#ffffff");
-          doc.circle(PAGE_W / 2, logoY + LOGO_SIZE / 2, LOGO_SIZE / 2 - 1).lineWidth(2).strokeColor(NEO.accent).stroke();
+          doc.opacity(0.13);
+          const wmSize = 420;
+          doc.image(schoolLogo, (PAGE_W - wmSize) / 2, (PAGE_H - wmSize) / 2 + 20, {
+            width: wmSize, height: wmSize
+          });
           doc.restore();
-          doc.image(schoolLogo, logoX + 4, logoY + 4, {
-            fit: [LOGO_SIZE - 8, LOGO_SIZE - 8], align: "center", valign: "center"
+        } catch (e) {}
+      }
+
+      // Diagonal text watermark
+      doc.save();
+      doc.opacity(0.07);
+      doc.font("Helvetica-Bold").fontSize(80).fillColor("#1e1b4b");
+      doc.translate(PAGE_W / 2, PAGE_H / 2);
+      doc.rotate(-28, { origin: [0, 0] });
+      doc.text("GSSS SHILLA", -280, -30, { width: 560, align: "center" });
+      doc.restore();
+    };
+
+    // ============================================================
+    // PAGE HEADER — Logo centered with school name
+    // ============================================================
+    const drawPageHeader = (currentTitle) => {
+      // Header background — deep indigo
+      doc.rect(0, 0, PAGE_W, HEADER_H).fill(THEME.headerDark);
+      doc.rect(0, HEADER_H * 0.5, PAGE_W, HEADER_H * 0.5).fill(THEME.headerMid);
+      doc.rect(0, HEADER_H - 4, PAGE_W, 4).fill(THEME.accent);
+
+      const LOGO_SIZE = 68;
+      const gap = 14;
+
+      const schoolName = "GOVT. SR. SEC. SCHOOL SHILLA";
+      doc.font("Helvetica-Bold").fontSize(18);
+      const nameWidth = doc.widthOfString(schoolName);
+
+      const totalWidth = LOGO_SIZE + gap + nameWidth + 20;
+      const startX = (PAGE_W - totalWidth) / 2;
+      const logoX = startX;
+      const logoY = 12;
+      const nameX = startX + LOGO_SIZE + gap;
+      const nameY = logoY + LOGO_SIZE / 2 - 10;
+
+      // Logo
+      if (schoolLogo) {
+        try {
+          doc.save();
+          doc.circle(logoX + LOGO_SIZE / 2, logoY + LOGO_SIZE / 2, LOGO_SIZE / 2).fill("#ffffff");
+          doc.circle(logoX + LOGO_SIZE / 2, logoY + LOGO_SIZE / 2, LOGO_SIZE / 2 - 1.5).lineWidth(2.5).strokeColor(THEME.accent).stroke();
+          doc.restore();
+          doc.image(schoolLogo, logoX + 5, logoY + 5, {
+            fit: [LOGO_SIZE - 10, LOGO_SIZE - 10], align: "center", valign: "center"
           });
         } catch (e) {}
       }
 
-      // School name (below logo)
-      doc.font("Helvetica-Bold").fontSize(16).fillColor(NEO.textWhite)
-         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN, 44, {
-           width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 1.5
+      // School name
+      doc.font("Helvetica-Bold").fontSize(18).fillColor(THEME.textWhite)
+         .text(schoolName, nameX, nameY, {
+           width: nameWidth + 20, align: "left", characterSpacing: 1.3, lineBreak: false
          });
 
-      doc.font("Helvetica").fontSize(9).fillColor("#e0e8f5")
-         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN, 64, {
-           width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.5
+      // Address
+      doc.font("Helvetica").fontSize(9).fillColor("#c7d2fe")
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN, 74, {
+           width: PAGE_W - MARGIN * 2, align: "center", characterSpacing: 0.4
          });
 
-      // Title (dynamic width) — small pill on the right
+      // Title pill
       const displayTitle = String(currentTitle || title).toUpperCase();
-      doc.font("Helvetica-Bold").fontSize(10);
-      const tW = Math.min(CONTENT_W - 100, doc.widthOfString(displayTitle) + 40);
-      const tX = (PAGE_W - tW) / 2;
+      doc.font("Helvetica-Bold").fontSize(9);
+      const tW = Math.min(CONTENT_W - 200, doc.widthOfString(displayTitle) + 40);
 
-      doc.save();
-      doc.opacity(0.95);
-      doc.roundedRect(tX, 78, tW, 14, 7).fill(NEO.accent);
-      doc.restore();
+      doc.roundedRect(PAGE_W - MARGIN - tW - 8, 76, tW, 16, 8).fill(THEME.accent);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(THEME.headerDark)
+         .text(displayTitle, PAGE_W - MARGIN - tW - 8, 80, {
+           width: tW, align: "center", characterSpacing: 1, lineBreak: false
+         });
 
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff")
-         .text(displayTitle, tX, 81, { width: tW, align: "center", characterSpacing: 1.2, lineBreak: false });
-
-      // Filter band (below header)
+      // Filter band
       const bandY = HEADER_H + 2;
-      drawNeoBox(MARGIN, bandY, CONTENT_W, FILTER_BAND_H - 4, 6, NEO.bgAlt, true);
+      drawNeoBox(MARGIN, bandY, CONTENT_W, FILTER_BAND_H - 4, 6, THEME.bgCard, true);
+      doc.roundedRect(MARGIN, bandY, 4, FILTER_BAND_H - 4, 2).fill(THEME.teal);
 
-      doc.font("Helvetica").fontSize(8).fillColor(NEO.textSecondary)
-         .text(filterSummary, MARGIN + 10, bandY + 5, {
+      doc.font("Helvetica").fontSize(8).fillColor(THEME.textSecondary)
+         .text(filterSummary, MARGIN + 12, bandY + 6, {
            width: CONTENT_W - 220, align: "left", lineBreak: false, ellipsis: true
          });
-      doc.font("Helvetica-Bold").fontSize(8).fillColor(NEO.textPrimary)
-         .text(`Total: ${students.length}`, MARGIN + CONTENT_W - 200, bandY + 5, {
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(THEME.textPrimary)
+         .text(`Total: ${students.length}`, MARGIN + CONTENT_W - 200, bandY + 6, {
            width: 190, align: "right", lineBreak: false
          });
 
-      // Reason line (if provided)
-      if (includeReason === "true" && reason && reason.trim()) {
-        doc.font("Helvetica-Oblique").fontSize(8).fillColor(NEO.accent)
-           .text(`Reason: ${String(reason).trim()}`, MARGIN, bandY + FILTER_BAND_H - 2, {
-             width: CONTENT_W, align: "right", lineBreak: false
+      // Reason
+      if (hasReason) {
+        doc.font("Helvetica-Oblique").fontSize(8.5).fillColor(THEME.accentDark)
+           .text(`Reason: ${String(reason).trim()}`, MARGIN, bandY + FILTER_BAND_H + 1, {
+             width: CONTENT_W, align: "right", lineBreak: false, ellipsis: true
            });
       }
     };
@@ -3054,63 +3099,37 @@ router.get("/list-pdf", async (req, res) => {
     // ============================================================
     const drawPageFooter = () => {
       const fy = PAGE_H - FOOTER_H + 6;
-      doc.strokeColor(NEO.accent).lineWidth(1)
+      doc.strokeColor(THEME.accent).lineWidth(1.2)
          .moveTo(MARGIN, fy - 4).lineTo(PAGE_W - MARGIN, fy - 4).stroke();
 
-      doc.font("Helvetica").fontSize(7.5).fillColor(NEO.textMuted)
+      doc.font("Helvetica").fontSize(7.5).fillColor(THEME.textMuted)
          .text(`Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
            MARGIN, fy + 4, { width: 220, align: "left" });
 
       const cx = (PAGE_W - 320) / 2;
       doc.strokeColor("#94a3b8").lineWidth(0.5)
          .moveTo(cx, fy + 12).lineTo(cx + 100, fy + 12).stroke();
-      doc.font("Helvetica").fontSize(7).fillColor(NEO.textSecondary)
+      doc.font("Helvetica").fontSize(7).fillColor(THEME.textSecondary)
          .text("Class Teacher", cx, fy + 14, { width: 100, align: "center" });
 
       doc.strokeColor("#94a3b8").lineWidth(0.5)
          .moveTo(cx + 120, fy + 12).lineTo(cx + 220, fy + 12).stroke();
-      doc.font("Helvetica").fontSize(7).fillColor(NEO.textSecondary)
+      doc.font("Helvetica").fontSize(7).fillColor(THEME.textSecondary)
          .text("Principal", cx + 120, fy + 14, { width: 100, align: "center" });
 
-      doc.font("Helvetica-Bold").fontSize(8).fillColor(NEO.textPrimary)
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(THEME.textPrimary)
          .text(`Page ${pageNum}`, PAGE_W - MARGIN - 100, fy + 4, { width: 100, align: "right" });
-    };
-
-    // ============================================================
-    // ✅ WATERMARK — bottom layer (behind header, table content on top)
-    // ============================================================
-    const drawWatermark = () => {
-      // Background soft fill first
-      doc.rect(0, 0, PAGE_W, PAGE_H).fill("#f8fafc");
-
-      if (!schoolLogo) return;
-
-      doc.save();
-      doc.opacity(0.09);  // subtle but visible
-      const size = 440;
-      doc.image(schoolLogo, (PAGE_W - size) / 2, (PAGE_H - size) / 2 + 10, {
-        width: size, height: size
-      });
-      doc.restore();
-
-      doc.save();
-      doc.opacity(0.06);
-      doc.font("Helvetica-Bold").fontSize(72).fillColor("#1e3a8a");
-      doc.translate(PAGE_W / 2, PAGE_H / 2);
-      doc.rotate(-28, { origin: [0, 0] });
-      doc.text("GSSS SHILLA", -260, -30, { width: 520, align: "center" });
-      doc.restore();
     };
 
     const addPage = (pageTitle) => {
       doc.addPage();
       pageNum++;
-      drawWatermark();      // Layer 1: watermark + background
-      drawPageHeader(pageTitle);  // Layer 2: header (on top of watermark)
+      drawWatermark();
+      drawPageHeader(pageTitle);
     };
 
     // ============================================================
-    // COMPUTE SCALED COLUMN WIDTHS
+    // COMPUTE SCALED WIDTHS
     // ============================================================
     const rawTotal = activeCols.reduce((s, c) => s + COLUMN_DEFS[c].width, 0);
     const scaleFactor = CONTENT_W / rawTotal;
@@ -3121,36 +3140,34 @@ router.get("/list-pdf", async (req, res) => {
     // SECTION TITLE
     // ============================================================
     const drawSectionTitle = (y, className, count, isContd = false) => {
-      // Neumorphism bar
-      drawNeoBox(MARGIN, y, CONTENT_W, SECTION_TITLE_H - 4, 8, NEO.bgSection, true);
+      drawNeoBox(MARGIN, y, CONTENT_W, SECTION_TITLE_H - 4, 8, THEME.sectionBg, true);
 
-      doc.font("Helvetica-Bold").fontSize(11).fillColor(NEO.textWhite)
+      doc.font("Helvetica-Bold").fontSize(11).fillColor(THEME.textWhite)
          .text(`CLASS: ${className}${isContd ? "  (continued)" : ""}`, MARGIN + 16, y + 6, {
            width: CONTENT_W - 220, align: "left", characterSpacing: 1.2, lineBreak: false
          });
 
-      // Count pill (right side)
       const countText = isContd ? "…" : `${count} student${count !== 1 ? "s" : ""}`;
       doc.font("Helvetica-Bold").fontSize(9);
       const cw = doc.widthOfString(countText) + 24;
-      doc.roundedRect(MARGIN + CONTENT_W - cw - 10, y + 4, cw, SECTION_TITLE_H - 12, 8).fill(NEO.accent);
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff")
+      doc.roundedRect(MARGIN + CONTENT_W - cw - 10, y + 4, cw, SECTION_TITLE_H - 12, 8).fill(THEME.accent);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(THEME.headerDark)
          .text(countText, MARGIN + CONTENT_W - cw - 10, y + 8, { width: cw, align: "center", lineBreak: false });
 
       return y + SECTION_TITLE_H;
     };
 
     // ============================================================
-    // TABLE HEADER (only for table mode)
+    // TABLE HEADER
     // ============================================================
     const drawTableHeader = (y) => {
-      drawNeoBox(MARGIN, y, CONTENT_W, TABLE_HEADER_H - 2, 6, NEO.bgHeader, true);
+      drawNeoBox(MARGIN, y, CONTENT_W, TABLE_HEADER_H - 2, 6, THEME.headerMid, true);
 
       let x = MARGIN;
       activeCols.forEach((c, i) => {
         const def = COLUMN_DEFS[c];
         const w = colWidths[c];
-        doc.font("Helvetica-Bold").fontSize(7).fillColor(NEO.textWhite)
+        doc.font("Helvetica-Bold").fontSize(7).fillColor(THEME.textWhite)
            .text(def.label, x + 3, y + 8, {
              width: w - 6, align: def.align, lineBreak: false, ellipsis: true
            });
@@ -3189,45 +3206,35 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // ✅ TABLE MODE ROW — clean, no wrap
+    // TABLE MODE ROW
     // ============================================================
     const drawTableRow = (s, y, idx) => {
-      // Alternating neumorphism background
-      drawNeoBox(MARGIN, y, CONTENT_W, ROW_H - 1, 4, idx % 2 === 1 ? NEO.bgAlt : NEO.bgCard, true);
+      drawNeoBox(MARGIN, y, CONTENT_W, ROW_H - 1, 4, idx % 2 === 1 ? THEME.bgAlt : THEME.bgCard, true);
 
       let x = MARGIN;
       activeCols.forEach((c, i) => {
         const def = COLUMN_DEFS[c];
         const w = colWidths[c];
 
-        // Cell separator (subtle)
         if (i > 0) {
-          doc.strokeColor("#e2e8f0").lineWidth(0.3)
+          doc.strokeColor(THEME.border).lineWidth(0.3)
              .moveTo(x, y + 3).lineTo(x, y + ROW_H - 4).stroke();
         }
 
         if (c === "photo" && photoMap[s.id]) {
-          try {
-            doc.image(photoMap[s.id], x + (w - 18) / 2, y + 2, { fit: [18, 18] });
-          } catch (e) {}
+          try { doc.image(photoMap[s.id], x + (w - 18) / 2, y + 2, { fit: [18, 18] }); } catch (e) {}
         } else if (c === "signature" && sigMap[s.id]) {
-          try {
-            doc.image(sigMap[s.id], x + (w - 26) / 2, y + 4, { fit: [26, 14] });
-          } catch (e) {}
+          try { doc.image(sigMap[s.id], x + (w - 26) / 2, y + 4, { fit: [26, 14] }); } catch (e) {}
         } else if (c === "photo" || c === "signature") {
-          // No image
-          doc.font("Helvetica").fontSize(6).fillColor(NEO.textMuted)
+          doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
              .text("—", x, y + ROW_H / 2 - 3, { width: w, align: "center" });
         } else {
           const value = getCellValue(s, c, idx);
           doc.font(def.bold ? "Helvetica-Bold" : "Helvetica")
              .fontSize(def.bold ? 8 : 7.5)
-             .fillColor(NEO.textPrimary)
+             .fillColor(THEME.textPrimary)
              .text(String(value), x + 4, y + (ROW_H / 2) - 4, {
-               width: w - 8,
-               align: def.align,
-               lineBreak: false,
-               ellipsis: true
+               width: w - 8, align: def.align, lineBreak: false, ellipsis: true
              });
         }
         x += w;
@@ -3237,95 +3244,115 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // ✅ CARD MODE ROW — neumorphism card, big photo
+    // CARD MODE ROW — with field LABELS
     // ============================================================
     const drawCardRow = (s, y, idx) => {
-      // Neumorphism card
-      drawNeoBox(MARGIN, y, CONTENT_W, ROW_H - 4, 10, NEO.bgCard, true);
+      const CARD_H = ROW_H - 4;
 
-      // Left gold accent bar
-      doc.roundedRect(MARGIN + 4, y + 6, 4, ROW_H - 16, 2).fill(NEO.accent);
+      // Neumorphism card
+      drawNeoBox(MARGIN, y, CONTENT_W, CARD_H, 10, THEME.bgCard, true);
+
+      // Left indigo accent bar
+      doc.roundedRect(MARGIN + 4, y + 8, 4, CARD_H - 16, 2).fill(THEME.sectionBg);
 
       // Reserve space for photo/signature on right
-      const photoW = activeCols.includes("photo") ? 60 : 0;
-      const sigW = activeCols.includes("signature") ? 70 : 0;
-      const rightReserve = photoW + sigW + 12;
-      const contentAreaW = CONTENT_W - rightReserve - 20;
+      const hasPhoto = activeCols.includes("photo");
+      const hasSig = activeCols.includes("signature");
+      const photoW = hasPhoto ? 70 : 0;
+      const sigW = hasSig ? 80 : 0;
+      const rightReserve = photoW + sigW + 20;
+      const contentAreaW = CONTENT_W - rightReserve - 28;
 
-      // Split fields (excluding photo/signature) into 2 rows
+      // Fields to show (excluding photo/signature)
       const fields = activeCols.filter(c => c !== "photo" && c !== "signature");
-      const half = Math.ceil(fields.length / 2);
-      const topFields = fields.slice(0, half);
-      const botFields = fields.slice(half);
 
-      // Compute row positions
-      const row1Y = y + 12;
-      const row2Y = y + ROW_H / 2 + 2;
-      const rowInnerH = ROW_H / 2 - 16;
+      // Serial number circle (top-left)
+      const snY = y + 10;
+      const snX = MARGIN + 14;
+      doc.circle(snX + 11, snY + 8, 11).fill(THEME.sectionBg);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(THEME.textWhite)
+         .text(String(idx + 1).padStart(2, "0"), snX, snY + 3, { width: 22, align: "center", lineBreak: false });
 
-      // Compute field widths (proportional to their defined widths)
+      // Student name heading
+      const nameField = fields.find(c => c === "name");
+      let fieldsToRender = fields.filter(c => c !== "name");
+
+      const nameText = nameField ? (s.name || "—") : "";
+      doc.font("Helvetica-Bold").fontSize(13).fillColor(THEME.headerDark)
+         .text(nameText, snX + 30, snY + 1, {
+           width: contentAreaW - 30, align: "left", lineBreak: false, ellipsis: true
+         });
+
+      // Split fields into 2 rows
+      const half = Math.ceil(fieldsToRender.length / 2);
+      const topFields = fieldsToRender.slice(0, half);
+      const botFields = fieldsToRender.slice(half);
+
+      const row1Y = y + 34;
+      const row2Y = y + 60;
+
+      // ✅ Draw field with LABEL on top, value below
+      const drawLabeledField = (colKey, x, fieldY, w) => {
+        const def = COLUMN_DEFS[colKey];
+        if (!def) return;
+
+        // Label — bold indigo
+        doc.font("Helvetica-Bold").fontSize(6.5).fillColor(THEME.textLabel)
+           .text(def.label.toUpperCase(), x, fieldY, {
+             width: w, align: "left", lineBreak: false, ellipsis: true
+           });
+
+        // Value
+        const value = getCellValue(s, colKey, idx);
+        doc.font(def.bold ? "Helvetica-Bold" : "Helvetica")
+           .fontSize(8.5)
+           .fillColor(THEME.textLabelValue)
+           .text(String(value), x, fieldY + 9, {
+             width: w, align: "left", lineBreak: false, ellipsis: true
+           });
+      };
+
+      // Compute field widths
       const fieldsRawW = [...topFields, ...botFields].reduce((sum, c) => sum + COLUMN_DEFS[c].width, 0);
       const fieldsScale = contentAreaW / fieldsRawW;
 
       // Row 1
-      let x = MARGIN + 16;
+      let x = MARGIN + 46;
       topFields.forEach((c, i) => {
-        const def = COLUMN_DEFS[c];
-        const w = def.width * fieldsScale;
-        const value = getCellValue(s, c, idx);
-        doc.font(def.bold ? "Helvetica-Bold" : "Helvetica")
-           .fontSize(def.bold ? 9 : 8)
-           .fillColor(NEO.textPrimary)
-           .text(String(value), x + 3, row1Y + (rowInnerH / 2) - 4, {
-             width: w - 6, align: def.align, lineBreak: false, ellipsis: true
-           });
+        const w = COLUMN_DEFS[c].width * fieldsScale;
+        drawLabeledField(c, x, row1Y, w - 6);
         if (i > 0) {
-          doc.strokeColor("#e8eef5").lineWidth(0.3)
-             .moveTo(x, row1Y).lineTo(x, row1Y + rowInnerH).stroke();
+          doc.strokeColor(THEME.border).lineWidth(0.4)
+             .moveTo(x - 3, row1Y).lineTo(x - 3, row1Y + 22).stroke();
         }
         x += w;
       });
 
       // Row 2
-      x = MARGIN + 16;
+      x = MARGIN + 46;
       botFields.forEach((c, i) => {
-        const def = COLUMN_DEFS[c];
-        const w = def.width * fieldsScale;
-        const value = getCellValue(s, c, idx);
-        doc.font(def.bold ? "Helvetica-Bold" : "Helvetica")
-           .fontSize(def.bold ? 9 : 8)
-           .fillColor(NEO.textPrimary)
-           .text(String(value), x + 3, row2Y + (rowInnerH / 2) - 4, {
-             width: w - 6, align: def.align, lineBreak: false, ellipsis: true
-           });
+        const w = COLUMN_DEFS[c].width * fieldsScale;
+        drawLabeledField(c, x, row2Y, w - 6);
         if (i > 0) {
-          doc.strokeColor("#e8eef5").lineWidth(0.3)
-             .moveTo(x, row2Y).lineTo(x, row2Y + rowInnerH).stroke();
+          doc.strokeColor(THEME.border).lineWidth(0.4)
+             .moveTo(x - 3, row2Y).lineTo(x - 3, row2Y + 22).stroke();
         }
         x += w;
       });
 
-      // Middle separator
-      doc.strokeColor("#e8eef5").lineWidth(0.5)
-         .moveTo(MARGIN + 16, y + ROW_H / 2 - 4)
-         .lineTo(MARGIN + 16 + contentAreaW, y + ROW_H / 2 - 4)
-         .stroke();
-
       // ---- Photo (right) ----
-      let rx = MARGIN + CONTENT_W - rightReserve;
-      if (activeCols.includes("photo")) {
-        const pW = 48, pH = ROW_H - 20;
+      let rx = MARGIN + CONTENT_W - rightReserve + 4;
+      if (hasPhoto) {
+        const pW = 52, pH = 68;
         const px = rx + 6;
-        const py = y + 10;
+        const py = y + (CARD_H - pH) / 2;
 
-        // Soft shadow behind photo
         doc.save();
         doc.opacity(0.15);
-        doc.roundedRect(px + 2, py + 2, pW, pH, 6).fill(NEO.shadowDark);
+        doc.roundedRect(px + 2, py + 2, pW, pH, 6).fill(THEME.shadowDark);
         doc.restore();
 
-        // Photo frame
-        doc.roundedRect(px, py, pW, pH, 6).fillAndStroke("#ffffff", NEO.accent);
+        doc.roundedRect(px, py, pW, pH, 6).fillAndStroke("#ffffff", THEME.sectionBg);
 
         if (photoMap[s.id]) {
           try {
@@ -3333,28 +3360,28 @@ router.get("/list-pdf", async (req, res) => {
               fit: [pW - 6, pH - 6], align: "center", valign: "center"
             });
           } catch (e) {
-            doc.font("Helvetica").fontSize(6).fillColor(NEO.textMuted)
+            doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
                .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
           }
         } else {
-          doc.font("Helvetica").fontSize(6).fillColor(NEO.textMuted)
+          doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
              .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
         }
         rx += photoW;
       }
 
-      // ---- Signature (right of photo) ----
-      if (activeCols.includes("signature")) {
-        const sW = 56, sH = 30;
-        const sx = rx + 8;
-        const sy = y + (ROW_H - sH) / 2;
+      // ---- Signature ----
+      if (hasSig) {
+        const sW = 68, sH = 34;
+        const sx = rx + 10;
+        const sy = y + (CARD_H - sH) / 2;
 
         doc.save();
         doc.opacity(0.15);
-        doc.roundedRect(sx + 2, sy + 2, sW, sH, 6).fill(NEO.shadowDark);
+        doc.roundedRect(sx + 2, sy + 2, sW, sH, 6).fill(THEME.shadowDark);
         doc.restore();
 
-        doc.roundedRect(sx, sy, sW, sH, 6).fillAndStroke("#fef8ed", NEO.accent);
+        doc.roundedRect(sx, sy, sW, sH, 6).fillAndStroke("#fef8ed", THEME.accent);
 
         if (sigMap[s.id]) {
           try {
@@ -3362,16 +3389,16 @@ router.get("/list-pdf", async (req, res) => {
               fit: [sW - 4, sH - 4], align: "center", valign: "center"
             });
           } catch (e) {
-            doc.font("Helvetica").fontSize(6).fillColor(NEO.textMuted)
+            doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
                .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
           }
         } else {
-          doc.font("Helvetica").fontSize(6).fillColor(NEO.textMuted)
+          doc.font("Helvetica").fontSize(6).fillColor(THEME.textMuted)
              .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
         }
       }
 
-      return y + ROW_H + STUDENT_GAP;
+      return y + CARD_H + STUDENT_GAP;
     };
 
     // ============================================================
@@ -3428,6 +3455,17 @@ router.get("/list-pdf", async (req, res) => {
   }
 });
 
+
+
+
+    
+// ============================================================
+// ✅ PROFESSIONAL PDF LIST — Table + Card Modes with Neumorphism
+// ============================================================
+                
+      
+            
+      
 
             
         
