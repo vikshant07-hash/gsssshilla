@@ -2257,7 +2257,7 @@ router.post("/pin/forgot/request-otp", async (req, res) => {
           body: JSON.stringify({
             sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
             to: [{ email: student.email_id }],
-            subject: "🔐 PIN Reset OTP — GSSS Shilla",
+            subject: "PIN Reset OTP — Student Portal-GSSS Shilla",
             htmlContent: `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
 <body style="margin:0; padding:0; background:#f1f5f9; font-family:Arial,sans-serif;">
@@ -2304,12 +2304,12 @@ If you didn't request this, please ignore this email — your PIN is safe.
         console.error("PIN OTP email error:", emailErr.message);
       }
     } else {
-      console.log(`📧 PIN OTP for student ${student.id}: ${otp}`);
+      console.log(`PIN OTP for student ${student.id}: ${otp}`);
     }
 
     res.json({
       success: true,
-      message: `OTP sent to ${maskedEmail} ✅`,
+      message: `OTP sent to ${maskedEmail} `,
       maskedEmail,
       studentName: student.name,
       expiresInMinutes: 10
@@ -2758,9 +2758,8 @@ async function restoreBackupData(data, mode = "merge") {
 // ============================================================
 // ✅ PROFESSIONAL TABLE PDF
 // ============================================================
-
 // ============================================================
-// ✅ PROFESSIONAL TABLE PDF — Clean Single-Line Layout
+// ✅ PROFESSIONAL PDF LIST — Adaptive Layout (Table / Card)
 // ============================================================
 router.get("/list-pdf", async (req, res) => {
   try {
@@ -2818,6 +2817,9 @@ router.get("/list-pdf", async (req, res) => {
     const needPhotos = includePhoto === "true" || hasPhotoCol;
     const needSigs = includeSignature === "true" || hasSigCol;
 
+    // ---- Decide layout: if photo/signature or >8 columns → card mode ----
+    const useCardLayout = needPhotos || needSigs || requestedCols.length > 8;
+
     // ---- Group by class ----
     const grouped = {};
     const classOrder = ["Nursery","LKG","UKG","1","2","3","4","5","6","7","8","9","10","11","12"];
@@ -2829,7 +2831,7 @@ router.get("/list-pdf", async (req, res) => {
       else grouped["Other"].push(s);
     });
 
-    // ---- Fetch images if needed ----
+    // ---- Fetch images ----
     const photoMap = {}, sigMap = {};
     if (needPhotos || needSigs) {
       console.log(`[List PDF] Fetching images for ${students.length} students...`);
@@ -2843,7 +2845,6 @@ router.get("/list-pdf", async (req, res) => {
       }));
     }
 
-    // ---- School logo ----
     const schoolLogo = await fetchImageBuffer(SCHOOL_LOGO_URL);
 
     // ---- PDF Setup ----
@@ -2851,15 +2852,26 @@ router.get("/list-pdf", async (req, res) => {
     const safeTitle = String(title).replace(/[^a-zA-Z0-9-_]/g, "_").substring(0, 50);
     res.setHeader("Content-Disposition", `inline; filename="${safeTitle}.pdf"`);
 
-    const PAGE_W = 842;
-    const PAGE_H = 595;
+    const PAGE_W = 842;   // A4 landscape width
+    const PAGE_H = 595;   // A4 landscape height
     const MARGIN = 18;
     const CONTENT_W = PAGE_W - MARGIN * 2;
 
-    const HEADER_H = 80;
+    // Header section heights
+    const HEADER_BAR_H = 60;         // school name band
+    const TITLE_AREA_MIN = 40;       // dynamic — computed below
     const FILTER_BAND_H = 20;
     const FOOTER_H = 32;
-    const BODY_TOP = HEADER_H + FILTER_BAND_H + 6;
+
+    // Compute dynamic title height (title can be long)
+    const tempDoc = new PDFDocument({ size: "A4", layout: "landscape", autoFirstPage: false });
+    tempDoc.font("Helvetica-Bold").fontSize(14);
+    const titleText = String(title).toUpperCase();
+    const titleW = tempDoc.widthOfString(titleText);
+    const titleBoxW = Math.min(CONTENT_W - 80, titleW + 60);
+    const titleBoxH = 26;
+
+    const BODY_TOP = HEADER_BAR_H + titleBoxH + 20 + FILTER_BAND_H + 6;
     const BODY_BOTTOM = PAGE_H - FOOTER_H - 6;
 
     const doc = new PDFDocument({
@@ -2871,58 +2883,77 @@ router.get("/list-pdf", async (req, res) => {
     });
 
     doc.pipe(res);
-
     let pageNum = 0;
 
     // ============================================================
-    // PAGE HEADER — clean, professional
+    // PAGE HEADER
     // ============================================================
-    const drawPageHeader = (pageTitle) => {
-      // Cream/white background
-      doc.rect(0, 0, PAGE_W, HEADER_H).fill("#ffffff");
-      // Top thin navy line
-      doc.rect(0, 0, PAGE_W, 4).fill("#0d1b2a");
-      // Bottom gold line
-      doc.rect(0, HEADER_H - 3, PAGE_W, 3).fill("#c9972b");
+    const drawPageHeader = (currentTitle) => {
+      // Top navy band
+      doc.rect(0, 0, PAGE_W, HEADER_BAR_H).fill("#0d1b2a");
+      doc.rect(0, HEADER_BAR_H - 3, PAGE_W, 3).fill("#c9972b");
 
-      // Logo (circular)
+      // Logo (circular, on left)
       if (schoolLogo) {
         try {
           doc.save();
-          doc.circle(MARGIN + 30, 42, 28).fill("#ffffff");
-          doc.circle(MARGIN + 30, 42, 27).lineWidth(2).strokeColor("#c9972b").stroke();
+          doc.circle(MARGIN + 26, HEADER_BAR_H / 2, 22).fill("#ffffff");
+          doc.circle(MARGIN + 26, HEADER_BAR_H / 2, 21).lineWidth(1.8).strokeColor("#c9972b").stroke();
           doc.restore();
-          doc.image(schoolLogo, MARGIN + 4, 16, { fit: [52, 52], align: "center", valign: "center" });
+          doc.image(schoolLogo, MARGIN + 4, 8, { fit: [44, 44], align: "center", valign: "center" });
         } catch (e) {}
       }
 
-      // School name
-      doc.font("Helvetica-Bold").fontSize(18).fillColor("#0d1b2a")
-         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN + 70, 14, {
+      // School name (center)
+      doc.font("Helvetica-Bold").fontSize(17).fillColor("#ffffff")
+         .text("GOVT. SR. SEC. SCHOOL SHILLA", MARGIN + 60, 12, {
            width: PAGE_W - MARGIN * 2 - 80, align: "center", characterSpacing: 1.2
          });
 
-      doc.font("Helvetica").fontSize(9).fillColor("#5a6a7e")
-         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN + 70, 38, {
-           width: PAGE_W - MARGIN * 2 - 80, align: "center", characterSpacing: 0.3
+      doc.font("Helvetica").fontSize(8.5).fillColor("#c9972b")
+         .text("Shilla, Teh. Nerwa, Distt. Shimla, Himachal Pradesh — 171210", MARGIN + 60, 34, {
+           width: PAGE_W - MARGIN * 2 - 80, align: "center", characterSpacing: 0.4
          });
 
-      // Title bar
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#ffffff");
-      const titleW = doc.widthOfString(String(pageTitle || title).toUpperCase()) + 40;
-      const titleX = (PAGE_W - titleW) / 2;
-      doc.rect(titleX, 56, titleW, 18).fill("#0d1b2a");
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff")
-         .text(String(pageTitle || title).toUpperCase(), titleX, 60, {
-           width: titleW, align: "center", characterSpacing: 1.8
+      // ---- Title box (dynamic width) ----
+      const titleY = HEADER_BAR_H + 8;
+      const displayTitle = String(currentTitle || title).toUpperCase();
+      doc.font("Helvetica-Bold").fontSize(14);
+      const tW = Math.min(CONTENT_W - 100, doc.widthOfString(displayTitle) + 60);
+      const tX = (PAGE_W - tW) / 2;
+
+      // Title box background
+      doc.roundedRect(tX, titleY, tW, titleBoxH, 4).fill("#1e3a8a");
+      doc.roundedRect(tX, titleY, tW, titleBoxH, 4).lineWidth(1.5).strokeColor("#c9972b").stroke();
+
+      // Title text
+      doc.font("Helvetica-Bold").fontSize(12).fillColor("#ffffff")
+         .text(displayTitle, tX, titleY + 7, {
+           width: tW, align: "center", characterSpacing: 1.5, lineBreak: false
          });
+
+      // Reason line (below title)
+      let afterTitleY = titleY + titleBoxH;
+      if (includeReason === "true" && reason && reason.trim()) {
+        doc.font("Helvetica-Oblique").fontSize(9).fillColor("#92400e")
+           .text(`Reason: ${String(reason).trim()}`, MARGIN, afterTitleY + 4, {
+             width: CONTENT_W, align: "center"
+           });
+        afterTitleY += 14;
+      }
 
       // Filter band
-      doc.rect(0, HEADER_H, PAGE_W, FILTER_BAND_H).fill("#f8fafc");
+      const bandY = afterTitleY + 4;
+      doc.rect(0, bandY, PAGE_W, FILTER_BAND_H).fill("#f8fafc");
+      doc.rect(0, bandY, PAGE_W, 1).fill("#cbd5e1");
+
       doc.font("Helvetica").fontSize(8).fillColor("#475569")
-         .text(filterSummary, MARGIN + 6, HEADER_H + 6, { width: PAGE_W - MARGIN * 2 - 200, align: "left" });
+         .text(filterSummary, MARGIN + 6, bandY + 6, {
+           width: PAGE_W - MARGIN * 2 - 200, align: "left"
+         });
       doc.font("Helvetica-Bold").fontSize(8).fillColor("#0d1b2a")
-         .text(`Total Students: ${students.length}`, PAGE_W - MARGIN - 180, HEADER_H + 6, { width: 174, align: "right" });
+         .text(`Total: ${students.length} student${students.length !== 1 ? "s" : ""}`,
+           PAGE_W - MARGIN - 180, bandY + 6, { width: 174, align: "right" });
     };
 
     // ============================================================
@@ -2937,7 +2968,6 @@ router.get("/list-pdf", async (req, res) => {
          .text(`Print Date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
            MARGIN, fy + 2, { width: 220, align: "left" });
 
-      // Signature lines
       const cx = (PAGE_W - 320) / 2;
       doc.strokeColor("#94a3b8").lineWidth(0.5)
          .moveTo(cx, fy + 10).lineTo(cx + 100, fy + 10).stroke();
@@ -2954,24 +2984,31 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // WATERMARK — school logo visible
+    // WATERMARK — FRONT LAYER, clearly visible
     // ============================================================
     const drawWatermark = () => {
       if (!schoolLogo) return;
       try {
         doc.save();
-        doc.opacity(0.07);
-        const size = 400;
-        doc.image(schoolLogo, (PAGE_W - size) / 2, (PAGE_H - size) / 2, {
+        // High opacity + multiple overlays for strong visibility
+        doc.opacity(0.14);
+        const size = 420;
+        doc.image(schoolLogo, (PAGE_W - size) / 2, (PAGE_H - size) / 2 - 20, {
           width: size, height: size
         });
+        doc.restore();
+
+        // Diagonal text watermark
+        doc.save();
+        doc.opacity(0.10);
+        doc.font("Helvetica-Bold").fontSize(70).fillColor("#1e3a8a");
+        doc.translate(PAGE_W / 2, PAGE_H / 2);
+        doc.rotate(-28, { origin: [0, 0] });
+        doc.text("GSSS SHILLA", -260, -30, { width: 520, align: "center" });
         doc.restore();
       } catch (e) {}
     };
 
-    // ============================================================
-    // ADD NEW PAGE
-    // ============================================================
     const addPage = (pageTitle) => {
       doc.addPage();
       pageNum++;
@@ -2980,24 +3017,23 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // COLUMN CONFIG — Har column ki width, align, aur ellipsis setting
+    // COLUMN DEFINITIONS (Compact — no wrap)
     // ============================================================
-    // Zyada width di hai taaki "General", "Non-Specialized" pura dikhe
     const COLUMN_DEFS = {
       sl:              { label: "#",            width: 22,  align: "center" },
-      photo:           { label: "PHOTO",         width: 38,  align: "center", isImage: true },
-      signature:       { label: "SIGN",          width: 44,  align: "center", isImage: true },
+      photo:           { label: "PHOTO",         width: 55,  align: "center", isImage: true },
+      signature:       { label: "SIGN",          width: 65,  align: "center", isImage: true },
       studentId:       { label: "STUDENT ID",   width: 72,  align: "left" },
       admissionNumber: { label: "ADM. NO",       width: 62,  align: "left" },
       name:            { label: "STUDENT NAME",  width: 130, align: "left", bold: true },
-      fatherName:      { label: "FATHER",        width: 120, align: "left" },
-      motherName:      { label: "MOTHER",        width: 110, align: "left" },
+      fatherName:      { label: "FATHER",        width: 115, align: "left" },
+      motherName:      { label: "MOTHER",        width: 105, align: "left" },
       class:           { label: "CLASS",         width: 42,  align: "center" },
       rollNumber:      { label: "ROLL",          width: 40,  align: "center" },
       session:         { label: "SESSION",       width: 58,  align: "center" },
       gender:          { label: "GENDER",        width: 52,  align: "center" },
       category:        { label: "CATEGORY",      width: 62,  align: "center" },
-      stream:          { label: "STREAM",        width: 78,  align: "center" },
+      stream:          { label: "STREAM",        width: 76,  align: "center" },
       dob:             { label: "DOB",           width: 62,  align: "center" },
       mobile:          { label: "MOBILE",        width: 74,  align: "left" },
       email:           { label: "EMAIL",         width: 130, align: "left" },
@@ -3007,7 +3043,6 @@ router.get("/list-pdf", async (req, res) => {
       address:         { label: "ADDRESS",       width: 160, align: "left" }
     };
 
-    // Active columns — user selected + photo/signature if flags
     let activeCols = requestedCols.filter(c => COLUMN_DEFS[c]);
     if (needPhotos && !activeCols.includes("photo")) {
       const nameIdx = activeCols.indexOf("name");
@@ -3019,33 +3054,31 @@ router.get("/list-pdf", async (req, res) => {
     }
     if (!activeCols.length) activeCols = ["sl", "studentId", "name"];
 
-    // Calculate scaled widths to fit CONTENT_W
     const rawTotal = activeCols.reduce((s, c) => s + COLUMN_DEFS[c].width, 0);
     const scaleFactor = CONTENT_W / rawTotal;
     const colWidths = {};
     activeCols.forEach(c => { colWidths[c] = COLUMN_DEFS[c].width * scaleFactor; });
 
-    // Row height
-    const ROW_H = 20;
-    const TABLE_HEADER_H = 24;
-    const SECTION_TITLE_H = 20;
-    const SECTION_GAP = 10; // gap between class tables
+    const ROW_H = 22;
+    const TABLE_HEADER_H = 26;
+    const SECTION_TITLE_H = 22;
+    const SECTION_GAP = 12;
+    const STUDENT_GAP = 3; // for card mode
 
     // ============================================================
-    // Draw section title bar with count on right
+    // SECTION TITLE BAR
     // ============================================================
     const drawSectionTitle = (y, className, count, isContd = false) => {
-      // Navy bar with gold left accent
-      doc.rect(MARGIN, y, CONTENT_W, SECTION_TITLE_H).fill("#1e3a8a");
-      doc.rect(MARGIN, y, 5, SECTION_TITLE_H).fill("#c9972b");
+      doc.rect(MARGIN, y, CONTENT_W, SECTION_TITLE_H - 2).fill("#1e3a8a");
+      doc.rect(MARGIN, y, 6, SECTION_TITLE_H - 2).fill("#c9972b");
 
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#ffffff")
-         .text(`CLASS: ${className}${isContd ? " (contd.)" : ""}`, MARGIN + 12, y + 5, {
-           width: CONTENT_W - 200, align: "left", characterSpacing: 1
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#ffffff")
+         .text(`CLASS: ${className}${isContd ? "  (continued)" : ""}`, MARGIN + 14, y + 5, {
+           width: CONTENT_W - 200, align: "left", characterSpacing: 1.1
          });
 
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#fbbf24")
-         .text(isContd ? "continued..." : `${count} student${count !== 1 ? "s" : ""}`, MARGIN, y + 6, {
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#fbbf24")
+         .text(isContd ? "…" : `${count} student${count !== 1 ? "s" : ""}`, MARGIN, y + 6, {
            width: CONTENT_W - 12, align: "right"
          });
 
@@ -3053,23 +3086,19 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // Draw table header row
+    // TABLE HEADER
     // ============================================================
     const drawTableHeader = (y) => {
-      // Header background — dark slate
       doc.rect(MARGIN, y, CONTENT_W, TABLE_HEADER_H).fill("#334155");
 
       let x = MARGIN;
       activeCols.forEach((c, i) => {
         const def = COLUMN_DEFS[c];
         const w = colWidths[c];
-
         doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff")
-           .text(def.label, x + 2, y + 8, {
+           .text(def.label, x + 2, y + 9, {
              width: w - 4, align: def.align, lineBreak: false, ellipsis: true
            });
-
-        // Vertical separator
         if (i > 0) {
           doc.strokeColor("#64748b").lineWidth(0.5)
              .moveTo(x, y + 3).lineTo(x, y + TABLE_HEADER_H - 3).stroke();
@@ -3077,7 +3106,6 @@ router.get("/list-pdf", async (req, res) => {
         x += w;
       });
 
-      // Bottom border (gold)
       doc.strokeColor("#c9972b").lineWidth(1)
          .moveTo(MARGIN, y + TABLE_HEADER_H)
          .lineTo(MARGIN + CONTENT_W, y + TABLE_HEADER_H).stroke();
@@ -3086,7 +3114,7 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // Cell value
+    // CELL VALUE
     // ============================================================
     const getCellValue = (s, key, idx) => {
       switch (key) {
@@ -3101,7 +3129,7 @@ router.get("/list-pdf", async (req, res) => {
         case "session": return s.session || "—";
         case "gender": return s.gender || "—";
         case "category": return s.category || "—";
-        case "stream": return s.stream || "Non-Specialized";
+        case "stream": return s.stream || "Non-Spec.";
         case "dob": return s.dob ? new Date(s.dob).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }) : "—";
         case "mobile": return s.mobile_number || "—";
         case "email": return s.email_id || "—";
@@ -3114,10 +3142,9 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // Draw one student row — clean single line
+    // DRAW SIMPLE ROW (compact table mode)
     // ============================================================
-    const drawStudentRow = (s, y, idx) => {
-      // Row background (alternating light)
+    const drawSimpleRow = (s, y, idx) => {
       doc.rect(MARGIN, y, CONTENT_W, ROW_H).fill(idx % 2 === 1 ? "#f1f5f9" : "#ffffff");
 
       let x = MARGIN;
@@ -3125,44 +3152,24 @@ router.get("/list-pdf", async (req, res) => {
         const def = COLUMN_DEFS[c];
         const w = colWidths[c];
 
-        // Vertical separator
         if (i > 0) {
           doc.strokeColor("#cbd5e1").lineWidth(0.4)
              .moveTo(x, y).lineTo(x, y + ROW_H).stroke();
         }
 
-        if (c === "photo") {
-          if (photoMap[s.id]) {
-            try {
-              doc.image(photoMap[s.id], x + (w - 16) / 2, y + 2, {
-                fit: [16, 16], align: "center", valign: "center"
-              });
-            } catch (e) {}
-          }
-        } else if (c === "signature") {
-          if (sigMap[s.id]) {
-            try {
-              doc.image(sigMap[s.id], x + (w - 24) / 2, y + 4, {
-                fit: [24, 12], align: "center", valign: "center"
-              });
-            } catch (e) {}
-          }
+        if (c === "photo" || c === "signature") {
+          // not used in simple mode
         } else {
           const value = getCellValue(s, c, idx);
           doc.font(def.bold ? "Helvetica-Bold" : "Helvetica").fontSize(def.bold ? 8 : 7.5)
              .fillColor("#0d1b2a")
              .text(String(value), x + 3, y + (ROW_H / 2) - 4, {
-               width: w - 6,
-               align: def.align,
-               lineBreak: false,
-               ellipsis: true
+               width: w - 6, align: def.align, lineBreak: false, ellipsis: true
              });
         }
-
         x += w;
       });
 
-      // Row bottom border
       doc.strokeColor("#cbd5e1").lineWidth(0.4)
          .moveTo(MARGIN, y + ROW_H).lineTo(MARGIN + CONTENT_W, y + ROW_H).stroke();
 
@@ -3170,10 +3177,130 @@ router.get("/list-pdf", async (req, res) => {
     };
 
     // ============================================================
-    // Outer bold border around whole table
+    // DRAW CARD (2-row per student — big photos)
+    // ============================================================
+    const CARD_H = ROW_H * 2 + STUDENT_GAP;
+
+    const drawCardRow = (s, y, idx) => {
+      doc.rect(MARGIN, y, CONTENT_W, CARD_H).fill(idx % 2 === 1 ? "#f8fafc" : "#ffffff");
+      doc.rect(MARGIN, y, 3, CARD_H).fill("#c9972b");
+
+      // Separate fields from image columns
+      const fields = activeCols.filter(c => c !== "photo" && c !== "signature");
+      const halfCount = Math.ceil(fields.length / 2);
+      const topFields = fields.slice(0, halfCount);
+      const bottomFields = fields.slice(halfCount);
+
+      // Reserve space for photo & signature on right
+      let rightReserve = 0;
+      if (activeCols.includes("photo")) rightReserve += 60;
+      if (activeCols.includes("signature")) rightReserve += 70;
+      const fieldsTotalW = CONTENT_W - rightReserve - 8;
+
+      const fieldsRawW = [...topFields, ...bottomFields].reduce((sum, c) => sum + COLUMN_DEFS[c].width, 0);
+      const fieldsScale = fieldsTotalW / fieldsRawW;
+
+      const topY = y + 2;
+      const botY = y + ROW_H + STUDENT_GAP + 2;
+      const rowInnerH = ROW_H - 4;
+
+      // ---- TOP ROW ----
+      let xTop = MARGIN + 6;
+      topFields.forEach((c, i) => {
+        const def = COLUMN_DEFS[c];
+        const w = def.width * fieldsScale;
+        const value = getCellValue(s, c, idx);
+        doc.font(def.bold ? "Helvetica-Bold" : "Helvetica").fontSize(def.bold ? 8.5 : 7.5)
+           .fillColor("#0d1b2a")
+           .text(String(value), xTop + 3, topY + (rowInnerH / 2) - 4, {
+             width: w - 6, align: def.align, lineBreak: false, ellipsis: true
+           });
+        if (i > 0) {
+          doc.strokeColor("#e2e8f0").lineWidth(0.4)
+             .moveTo(xTop, topY).lineTo(xTop, topY + rowInnerH).stroke();
+        }
+        xTop += w;
+      });
+
+      // ---- BOTTOM ROW ----
+      let xBot = MARGIN + 6;
+      bottomFields.forEach((c, i) => {
+        const def = COLUMN_DEFS[c];
+        const w = def.width * fieldsScale;
+        const value = getCellValue(s, c, idx);
+        doc.font(def.bold ? "Helvetica-Bold" : "Helvetica").fontSize(def.bold ? 8.5 : 7.5)
+           .fillColor("#0d1b2a")
+           .text(String(value), xBot + 3, botY + (rowInnerH / 2) - 4, {
+             width: w - 6, align: def.align, lineBreak: false, ellipsis: true
+           });
+        if (i > 0) {
+          doc.strokeColor("#e2e8f0").lineWidth(0.4)
+             .moveTo(xBot, botY).lineTo(xBot, botY + rowInnerH).stroke();
+        }
+        xBot += w;
+      });
+
+      // Middle separator (between rows)
+      doc.strokeColor("#e2e8f0").lineWidth(0.4)
+         .moveTo(MARGIN + 6, y + ROW_H + STUDENT_GAP / 2 + 1)
+         .lineTo(MARGIN + 6 + fieldsTotalW, y + ROW_H + STUDENT_GAP / 2 + 1)
+         .stroke();
+
+      // ---- Photo (right, spanning both rows) ----
+      let rx = MARGIN + CONTENT_W - rightReserve - 4;
+      if (activeCols.includes("photo")) {
+        const pW = 50, pH = CARD_H - 8;
+        const px = rx + 4;
+        const py = y + 4;
+        doc.rect(px, py, pW, pH).fillAndStroke("#f1f5f9", "#c9972b");
+        if (photoMap[s.id]) {
+          try {
+            doc.image(photoMap[s.id], px + 1.5, py + 1.5, {
+              fit: [pW - 3, pH - 3], align: "center", valign: "center"
+            });
+          } catch (e) {
+            doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+               .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
+          }
+        } else {
+          doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+             .text("No Photo", px, py + pH / 2 - 3, { width: pW, align: "center" });
+        }
+        rx += 60;
+      }
+
+      // ---- Signature (far right) ----
+      if (activeCols.includes("signature")) {
+        const sW = 60, sH = 30;
+        const sx = rx + 4;
+        const sy = y + (CARD_H - sH) / 2;
+        doc.rect(sx, sy, sW, sH).fillAndStroke("#fef8ed", "#c9972b");
+        if (sigMap[s.id]) {
+          try {
+            doc.image(sigMap[s.id], sx + 1.5, sy + 1.5, {
+              fit: [sW - 3, sH - 3], align: "center", valign: "center"
+            });
+          } catch (e) {
+            doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+               .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
+          }
+        } else {
+          doc.font("Helvetica").fontSize(6).fillColor("#94a3b8")
+             .text("No Sign", sx, sy + sH / 2 - 3, { width: sW, align: "center" });
+        }
+      }
+
+      doc.strokeColor("#cbd5e1").lineWidth(0.6)
+         .rect(MARGIN, y, CONTENT_W, CARD_H).stroke();
+
+      return y + CARD_H + STUDENT_GAP;
+    };
+
+    // ============================================================
+    // OUTER BORDER
     // ============================================================
     const drawOuterBorder = (topY, bottomY) => {
-      doc.strokeColor("#0d1b2a").lineWidth(1.8)
+      doc.strokeColor("#0d1b2a").lineWidth(2)
          .rect(MARGIN, topY, CONTENT_W, bottomY - topY).stroke();
     };
 
@@ -3188,50 +3315,42 @@ router.get("/list-pdf", async (req, res) => {
 
     classList.forEach((className) => {
       const classStudents = grouped[className];
+      const rowUnit = useCardLayout ? CARD_H + STUDENT_GAP : ROW_H;
 
-      // Need space for section title + header + 2 rows min
-      const minNeeded = SECTION_TITLE_H + TABLE_HEADER_H + ROW_H * 2 + 10;
+      const minNeeded = SECTION_TITLE_H + TABLE_HEADER_H + rowUnit * 2 + 10;
       if (cursorY + minNeeded > BODY_BOTTOM) {
         drawPageFooter();
         addPage(title);
         cursorY = BODY_TOP;
       }
 
-      // Section title
       cursorY = drawSectionTitle(cursorY, className, classStudents.length);
 
-      // Table header
       const tableTop = cursorY;
       cursorY = drawTableHeader(cursorY);
 
-      // Student rows
       for (let i = 0; i < classStudents.length; i++) {
         const s = classStudents[i];
 
-        // Check page break — need space for next row + outer border
-        if (cursorY + ROW_H > BODY_BOTTOM) {
+        if (cursorY + rowUnit > BODY_BOTTOM) {
           drawOuterBorder(tableTop, cursorY);
           drawPageFooter();
           addPage(title);
           cursorY = BODY_TOP;
-          // Repeat section title + header on new page
           cursorY = drawSectionTitle(cursorY, className, classStudents.length, true);
           cursorY = drawTableHeader(cursorY);
         }
 
-        cursorY = drawStudentRow(s, cursorY, globalIdx);
+        if (useCardLayout) cursorY = drawCardRow(s, cursorY, globalIdx);
+        else cursorY = drawSimpleRow(s, cursorY, globalIdx);
         globalIdx++;
       }
 
-      // Draw outer border for this class table
       drawOuterBorder(tableTop, cursorY);
-
-      // Add gap between tables
       cursorY += SECTION_GAP;
     });
 
     drawPageFooter();
-
     doc.end();
 
   } catch (err) {
@@ -3243,6 +3362,9 @@ router.get("/list-pdf", async (req, res) => {
 });
 
 
+
+
+    
 
     
     
