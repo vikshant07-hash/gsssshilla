@@ -4162,6 +4162,242 @@ router.post("/final-result/:studentId", asyncHandler(async (req, res) => {
 
 
 
+// ============================================================
+// SECTION 10.5: MARKSHEET VERIFICATION PAGE
+// ============================================================
+
+// ------------------------------------------------------------
+// GET /marksheet-verify/:examId
+// Returns all students with their marks & status for verification
+// ------------------------------------------------------------
+router.get("/marksheet-verify/:examId", asyncHandler(async (req, res) => {
+    const examId = parseId(req.params.examId, "examId");
+    const { section_id } = req.query;
+
+    // Fetch exam info
+    const examRows = await q(
+        `SELECT e.*, c.master_key AS class_name, s.master_key AS session_code
+         FROM erp_exams e
+         LEFT JOIN erp_master c ON c.id = e.class_id
+         LEFT JOIN erp_master s ON s.id = e.session_id
+         WHERE e.id = ? AND e.record_type = 'EXAM' LIMIT 1`,
+        [examId]
+    );
+    if (examRows.length === 0) return fail(res, "Exam not found", 404);
+    const exam = examRows[0];
+
+    // Get all students with their aggregated marks for this exam
+    let sql = `
+        SELECT 
+            ss.student_id,
+            n.name AS student_name,
+            n.father_name,
+            n.roll_number,
+            n.stream,
+            n.class AS student_class,
+            n.section AS student_section,
+            COUNT(DISTINCT ss.subject_id) AS subject_count,
+            SUM(m.total_marks) AS grand_total,
+            SUM(m.max_marks) AS max_total,
+            GROUP_CONCAT(DISTINCT m.status) AS status_list,
+            MIN(m.status) AS marks_status
+        FROM erp_marks ss
+        JOIN Nstudent n ON n.student_id = ss.student_id
+        LEFT JOIN erp_marks m ON m.record_type = 'MARKS'
+            AND m.student_id = ss.student_id
+            AND m.exam_id = ?
+            AND m.subject_id = ss.subject_id
+        WHERE ss.record_type = 'STUDENT_SUBJECT'
+          AND ss.session_id = ?
+          AND ss.class_id = ?
+          AND ss.status = 'ACTIVE'
+    `;
+    const params = [examId, exam.session_id, exam.class_id];
+
+    if (section_id) {
+        sql += ` AND ss.section_id = ?`;
+        params.push(parseId(section_id, "section_id"));
+    }
+    sql += ` GROUP BY ss.student_id, n.name, n.father_name, n.roll_number, n.stream, n.class, n.section
+             ORDER BY CAST(n.roll_number AS UNSIGNED) ASC, n.name ASC`;
+
+    const rows = await q(sql, params);
+
+    // Compute aggregate status per student
+    const students = rows.map(r => {
+        let marks_status = "DRAFT";
+        if (r.status_list) {
+            const statuses = r.status_list.split(",");
+            if (statuses.every(s => s === "PUBLISHED")) marks_status = "PUBLISHED";
+            else if (statuses.every(s => ["FINALIZED", "PUBLISHED"].includes(s))) marks_status = "FINALIZED";
+            else if (statuses.every(s => s === "VERIFIED")) marks_status = "VERIFIED";
+            else if (statuses.some(s => s === "SUBMITTED")) marks_status = "SUBMITTED";
+            else if (statuses.some(s => s === "IN_PROGRESS")) marks_status = "IN_PROGRESS";
+            else marks_status = "DRAFT";
+        }
+
+        const totalObtained = parseFloat(r.grand_total) || 0;
+        const totalMax = parseFloat(r.max_total) || 0;
+        const pct = totalMax > 0 ? ((totalObtained / totalMax) * 100) : 0;
+
+        let grade = "E";
+        if (pct >= 90) grade = "A+";
+        else if (pct >= 80) grade = "A";
+        else if (pct >= 70) grade = "B+";
+        else if (pct >= 60) grade = "B";
+        else if (pct >= 50) grade = "C";
+        else if (pct >= 40) grade = "D";
+
+        return {
+            student_id: r.student_id,
+            student_name: r.student_name,
+            father_name: r.father_name,
+            roll_number: r.roll_number,
+            stream: r.stream,
+            class_name: r.student_class,
+            section: r.student_section,
+            subject_count: r.subject_count,
+            grand_total: totalObtained,
+            max_total: totalMax,
+            percentage: parseFloat(pct.toFixed(2)),
+            overall_grade: grade,
+            marks_status,
+            status_list: r.status_list
+        };
+    });
+
+    return ok(res, {
+        exam: {
+            id: exam.id,
+            name: exam.name,
+            exam_code: exam.exam_code,
+            status: exam.status,
+            is_locked: !!exam.is_locked,
+            class_name: exam.class_name,
+            session_code: exam.session_code
+        },
+        students,
+        total: students.length
+    }, `${students.length} student(s) loaded for verification`);
+}));
+
+// ------------------------------------------------------------
+// POST /marks-verify-student/:examId/:studentId
+// Verify all marks of a single student in this exam
+// ------------------------------------------------------------
+router.post("/marks-verify-student/:examId/:studentId", requireRole(...ADMIN_ROLES, "TEACHER", "HOD"), asyncHandler(async (req, res) => {
+    const examId = parseId(req.params.examId, "examId");
+    const studentId = String(req.params.studentId).trim();
+    const user = getUserContext(req);
+
+    const exam = await assertExamOpen(examId);
+
+    const result = await q(`
+        UPDATE erp_marks
+        SET status = 'VERIFIED', verified_by = ?, verified_at = NOW(), updated_at = NOW()
+        WHERE record_type = 'MARKS'
+          AND exam_id = ? AND student_id = ?
+          AND status IN ('SUBMITTED', 'DRAFT', 'IN_PROGRESS')
+    `, [user.user_id, examId, studentId]);
+
+    if (result.affectedRows === 0) {
+        return fail(res, "No marks to verify (already verified or finalised)", 400);
+    }
+
+    // If all marks of this exam are now verified, update exam status
+    const pending = await q(`
+        SELECT COUNT(*) AS cnt FROM erp_marks
+        WHERE record_type = 'MARKS' AND exam_id = ?
+          AND status NOT IN ('VERIFIED', 'FINALIZED', 'PUBLISHED')
+    `, [examId]);
+
+    if (pending[0].cnt === 0) {
+        await q(`UPDATE erp_exams SET status = 'VERIFIED' WHERE id = ? AND status NOT IN ('FINALIZED', 'PUBLISHED')`, [examId]);
+    }
+
+    await auditLog({
+        action: "MARKS_VERIFIED_STUDENT",
+        entity_type: "MARKS",
+        exam_id: examId,
+        student_id: studentId,
+        user,
+        new_value: { verified_count: result.affectedRows }
+    });
+
+    return ok(res, { verified: result.affectedRows }, `Marks verified for student ${studentId}`);
+}));
+
+// ------------------------------------------------------------
+// POST /marks-return-student/:examId/:studentId
+// Send all marks of a single student back for correction
+// ------------------------------------------------------------
+router.post("/marks-return-student/:examId/:studentId", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
+    const examId = parseId(req.params.examId, "examId");
+    const studentId = String(req.params.studentId).trim();
+    const user = getUserContext(req);
+    requireFields(req.body, ["reason"]);
+    const reason = trimStr(req.body.reason, 500);
+
+    await assertExamOpen(examId);
+
+    const result = await q(`
+        UPDATE erp_marks
+        SET status = 'DRAFT',
+            remarks = LEFT(CONCAT(COALESCE(remarks, ''), ' | RETURNED: ', ?), 500),
+            updated_at = NOW()
+        WHERE record_type = 'MARKS'
+          AND exam_id = ? AND student_id = ?
+          AND status IN ('SUBMITTED', 'VERIFIED')
+    `, [reason, examId, studentId]);
+
+    if (result.affectedRows === 0) {
+        return fail(res, "No marks to return (already in draft or finalised)", 400);
+    }
+
+    // Set exam back to IN_PROGRESS
+    await q(`UPDATE erp_exams SET status = 'IN_PROGRESS' WHERE id = ? AND status NOT IN ('FINALIZED', 'PUBLISHED', 'DRAFT')`, [examId]);
+
+    await auditLog({
+        action: "MARKS_RETURNED_STUDENT",
+        entity_type: "MARKS",
+        exam_id: examId,
+        student_id: studentId,
+        user,
+        reason,
+        new_value: { returned_count: result.affectedRows }
+    });
+
+    return ok(res, { returned: result.affectedRows }, `Marks returned for student ${studentId}`);
+}));
+
+// ------------------------------------------------------------
+// GET /marksheet-verify/summary/:examId
+// Optional: aggregate verification summary
+// ------------------------------------------------------------
+router.get("/marksheet-verify/summary/:examId", asyncHandler(async (req, res) => {
+    const examId = parseId(req.params.examId, "examId");
+
+    const rows = await q(`
+        SELECT status, COUNT(*) AS cnt
+        FROM erp_marks
+        WHERE record_type = 'MARKS' AND exam_id = ?
+        GROUP BY status
+    `, [examId]);
+
+    const summary = {
+        DRAFT: 0,
+        IN_PROGRESS: 0,
+        SUBMITTED: 0,
+        VERIFIED: 0,
+        FINALIZED: 0,
+        PUBLISHED: 0
+    };
+    rows.forEach(r => { summary[r.status] = r.cnt; });
+
+    return ok(res, summary, "Verification summary");
+}));
+
+
 
 
 // ============================================================
