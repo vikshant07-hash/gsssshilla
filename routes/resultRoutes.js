@@ -237,87 +237,387 @@ async function getStudentFromNstudent(studentId) {
     return rows[0];
 }
 
-// FIX: Nstudent.class may be "10", "Class 10", "X" etc. Old code did an exact match only,
-// so "Class not configured" was thrown and no subjects/results could be resolved.
+// ============================================================
+// FIXED: Class Resolver — handles "10", "Class 10", "X", "x", "CLASS-10"
+// ============================================================
 async function resolveClassRow(rawClass) {
     const raw = String(rawClass ?? "").trim();
     if (!raw) return null;
-    const stripped = raw.replace(/^class\s*[-:]?\s*/i, "").trim();
-    for (const k of [...new Set([raw, stripped, stripped.toUpperCase()])]) {
-        const r = await getMasterByKey("CLASS", k);
-        if (r) return r;
+
+    // Normalize: remove "class", "-", ":", extra spaces
+    const stripped = raw
+        .replace(/^class\s*[-:]?\s*/i, "")
+        .trim();
+
+    // Try all variations
+    const variations = [
+        raw,
+        stripped,
+        stripped.toUpperCase(),
+        stripped.toLowerCase(),
+        `Class ${stripped}`,
+        `CLASS ${stripped}`,
+        `Class-${stripped}`,
+        String(parseInt(stripped, 10))  // "10" from "X"? No, but useful for "010" → "10"
+    ].filter(Boolean);
+
+    // Remove duplicates
+    const uniqueVariations = [...new Set(variations)];
+
+    // 1. Try exact master_key match
+    for (const v of uniqueVariations) {
+        const r = await q(
+            `SELECT * FROM erp_master 
+             WHERE master_type = 'CLASS' AND master_key = ? 
+             LIMIT 1`,
+            [v]
+        );
+        if (r.length > 0) return r[0];
     }
-    const rows = await q(
-        `SELECT * FROM erp_master WHERE master_type = 'CLASS' AND (LOWER(name) = LOWER(?) OR LOWER(name) = LOWER(?)) LIMIT 1`,
-        [raw, `Class ${stripped}`]
-    );
-    return rows[0] || null;
+
+    // 2. Try case-insensitive master_key match
+    for (const v of uniqueVariations) {
+        const r = await q(
+            `SELECT * FROM erp_master 
+             WHERE master_type = 'CLASS' AND LOWER(master_key) = LOWER(?) 
+             LIMIT 1`,
+            [v]
+        );
+        if (r.length > 0) return r[0];
+    }
+
+    // 3. Try name match ("Class 10" stored as name)
+    for (const v of uniqueVariations) {
+        const r = await q(
+            `SELECT * FROM erp_master 
+             WHERE master_type = 'CLASS' 
+               AND (LOWER(name) = LOWER(?) OR LOWER(name) = LOWER(?))
+             LIMIT 1`,
+            [v, `Class ${v}`]
+        );
+        if (r.length > 0) return r[0];
+    }
+
+    // 4. Fallback: extract number from "X" / "10" and try again
+    const numMatch = stripped.match(/\d+/);
+    if (numMatch) {
+        const num = numMatch[0];
+        const r = await q(
+            `SELECT * FROM erp_master 
+             WHERE master_type = 'CLASS' 
+               AND (master_key = ? OR master_key LIKE ? OR name LIKE ?)
+             LIMIT 1`,
+            [num, `%${num}%`, `%${num}%`]
+        );
+        if (r.length > 0) return r[0];
+    }
+
+    return null;
 }
 
+
+// FIX: Nstudent.class may be "10", "Class 10", "X" etc. Old code did an exact match only,
+// so "Class not configured" was thrown and no subjects/results could be resolved.
+
+// ============================================================
+// FIXED: Section Resolver
+// ============================================================
 async function resolveSectionId(classId, rawSection) {
     const raw = String(rawSection ?? "").trim();
     if (!raw) return null;
-    const rows = await q(
-        `SELECT id FROM erp_master WHERE master_type = 'SECTION' AND parent_id = ? AND LOWER(master_key) = LOWER(?) LIMIT 1`,
-        [classId, raw]
-    );
-    return rows[0]?.id || null;
+
+    const variations = [
+        raw,
+        raw.toUpperCase(),
+        raw.toLowerCase()
+    ];
+    const uniqueVariations = [...new Set(variations)];
+
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'SECTION' AND parent_id = ? AND master_key = ?
+             LIMIT 1`,
+            [classId, v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'SECTION' AND parent_id = ? 
+               AND LOWER(master_key) = LOWER(?)
+             LIMIT 1`,
+            [classId, v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    return null;
 }
 
+// ============================================================
+// FIXED: Stream Resolver — handles "SCI", "Science", "science"
+// ============================================================
 async function resolveStreamId(rawStream) {
     const raw = String(rawStream ?? "").trim();
     if (!raw) return null;
-    const byKey = await getMasterByKey("STREAM", raw.toUpperCase());
-    if (byKey) return byKey.id;
+
+    const variations = [
+        raw,
+        raw.toUpperCase(),
+        raw.toLowerCase()
+    ];
+    const uniqueVariations = [...new Set(variations)];
+
+    // 1. Exact master_key match
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'STREAM' AND master_key = ?
+             LIMIT 1`,
+            [v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    // 2. Case-insensitive master_key
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'STREAM' AND LOWER(master_key) = LOWER(?)
+             LIMIT 1`,
+            [v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    // 3. Name match
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'STREAM' AND LOWER(name) = LOWER(?)
+             LIMIT 1`,
+            [v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    // 4. Partial match
     const rows = await q(
-        `SELECT id FROM erp_master WHERE master_type = 'STREAM' AND LOWER(name) = LOWER(?) LIMIT 1`,
-        [raw]
+        `SELECT id FROM erp_master 
+         WHERE master_type = 'STREAM' AND (name LIKE ? OR master_key LIKE ?)
+         LIMIT 1`,
+        [`%${raw}%`, `%${raw}%`]
     );
     return rows[0]?.id || null;
 }
 
-// FIX (missing logic): the old comment said "Core subjects auto-assigned on student creation"
-// but no code did that, so marks-entry sheets were always empty.
+
+
+// ============================================================
+// FIXED: Section Resolver
+// ============================================================
+async function resolveSectionId(classId, rawSection) {
+    const raw = String(rawSection ?? "").trim();
+    if (!raw) return null;
+
+    const variations = [
+        raw,
+        raw.toUpperCase(),
+        raw.toLowerCase()
+    ];
+    const uniqueVariations = [...new Set(variations)];
+
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'SECTION' AND parent_id = ? AND master_key = ?
+             LIMIT 1`,
+            [classId, v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'SECTION' AND parent_id = ? 
+               AND LOWER(master_key) = LOWER(?)
+             LIMIT 1`,
+            [classId, v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    return null;
+}
+
+// ============================================================
+// FIXED: Stream Resolver — handles "SCI", "Science", "science"
+// ============================================================
+async function resolveStreamId(rawStream) {
+    const raw = String(rawStream ?? "").trim();
+    if (!raw) return null;
+
+    const variations = [
+        raw,
+        raw.toUpperCase(),
+        raw.toLowerCase()
+    ];
+    const uniqueVariations = [...new Set(variations)];
+
+    // 1. Exact master_key match
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'STREAM' AND master_key = ?
+             LIMIT 1`,
+            [v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    // 2. Case-insensitive master_key
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'STREAM' AND LOWER(master_key) = LOWER(?)
+             LIMIT 1`,
+            [v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    // 3. Name match
+    for (const v of uniqueVariations) {
+        const rows = await q(
+            `SELECT id FROM erp_master 
+             WHERE master_type = 'STREAM' AND LOWER(name) = LOWER(?)
+             LIMIT 1`,
+            [v]
+        );
+        if (rows.length > 0) return rows[0].id;
+    }
+
+    // 4. Partial match
+    const rows = await q(
+        `SELECT id FROM erp_master 
+         WHERE master_type = 'STREAM' AND (name LIKE ? OR master_key LIKE ?)
+         LIMIT 1`,
+        [`%${raw}%`, `%${raw}%`]
+    );
+    return rows[0]?.id || null;
+}
+
+// ============================================================
+// FIXED: Auto-assign core subjects to a student
+// ============================================================
 async function assignCoreSubjects(student, sessionId, user) {
     const classRow = await resolveClassRow(student.class);
-    if (!classRow) return { added: 0, skipped: 0, error: `Class "${student.class}" not configured` };
+    if (!classRow) {
+        return { 
+            added: 0, 
+            skipped: 0, 
+            error: `Class "${student.class}" not configured in master. Create it first.` 
+        };
+    }
 
     const sectionId = await resolveSectionId(classRow.id, student.section);
     const streamId = await resolveStreamId(student.stream);
 
+    // FIXED: Get all class-subjects (both core AND optional without stream filter)
+    // Then filter in JS for core + matching stream
     const mapped = await q(`
-        SELECT ${JX("data", "$.subject_id")} AS subject_id, data
+        SELECT id, data,
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.subject_id')), 'null') AS subject_id_str,
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.stream_id')), 'null') AS stream_id_str,
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.is_optional')), 'null') AS is_optional_str,
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.is_core')), 'null') AS is_core_str
         FROM erp_master
-        WHERE master_type = 'CLASS_SUBJECT' AND parent_id = ? AND is_active = 1
-          AND (${JX("data", "$.stream_id")} IS NULL OR ${JX("data", "$.stream_id")} <=> ?)
-    `, [classRow.id, streamId]);
+        WHERE master_type = 'CLASS_SUBJECT' 
+          AND parent_id = ? 
+          AND is_active = 1
+    `, [classRow.id]);
 
     let added = 0, skipped = 0;
-    for (const m of mapped) {
-        const d = safeJSONParse(m.data, {});
-        if (d.is_optional || d.is_core === false) continue;
-        const subjectId = parseInt(m.subject_id, 10);
-        if (!subjectId) continue;
+    const details = [];
 
+    for (const m of mapped) {
+        // Parse subject_id safely
+        const subjectId = parseInt(m.subject_id_str, 10);
+        if (!subjectId || isNaN(subjectId)) {
+            details.push({ mapping_id: m.id, skipped: "invalid subject_id" });
+            continue;
+        }
+
+        // Parse optional flag
+        const isOptional = m.is_optional_str === "true" || m.is_optional_str === "1";
+        const isCore = m.is_core_str !== "false" && m.is_core_str !== "0";
+        
+        // Skip optional subjects (they must be assigned manually)
+        if (isOptional || !isCore) {
+            details.push({ mapping_id: m.id, subject_id: subjectId, skipped: "optional" });
+            continue;
+        }
+
+        // Stream filter: agar mapping me stream_id hai to student ke stream se match karo
+        const mappingStreamId = m.stream_id_str ? parseInt(m.stream_id_str, 10) : null;
+        if (mappingStreamId !== null && mappingStreamId !== streamId) {
+            details.push({ 
+                mapping_id: m.id, 
+                subject_id: subjectId, 
+                skipped: `stream mismatch (mapping: ${mappingStreamId}, student: ${streamId})` 
+            });
+            continue;
+        }
+
+        // Check if already assigned
         const dup = await q(`
             SELECT id FROM erp_marks
-            WHERE record_type = 'STUDENT_SUBJECT' AND student_id = ? AND session_id = ? AND subject_id = ?
+            WHERE record_type = 'STUDENT_SUBJECT' 
+              AND student_id = ? AND session_id = ? AND subject_id = ?
             LIMIT 1
         `, [student.student_id, sessionId, subjectId]);
-        if (dup.length > 0) { skipped++; continue; }
 
+        if (dup.length > 0) {
+            skipped++;
+            details.push({ subject_id: subjectId, skipped: "already assigned" });
+            continue;
+        }
+
+        // Insert
         await q(`
             INSERT INTO erp_marks (
                 record_type, student_id, session_id, class_id,
                 section_id, stream_id, subject_id, status, data, created_at
             ) VALUES ('STUDENT_SUBJECT', ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, NOW())
         `, [
-            student.student_id, sessionId, classRow.id, sectionId, streamId, subjectId,
-            safeJSONStringify({ is_optional: false, assigned_by: user?.user_id || "SYSTEM", auto: true })
+            student.student_id, 
+            sessionId, 
+            classRow.id, 
+            sectionId, 
+            streamId, 
+            subjectId,
+            safeJSONStringify({ 
+                is_optional: false, 
+                assigned_by: user?.user_id || "SYSTEM", 
+                auto: true 
+            })
         ]);
         added++;
+        details.push({ subject_id: subjectId, added: true });
     }
-    return { added, skipped };
+
+    return { 
+        added, 
+        skipped, 
+        details,
+        class_matched: classRow.master_key,
+        section_matched: sectionId,
+        stream_matched: streamId
+    };
 }
 
 async function assertExamOpen(examId) {
@@ -1544,52 +1844,105 @@ router.post("/student-subjects/assign", asyncHandler(async (req, res) => {
  * NEW: Auto-assign all CORE class-subjects to students.
  * Body: { session_id, class_id?, student_id? }
  */
+// ============================================================
+// FIXED: Auto-assign CORE subjects to all students in a class/session
+// Body: { session_id, class_id?, student_id? }
+// ============================================================
 router.post("/student-subjects/auto-assign", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
     requireFields(req.body, ["session_id"]);
     const user = getUserContext(req);
     const sessionId = parseId(req.body.session_id, "session_id");
     const session = await getMasterById(sessionId, "SESSION");
 
-    const where = [`session = ?`, `(status IS NULL OR LOWER(status) <> 'inactive')`];
-    const params = [session.master_key];
+    // Build WHERE clause for students
+    const where = [`(status IS NULL OR LOWER(status) <> 'inactive')`];
+    const params = [];
 
     if (req.body.student_id) {
         where.push("student_id = ?");
         params.push(String(req.body.student_id).trim());
     }
+
     if (req.body.class_id) {
         const c = await getMasterById(parseId(req.body.class_id, "class_id"), "CLASS");
-        where.push("(class = ? OR class = ? OR class = ?)");
-        params.push(c.master_key, c.name, `Class ${c.master_key}`);
+        // Match any of the common class name variations
+        where.push("(class = ? OR class = ? OR class = ? OR LOWER(class) = LOWER(?))");
+        params.push(
+            c.master_key,
+            c.name,
+            `Class ${c.master_key}`,
+            c.master_key
+        );
+    } else {
+        // Filter by session
+        if (session.master_key) {
+            where.push("(session = ? OR session IS NULL OR session = '')");
+            params.push(session.master_key);
+        }
     }
 
     const students = await q(
-        `SELECT student_id, class, section, stream FROM Nstudent WHERE ${where.join(" AND ")}`,
+        `SELECT student_id, name, class, section, stream, session
+         FROM Nstudent 
+         WHERE ${where.join(" AND ")}`,
         params
     );
 
-    let added = 0, skipped = 0;
+    if (students.length === 0) {
+        return fail(res, "No students found matching the criteria", 404);
+    }
+
+    let totalAdded = 0;
+    let totalSkipped = 0;
     const errors = [];
+    const successDetails = [];
+
     for (const s of students) {
         try {
             const r = await assignCoreSubjects(s, sessionId, user);
-            if (r.error) errors.push({ student_id: s.student_id, error: r.error });
-            added += r.added; skipped += r.skipped;
+            if (r.error) {
+                errors.push({ student_id: s.student_id, name: s.name, error: r.error });
+            } else {
+                totalAdded += r.added;
+                totalSkipped += r.skipped;
+                successDetails.push({
+                    student_id: s.student_id,
+                    name: s.name,
+                    class: s.class,
+                    added: r.added,
+                    skipped: r.skipped
+                });
+            }
         } catch (err) {
-            errors.push({ student_id: s.student_id, error: err.message });
+            errors.push({ student_id: s.student_id, name: s.name, error: err.message });
         }
     }
 
     await auditLog({
-        action: "STUDENT_SUBJECTS_AUTO_ASSIGNED", entity_type: "STUDENT_SUBJECT",
-        session_id: sessionId, user,
-        new_value: { students: students.length, added, skipped, errors: errors.length }
+        action: "STUDENT_SUBJECTS_AUTO_ASSIGNED",
+        entity_type: "STUDENT_SUBJECT",
+        session_id: sessionId,
+        user,
+        new_value: {
+            students_processed: students.length,
+            total_added: totalAdded,
+            total_skipped: totalSkipped,
+            errors_count: errors.length
+        }
     });
 
-    return ok(res, { students: students.length, added, skipped, errors },
-        `Core subjects assigned for ${students.length} student(s)`);
+    return ok(res, {
+        students_processed: students.length,
+        total_added: totalAdded,
+        total_skipped: totalSkipped,
+        errors,
+        details: successDetails
+    }, `Processed ${students.length} students — ${totalAdded} subjects added`);
 }));
 
+
+
+            
 router.delete("/student-subjects/:id", asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     const user = getUserContext(req);
@@ -1619,6 +1972,114 @@ router.delete("/student-subjects/:id", asyncHandler(async (req, res) => {
 
     return ok(res, null, "Student subject removed");
 }));
+
+// ============================================================
+// NEW: Debug endpoint — Student subject allocation diagnostics
+// ============================================================
+router.get("/student-subjects/debug/:studentId", asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+    const { session_id } = req.query;
+
+    const student = await getStudentFromNstudent(studentId);
+
+    const diagnostics = {
+        student: {
+            student_id: student.student_id,
+            name: student.name,
+            raw_class: student.class,
+            raw_section: student.section,
+            raw_stream: student.stream,
+            raw_session: student.session
+        },
+        resolved: {},
+        available_class_subjects: [],
+        assigned_subjects: [],
+        issues: []
+    };
+
+    // 1. Resolve class
+    const classRow = await resolveClassRow(student.class);
+    if (!classRow) {
+        diagnostics.issues.push(`Class "${student.class}" not found in erp_master (master_type='CLASS')`);
+        return ok(res, diagnostics, "Diagnostics completed");
+    }
+    diagnostics.resolved.class = {
+        id: classRow.id,
+        master_key: classRow.master_key,
+        name: classRow.name
+    };
+
+    // 2. Resolve section
+    const sectionId = await resolveSectionId(classRow.id, student.section);
+    if (!sectionId && student.section) {
+        diagnostics.issues.push(`Section "${student.section}" not found for class ${classRow.master_key}`);
+    }
+    diagnostics.resolved.section = sectionId;
+
+    // 3. Resolve stream
+    const streamId = await resolveStreamId(student.stream);
+    if (!streamId && student.stream) {
+        diagnostics.issues.push(`Stream "${student.stream}" not found in erp_master (master_type='STREAM')`);
+    }
+    diagnostics.resolved.stream = streamId;
+
+    // 4. List all class-subjects mapped
+    const mapped = await q(`
+        SELECT cs.id, cs.data, cs.is_active,
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(cs.data, '$.subject_id')), 'null') AS subj_id,
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(cs.data, '$.stream_id')), 'null') AS stream_id,
+               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(cs.data, '$.is_optional')), 'null') AS is_opt,
+               sub.master_key AS subject_code, sub.name AS subject_name
+        FROM erp_master cs
+        LEFT JOIN erp_master sub 
+            ON sub.id = CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(cs.data, '$.subject_id')), 'null') AS UNSIGNED)
+        WHERE cs.master_type = 'CLASS_SUBJECT' AND cs.parent_id = ?
+    `, [classRow.id]);
+
+    if (mapped.length === 0) {
+        diagnostics.issues.push(`No subjects mapped to class ${classRow.master_key}. Use /class-subjects to add subjects.`);
+    }
+
+    diagnostics.available_class_subjects = mapped.map(m => ({
+        mapping_id: m.id,
+        subject_id: m.subj_id,
+        subject_code: m.subject_code,
+        subject_name: m.subject_name,
+        stream_id: m.stream_id,
+        is_optional: m.is_opt === "true" || m.is_opt === "1",
+        is_active: !!m.is_active
+    }));
+
+    // 5. List assigned subjects
+    if (session_id) {
+        const assigned = await q(`
+            SELECT ss.id, ss.subject_id, ss.status, ss.created_at,
+                   sub.master_key AS subject_code, sub.name AS subject_name
+            FROM erp_marks ss
+            LEFT JOIN erp_master sub ON sub.id = ss.subject_id
+            WHERE ss.record_type = 'STUDENT_SUBJECT' 
+              AND ss.student_id = ? 
+              AND ss.session_id = ?
+        `, [studentId, parseId(session_id)]);
+        diagnostics.assigned_subjects = assigned;
+    } else {
+        const assigned = await q(`
+            SELECT ss.id, ss.session_id, ss.subject_id, ss.status,
+                   sub.master_key AS subject_code, sub.name AS subject_name
+            FROM erp_marks ss
+            LEFT JOIN erp_master sub ON sub.id = ss.subject_id
+            WHERE ss.record_type = 'STUDENT_SUBJECT' AND ss.student_id = ?
+        `, [studentId]);
+        diagnostics.assigned_subjects = assigned;
+    }
+
+    if (diagnostics.assigned_subjects.length === 0) {
+        diagnostics.issues.push(`No subjects assigned to student ${studentId} yet. Run auto-assign.`);
+    }
+
+    return ok(res, diagnostics, "Diagnostics completed successfully");
+}));
+
 
 // ============================================================
 // SECTION 8: EXAM TEMPLATES
