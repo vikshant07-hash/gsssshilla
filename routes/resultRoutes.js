@@ -2727,29 +2727,27 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
 
             const remarks = trimStr(item.remarks, 500);
 
-            if (existing.length > 0) {
-    // ============================================================
-    // 🔒 STATUS-BASED LOCK ENFORCEMENT
-    // ============================================================
-    // Rules:
-    //   DRAFT        → Editable
-    //   IN_PROGRESS  → Editable
-    //   SUBMITTED    → LOCKED (must be returned by admin first)
-    //   VERIFIED     → LOCKED (must be returned by admin first)
-    //   FINALIZED    → LOCKED (permanent, must unlock + return)
-    //   PUBLISHED    → LOCKED (permanent)
-    // ============================================================
-    const lockedStatuses = ["SUBMITTED", "VERIFIED", "FINALIZED", "PUBLISHED"];
-    if (lockedStatuses.includes(existing[0].status)) {
-        throw new Error(
-            `Marks are ${existing[0].status} — cannot edit. ` +
-            `Only Super admin can return for correction.`
-        );
-    }
 
-    // ... update code
-}
-            
+
+                        if (existing.length > 0) {
+                // ============================================================
+                // 🔒 STATUS-BASED LOCK ENFORCEMENT
+                // ============================================================
+                // Rules:
+                //   DRAFT        → Editable
+                //   IN_PROGRESS  → Editable
+                //   SUBMITTED    → LOCKED (must be returned by admin first)
+                //   VERIFIED     → LOCKED (must be returned by admin first)
+                //   FINALIZED    → LOCKED (permanent, must unlock + return)
+                //   PUBLISHED    → LOCKED (permanent)
+                // ============================================================
+                const lockedStatuses = ["SUBMITTED", "VERIFIED", "FINALIZED", "PUBLISHED"];
+                if (lockedStatuses.includes(existing[0].status)) {
+                    throw new Error(
+                        `Marks are ${existing[0].status} — cannot edit. ` +
+                        `Only admin can return for correction.`
+                    );
+                }
 
                 await q(`
                     UPDATE erp_marks
@@ -2773,6 +2771,14 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
                     new_value: { theory, practical, internal, project, total, grade, absentType }
                 });
             } else {
+
+
+
+                            
+
+            
+
+                
                 const result = await q(`
                     INSERT INTO erp_marks (
                         record_type, student_id, session_id, class_id, section_id, stream_id,
