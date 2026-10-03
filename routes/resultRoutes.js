@@ -2636,196 +2636,9 @@ router.get("/student/:studentId/results", asyncHandler(async (req, res) => {
 /**
  * Public lookup by Roll Number + DOB
  */
-router.post("/public/lookup", asyncHandler(async (req, res) => {
-    requireFields(req.body, ["roll_number", "dob"]);
-    const { roll_number, dob, class: cls, session: sess } = req.body;
 
-    const roll = String(roll_number).trim();
-    const dobStr = String(dob).trim();
-
-    if (isNaN(Date.parse(dobStr))) return fail(res, "Invalid date of birth", 400);
-
-    let sql = `
-        SELECT student_id, name, father_name, mother_name, dob,
-               class, section, stream, session, roll_number, admission_number,
-               student_photo_url AS photo, status
-        FROM Nstudent
-        WHERE LOWER(roll_number) = LOWER(?) AND DATE(dob) = DATE(?)
-    `;
-    const params = [roll, dobStr];
-    if (cls) { sql += ` AND LOWER(class) = LOWER(?)`; params.push(String(cls).trim()); }
-    if (sess) { sql += ` AND session = ?`; params.push(String(sess).trim()); }
-    sql += ` LIMIT 1`;
-
-    const students = await q(sql, params);
-    if (students.length === 0) {
-        return fail(res, "No student found with the provided details", 404);
-    }
-
-    const student = students[0];
-    if (student.status && student.status.toLowerCase() === "inactive") {
-        return fail(res, "Student account is inactive", 403);
-    }
-
-    // Fetch permanent results
-    const results = await q(`
-        SELECT * FROM erp_results_backup
-        WHERE student_id = ? AND result_type = 'EXAM'
-        ORDER BY session_id DESC, exam_id ASC
-    `, [student.student_id]);
-
-    const finalResults = [];
-    for (const r of results) {
-        const marks = await q(`
-            SELECT subject_id, subject_name,
-                   theory_marks, practical_marks, internal_marks, project_marks,
-                   total_marks, max_marks, grade, is_absent, absent_type, remarks
-            FROM erp_marks_backup
-            WHERE student_id = ? AND session_id = ? AND exam_id = ?
-            ORDER BY subject_id ASC
-        `, [student.student_id, r.session_id, r.exam_id]);
-
-        finalResults.push({
-            result_id: r.id,
-            exam_id: r.exam_id,
-            exam_name: r.exam_name,
-            session_name: r.session_name,
-            class_name: r.class_name,
-            section_name: r.section_name,
-            stream: r.stream,
-            grand_total: r.grand_total,
-            max_total: r.max_total,
-            percentage: r.percentage,
-            overall_grade: r.overall_grade,
-            result_status: r.result_status,
-            failed_subjects: safeJSONParse(r.failed_subjects, []),
-            subject_wise_marks: marks,
-            snapshot_at: r.snapshot_at
-        });
-    }
-
-    return ok(res, {
-        student: {
-            student_id: student.student_id,
-            name: student.name,
-            father_name: student.father_name,
-            class: student.class,
-            section: student.section,
-            stream: student.stream,
-            roll_number: student.roll_number,
-            dob: student.dob,
-            photo: student.photo
-        },
-        results: finalResults,
-        total_results: finalResults.length
-    }, finalResults.length > 0 ? "Results fetched successfully" : "No published result yet");
-}));
-
-/**
- * Public classes list for dropdowns
- */
-router.get("/public/classes-list", asyncHandler(async (req, res) => {
-    const rows = await q(`
-        SELECT master_key AS class_name, name
-        FROM erp_master
-        WHERE master_type = 'CLASS' AND is_active = 1
-        ORDER BY display_order ASC
-    `);
-    return ok(res, rows, "Classes fetched successfully");
-}));
-
-/**
- * Public search by student_id + DOB
- */
-router.post("/public/search", asyncHandler(async (req, res) => {
-    requireFields(req.body, ["student_id", "dob"]);
-    const { student_id, dob, session_id } = req.body;
-
-    const students = await q(`
-        SELECT student_id, name, father_name, mother_name, dob,
-               class, section, stream, session, roll_number,
-               student_photo_url AS photo
-        FROM Nstudent
-        WHERE student_id = ? AND DATE(dob) = DATE(?)
-        LIMIT 1
-    `, [student_id, dob]);
-
-    if (students.length === 0) return fail(res, "No student found", 404);
-
-    const student = students[0];
-
-    let sql = `SELECT * FROM erp_results_backup WHERE student_id = ? AND result_type = 'EXAM'`;
-    const params = [student_id];
-    if (session_id) { sql += " AND session_id = ?"; params.push(parseId(session_id)); }
-    sql += " ORDER BY session_id DESC, exam_id ASC";
-
-    const results = await q(sql, params);
-
-    const formatted = results.map(r => ({
-        exam_name: r.exam_name,
-        session_name: r.session_name,
-        class_name: r.class_name,
-        grand_total: r.grand_total,
-        max_total: r.max_total,
-        percentage: r.percentage,
-        overall_grade: r.overall_grade,
-        result_status: r.result_status,
-        subject_wise_marks: safeJSONParse(r.subject_wise_marks, []),
-        failed_subjects: safeJSONParse(r.failed_subjects, []),
-        snapshot_at: r.snapshot_at
-    }));
-
-    return ok(res, {
-        student: {
-            student_id: student.student_id,
-            name: student.name,
-            father_name: student.father_name,
-            class: student.class,
-            roll_number: student.roll_number,
-            photo: student.photo
-        },
-        results: formatted,
-        total: formatted.length
-    }, "Results fetched successfully");
-}));
-
-/**
- * QR Verification
- */
-router.get("/public/verify/:studentId/:examId", asyncHandler(async (req, res) => {
-    const { studentId } = req.params;
-    const examId = parseId(req.params.examId, "examId");
-
-    const rows = await q(`
-        SELECT student_name, roll_number, class_name, section_name, stream,
-               session_name, exam_name, result_status, percentage,
-               overall_grade, snapshot_at
-        FROM erp_results_backup
-        WHERE student_id = ? AND exam_id = ? AND result_type = 'EXAM'
-        LIMIT 1
-    `, [studentId, examId]);
-
-    if (rows.length === 0) {
-        return ok(res, { verified: false, message: "No result found for verification" }, "Verification failed");
-    }
-
-    const r = rows[0];
-    return ok(res, {
-        verified: true,
-        school_name: "GSSS Shilla",
-        student_name: r.student_name,
-        roll_number: r.roll_number,
-        class: r.class_name,
-        section: r.section_name,
-        stream: r.stream,
-        session: r.session_name,
-        exam: r.exam_name,
-        result_status: r.result_status,
-        percentage: r.percentage,
-        grade: r.overall_grade,
-        verified_at: r.snapshot_at
-    }, "Result verified successfully");
-}));
+    
+    
 
 // ============================================================
 // SECTION 17: DASHBOARD & ANALYTICS
@@ -2929,6 +2742,387 @@ router.get("/audit-logs", asyncHandler(async (req, res) => {
         pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) }
     });
 }));
+
+
+// ============================================================
+// SECTION 21: PUBLIC ROUTES (SEPARATED)
+// ============================================================
+// ⚠️  YEH SECTION SIRF PUBLISHED RESULTS KO EXPOSE KARTA HAI
+//     - Koi bhi student/public user ye endpoints access kar sakta hai
+//     - Data sirf erp_results_backup + erp_marks_backup se aata hai
+//     - Jo exams PUBLISHED nahi hue, wo yahan nahi dikhenge
+// ============================================================
+
+/**
+ * Helper: Verify exam is PUBLISHED
+ */
+async function isExamPublished(examId) {
+    const rows = await q(
+        `SELECT id, status FROM erp_exams
+         WHERE id = ? AND record_type = 'EXAM' LIMIT 1`,
+        [examId]
+    );
+    if (rows.length === 0) return false;
+    return rows[0].status === "PUBLISHED";
+}
+
+/**
+ * Helper: Fetch only published results for a student
+ */
+async function getPublishedResults(studentId, sessionId = null) {
+    let sql = `
+        SELECT r.* FROM erp_results_backup r
+        INNER JOIN erp_exams e ON e.id = r.exam_id AND e.record_type = 'EXAM'
+        WHERE r.student_id = ?
+          AND r.result_type = 'EXAM'
+          AND e.status = 'PUBLISHED'
+    `;
+    const params = [studentId];
+    if (sessionId) {
+        sql += " AND r.session_id = ?";
+        params.push(parseId(sessionId));
+    }
+    sql += " ORDER BY r.session_id DESC, r.exam_id ASC";
+
+    return await q(sql, params);
+}
+
+// ------------------------------------------------------------
+// PUBLIC 1: Lookup by Roll Number + DOB
+// ------------------------------------------------------------
+router.post("/public/lookup", asyncHandler(async (req, res) => {
+    requireFields(req.body, ["roll_number", "dob"]);
+    const { roll_number, dob, class: cls, session: sess } = req.body;
+
+    const roll = String(roll_number).trim();
+    const dobStr = String(dob).trim();
+
+    if (isNaN(Date.parse(dobStr))) return fail(res, "Invalid date of birth", 400);
+
+    let sql = `
+        SELECT student_id, name, father_name, mother_name, dob,
+               class, section, stream, session, roll_number, admission_number,
+               student_photo_url AS photo, status
+        FROM Nstudent
+        WHERE LOWER(roll_number) = LOWER(?) AND DATE(dob) = DATE(?)
+    `;
+    const params = [roll, dobStr];
+    if (cls) { sql += ` AND LOWER(class) = LOWER(?)`; params.push(String(cls).trim()); }
+    if (sess) { sql += ` AND session = ?`; params.push(String(sess).trim()); }
+    sql += ` LIMIT 1`;
+
+    const students = await q(sql, params);
+    if (students.length === 0) {
+        return fail(res, "No student found with the provided details", 404);
+    }
+
+    const student = students[0];
+    if (student.status && student.status.toLowerCase() === "inactive") {
+        return fail(res, "Student account is inactive", 403);
+    }
+
+    // ✅ ONLY PUBLISHED RESULTS
+    const results = await getPublishedResults(student.student_id);
+
+    const finalResults = [];
+    for (const r of results) {
+        const marks = await q(`
+            SELECT subject_id, subject_name,
+                   theory_marks, practical_marks, internal_marks, project_marks,
+                   total_marks, max_marks, grade, is_absent, absent_type, remarks
+            FROM erp_marks_backup
+            WHERE student_id = ? AND session_id = ? AND exam_id = ?
+            ORDER BY subject_id ASC
+        `, [student.student_id, r.session_id, r.exam_id]);
+
+        finalResults.push({
+            result_id: r.id,
+            exam_id: r.exam_id,
+            exam_name: r.exam_name,
+            session_name: r.session_name,
+            class_name: r.class_name,
+            section_name: r.section_name,
+            stream: r.stream,
+            grand_total: r.grand_total,
+            max_total: r.max_total,
+            percentage: r.percentage,
+            overall_grade: r.overall_grade,
+            result_status: r.result_status,
+            failed_subjects: safeJSONParse(r.failed_subjects, []),
+            subject_wise_marks: marks,
+            snapshot_at: r.snapshot_at
+        });
+    }
+
+    return ok(res, {
+        student: {
+            student_id: student.student_id,
+            name: student.name,
+            father_name: student.father_name,
+            class: student.class,
+            section: student.section,
+            stream: student.stream,
+            roll_number: student.roll_number,
+            dob: student.dob,
+            photo: student.photo
+        },
+        results: finalResults,
+        total_results: finalResults.length
+    }, finalResults.length > 0 ? "Results fetched successfully" : "No published result yet");
+}));
+
+// ------------------------------------------------------------
+// PUBLIC 2: Search by Student ID + DOB
+// ------------------------------------------------------------
+router.post("/public/search", asyncHandler(async (req, res) => {
+    requireFields(req.body, ["student_id", "dob"]);
+    const { student_id, dob, session_id } = req.body;
+
+    const students = await q(`
+        SELECT student_id, name, father_name, mother_name, dob,
+               class, section, stream, session, roll_number,
+               student_photo_url AS photo
+        FROM Nstudent
+        WHERE student_id = ? AND DATE(dob) = DATE(?)
+        LIMIT 1
+    `, [student_id, dob]);
+
+    if (students.length === 0) return fail(res, "No student found", 404);
+
+    const student = students[0];
+
+    // ✅ ONLY PUBLISHED RESULTS
+    const results = await getPublishedResults(student_id, session_id || null);
+
+    const formatted = results.map(r => ({
+        exam_name: r.exam_name,
+        session_name: r.session_name,
+        class_name: r.class_name,
+        grand_total: r.grand_total,
+        max_total: r.max_total,
+        percentage: r.percentage,
+        overall_grade: r.overall_grade,
+        result_status: r.result_status,
+        subject_wise_marks: safeJSONParse(r.subject_wise_marks, []),
+        failed_subjects: safeJSONParse(r.failed_subjects, []),
+        snapshot_at: r.snapshot_at
+    }));
+
+    return ok(res, {
+        student: {
+            student_id: student.student_id,
+            name: student.name,
+            father_name: student.father_name,
+            class: student.class,
+            roll_number: student.roll_number,
+            photo: student.photo
+        },
+        results: formatted,
+        total: formatted.length
+    }, "Results fetched successfully");
+}));
+
+// ------------------------------------------------------------
+// PUBLIC 3: Public Classes List (for dropdowns)
+// ------------------------------------------------------------
+router.get("/public/classes-list", asyncHandler(async (req, res) => {
+    const rows = await q(`
+        SELECT master_key AS class_name, name
+        FROM erp_master
+        WHERE master_type = 'CLASS' AND is_active = 1
+        ORDER BY display_order ASC
+    `);
+    return ok(res, rows, "Classes fetched successfully");
+}));
+
+// ------------------------------------------------------------
+// PUBLIC 4: Public Sessions List (for dropdowns)
+// ------------------------------------------------------------
+router.get("/public/sessions-list", asyncHandler(async (req, res) => {
+    const rows = await q(`
+        SELECT id, master_key AS session_code, name AS session_name, is_current
+        FROM erp_master
+        WHERE master_type = 'SESSION' AND is_active = 1
+        ORDER BY display_order DESC, id DESC
+    `);
+    return ok(res, rows, "Sessions fetched successfully");
+}));
+
+// ------------------------------------------------------------
+// PUBLIC 5: QR Verification — Only PUBLISHED results verify honge
+// ------------------------------------------------------------
+router.get("/public/verify/:studentId/:examId", asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+    const examId = parseId(req.params.examId, "examId");
+
+    // ✅ Check exam is published
+    const published = await isExamPublished(examId);
+    if (!published) {
+        return ok(res, {
+            verified: false,
+            message: "This exam's result has not been published yet"
+        }, "Verification failed");
+    }
+
+    const rows = await q(`
+        SELECT r.student_name, r.roll_number, r.class_name, r.section_name, r.stream,
+               r.session_name, r.exam_name, r.result_status, r.percentage,
+               r.overall_grade, r.snapshot_at
+        FROM erp_results_backup r
+        INNER JOIN erp_exams e ON e.id = r.exam_id AND e.record_type = 'EXAM'
+        WHERE r.student_id = ?
+          AND r.exam_id = ?
+          AND r.result_type = 'EXAM'
+          AND e.status = 'PUBLISHED'
+        LIMIT 1
+    `, [studentId, examId]);
+
+    if (rows.length === 0) {
+        return ok(res, {
+            verified: false,
+            message: "No published result found for verification"
+        }, "Verification failed");
+    }
+
+    const r = rows[0];
+    return ok(res, {
+        verified: true,
+        school_name: "GSSS Shilla",
+        student_name: r.student_name,
+        roll_number: r.roll_number,
+        class: r.class_name,
+        section: r.section_name,
+        stream: r.stream,
+        session: r.session_name,
+        exam: r.exam_name,
+        result_status: r.result_status,
+        percentage: r.percentage,
+        grade: r.overall_grade,
+        verified_at: r.snapshot_at
+    }, "Result verified successfully");
+}));
+
+// ------------------------------------------------------------
+// PUBLIC 6: Single Exam Result (only if PUBLISHED)
+// ------------------------------------------------------------
+router.get("/public/result/:studentId/:examId", asyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+    const examId = parseId(req.params.examId, "examId");
+
+    // ✅ Check exam is published
+    const published = await isExamPublished(examId);
+    if (!published) {
+        return fail(res, "This exam's result is not published yet", 403);
+    }
+
+    const rows = await q(`
+        SELECT * FROM erp_results_backup
+        WHERE student_id = ? AND exam_id = ? AND result_type = 'EXAM'
+        LIMIT 1
+    `, [studentId, examId]);
+
+    if (rows.length === 0) {
+        return fail(res, "Result not found", 404);
+    }
+
+    const r = rows[0];
+
+    const marks = await q(`
+        SELECT subject_id, subject_name,
+               theory_marks, practical_marks, internal_marks, project_marks,
+               total_marks, max_marks, grade, is_absent, absent_type, remarks
+        FROM erp_marks_backup
+        WHERE student_id = ? AND session_id = ? AND exam_id = ?
+        ORDER BY subject_id ASC
+    `, [studentId, r.session_id, examId]);
+
+    return ok(res, {
+        student: {
+            student_id: r.student_id,
+            name: r.student_name,
+            admission_number: r.admission_number,
+            father_name: r.father_name,
+            mother_name: r.mother_name,
+            dob: r.dob,
+            gender: r.gender,
+            category: r.category,
+            class: r.class_name,
+            section: r.section_name,
+            stream: r.stream,
+            roll_number: r.roll_number,
+            session: r.session_name,
+            photo: r.photo_url
+        },
+        exam: {
+            exam_id: r.exam_id,
+            exam_name: r.exam_name,
+            session_name: r.session_name
+        },
+        result: {
+            grand_total: r.grand_total,
+            max_total: r.max_total,
+            percentage: r.percentage,
+            overall_grade: r.overall_grade,
+            result_status: r.result_status,
+            failed_subjects: safeJSONParse(r.failed_subjects, []),
+            subject_wise_marks: marks,
+            snapshot_at: r.snapshot_at
+        }
+    }, "Published result fetched successfully");
+}));
+
+// ------------------------------------------------------------
+// PUBLIC 7: Class-wise Published Results List
+// ------------------------------------------------------------
+router.get("/public/class/:classId/results", asyncHandler(async (req, res) => {
+    const classId = parseId(req.params.classId, "classId");
+    const { session_id, exam_id } = req.query;
+
+    // ✅ Only published exams
+    let sql = `
+        SELECT r.* FROM erp_results_backup r
+        INNER JOIN erp_exams e ON e.id = r.exam_id AND e.record_type = 'EXAM'
+        WHERE r.class_id = ?
+          AND r.result_type = 'EXAM'
+          AND e.status = 'PUBLISHED'
+    `;
+    const params = [classId];
+
+    if (session_id) { sql += " AND r.session_id = ?"; params.push(parseId(session_id)); }
+    if (exam_id) { sql += " AND r.exam_id = ?"; params.push(parseId(exam_id)); }
+    sql += " ORDER BY r.session_id DESC, r.exam_id ASC, r.roll_number ASC";
+
+    const rows = await q(sql, params);
+
+    const results = rows.map(r => ({
+        result_id: r.id,
+        student_id: r.student_id,
+        student_name: r.student_name,
+        roll_number: r.roll_number,
+        exam_name: r.exam_name,
+        session_name: r.session_name,
+        class_name: r.class_name,
+        section_name: r.section_name,
+        stream: r.stream,
+        grand_total: r.grand_total,
+        max_total: r.max_total,
+        percentage: r.percentage,
+        overall_grade: r.overall_grade,
+        result_status: r.result_status,
+        snapshot_at: r.snapshot_at
+    }));
+
+    return ok(res, {
+        class_id: classId,
+        results,
+        total: results.length
+    }, `${results.length} published results found`);
+}));
+
+// ============================================================
+// END OF PUBLIC ROUTES
+// ============================================================
+
 
 // ============================================================
 // SECTION 19: MARKSHEET PDF (HTML-based, print-ready)
