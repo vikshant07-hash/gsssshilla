@@ -1,15 +1,31 @@
 // ============================================================
 // SCHOOL EXAMINATION & RESULT MANAGEMENT SYSTEM
-// resultRoutes.js  (FIXED VERSION)
+// resultRoutes.js — COMPLETE UPDATED VERSION
+// ============================================================
+// 
+// CHANGELOG (Latest):
+// - FIXED: Subject force delete with ?force=true
+// - FIXED: Student subject allocation (manual only, no auto)
+// - ADDED: Bulk assign subjects route
+// - ADDED: Debug endpoint for subject allocation
+// - FIXED: Class/section/stream resolvers (tolerant matching)
+// - FIXED: JSON null vs SQL NULL comparisons
+// - FIXED: Validation errors return proper HTTP status
+//
 // ============================================================
 
 const express = require("express");
 const router = express.Router();
 const db = require("../config/db");
 
+
+
+
+
 // ============================================================
-// CORE UTILITIES
+// SECTION 0: CORE UTILITIES
 // ============================================================
+
 class HttpError extends Error {
     constructor(message, status = 400) {
         super(message);
@@ -43,9 +59,14 @@ const log = {
     success: (msg, meta = {}) => console.log(`✅ [RESULT] ${msg}`, Object.keys(meta).length ? meta : "")
 };
 
+
+
+
+
 // ============================================================
-// CONSTANTS
+// SECTION 0.1: CONSTANTS
 // ============================================================
+
 const ABSENT_TYPES = ["Present", "Absent", "Medical", "Not_Appeared", "Withheld"];
 const VALID_CLASS_GROUPS = ["PRIMARY", "MIDDLE", "SECONDARY", "SENIOR"];
 const VALID_SUBJECT_TYPES = ["Core", "Elective", "Optional", "Language", "Vocational"];
@@ -57,9 +78,14 @@ const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 500;
 const ADMIN_ROLES = ["ADMIN", "SUPERADMIN", "SUPER_ADMIN", "PRINCIPAL", "EXAM_ADMIN"];
 
+
+
+
+
 // ============================================================
-// VALIDATION HELPERS
+// SECTION 0.2: VALIDATION HELPERS
 // ============================================================
+
 function requireFields(body, fields) {
     const missing = [];
     for (const f of fields) {
@@ -121,7 +147,7 @@ function toFloatSafe(v) {
     return isNaN(n) ? 0 : n;
 }
 
-// FIX: strict mark parser. Old code silently turned "abc" into null (= "no marks").
+// strict mark parser
 function parseMark(raw, label, max) {
     if (raw === undefined || raw === null || String(raw).trim() === "") return null;
     const n = Number(raw);
@@ -138,14 +164,19 @@ function defPass(max, pass) {
     return m > 0 ? Math.ceil(m * 0.33) : 0;
 }
 
-// FIX: JSON helper. JSON_EXTRACT returns JSON values (JSON null != SQL NULL, "5" != 5),
-// which broke every stream/subject comparison. This returns plain string or SQL NULL.
+// FIX: JSON helper. JSON_EXTRACT returns JSON values which break comparisons.
+// This returns plain string or SQL NULL.
 const JX = (col, path) => `NULLIF(JSON_UNQUOTE(JSON_EXTRACT(${col}, '${path}')), 'null')`;
 
+
+
+
+
 // ============================================================
-// AUTH HELPERS
+// SECTION 0.3: AUTH HELPERS
 // ============================================================
-// Set ENFORCE_ROLES=true in .env once your auth middleware populates req.user.role
+
+// Set ENFORCE_ROLES=true in .env once auth middleware populates req.user.role
 const requireRole = (...roles) => (req, res, next) => {
     if (process.env.ENFORCE_ROLES !== "true") return next();
     const u = req.user || req.admin;
@@ -154,11 +185,17 @@ const requireRole = (...roles) => (req, res, next) => {
     if (!roles.includes(role)) return fail(res, "You are not allowed to perform this action", 403);
     next();
 };
+
 const isStaff = (req) => !!(req.user || req.admin);
 
+
+
+
+
 // ============================================================
-// USER CONTEXT
+// SECTION 0.4: USER CONTEXT (for audit logs)
 // ============================================================
+
 function getUserContext(req) {
     const u = req.user || req.admin || {};
     return {
@@ -170,9 +207,14 @@ function getUserContext(req) {
     };
 }
 
+
+
+
+
 // ============================================================
-// AUDIT LOGGING
+// SECTION 0.5: AUDIT LOGGING
 // ============================================================
+
 async function auditLog({
     action, entity_type, entity_id = null,
     student_id = null, session_id = null, exam_id = null, subject_id = null,
@@ -200,9 +242,14 @@ async function auditLog({
     }
 }
 
+
+
+
+
 // ============================================================
-// MASTER HELPERS
+// SECTION 0.6: MASTER HELPERS
 // ============================================================
+
 async function getMasterById(id, expectedType = null) {
     const rows = await q(`SELECT * FROM erp_master WHERE id = ? LIMIT 1`, [id]);
     if (rows.length === 0) throw new HttpError(`Master record not found: ${id}`, 404);
@@ -237,19 +284,28 @@ async function getStudentFromNstudent(studentId) {
     return rows[0];
 }
 
+
+
+
+
 // ============================================================
-// FIXED: Class Resolver — handles "10", "Class 10", "X", "x", "CLASS-10"
+// SECTION 0.7: TOLERANT CLASS/SECTION/STREAM RESOLVERS
 // ============================================================
+// FIX: Nstudent.class may be "10", "Class 10", "X" etc.
+// These helpers try multiple variations to find the right master record.
+
+/**
+ * Resolve class row from raw class string
+ * Handles: "10", "Class 10", "CLASS-10", "X", "x", "010"
+ */
 async function resolveClassRow(rawClass) {
     const raw = String(rawClass ?? "").trim();
     if (!raw) return null;
 
-    // Normalize: remove "class", "-", ":", extra spaces
-    const stripped = raw
-        .replace(/^class\s*[-:]?\s*/i, "")
-        .trim();
+    // Strip "class" prefix and clean
+    const stripped = raw.replace(/^class\s*[-:]?\s*/i, "").trim();
 
-    // Try all variations
+    // Build variations to try
     const variations = [
         raw,
         stripped,
@@ -257,36 +313,30 @@ async function resolveClassRow(rawClass) {
         stripped.toLowerCase(),
         `Class ${stripped}`,
         `CLASS ${stripped}`,
-        `Class-${stripped}`,
-        String(parseInt(stripped, 10))  // "10" from "X"? No, but useful for "010" → "10"
+        `Class-${stripped}`
     ].filter(Boolean);
 
-    // Remove duplicates
     const uniqueVariations = [...new Set(variations)];
 
-    // 1. Try exact master_key match
+    // 1. Exact master_key match
     for (const v of uniqueVariations) {
         const r = await q(
-            `SELECT * FROM erp_master 
-             WHERE master_type = 'CLASS' AND master_key = ? 
-             LIMIT 1`,
+            `SELECT * FROM erp_master WHERE master_type = 'CLASS' AND master_key = ? LIMIT 1`,
             [v]
         );
         if (r.length > 0) return r[0];
     }
 
-    // 2. Try case-insensitive master_key match
+    // 2. Case-insensitive master_key match
     for (const v of uniqueVariations) {
         const r = await q(
-            `SELECT * FROM erp_master 
-             WHERE master_type = 'CLASS' AND LOWER(master_key) = LOWER(?) 
-             LIMIT 1`,
+            `SELECT * FROM erp_master WHERE master_type = 'CLASS' AND LOWER(master_key) = LOWER(?) LIMIT 1`,
             [v]
         );
         if (r.length > 0) return r[0];
     }
 
-    // 3. Try name match ("Class 10" stored as name)
+    // 3. Name match
     for (const v of uniqueVariations) {
         const r = await q(
             `SELECT * FROM erp_master 
@@ -298,7 +348,7 @@ async function resolveClassRow(rawClass) {
         if (r.length > 0) return r[0];
     }
 
-    // 4. Fallback: extract number from "X" / "10" and try again
+    // 4. Fallback: partial number match
     const numMatch = stripped.match(/\d+/);
     if (numMatch) {
         const num = numMatch[0];
@@ -315,24 +365,18 @@ async function resolveClassRow(rawClass) {
     return null;
 }
 
-
-// FIX: Nstudent.class may be "10", "Class 10", "X" etc. Old code did an exact match only,
-// so "Class not configured" was thrown and no subjects/results could be resolved.
-
-// ============================================================
-// FIXED: Section Resolver
-// ============================================================
+/**
+ * Resolve section ID from raw section string for a given class
+ * Handles: "A", "a", "Section A"
+ */
 async function resolveSectionId(classId, rawSection) {
     const raw = String(rawSection ?? "").trim();
     if (!raw) return null;
 
-    const variations = [
-        raw,
-        raw.toUpperCase(),
-        raw.toLowerCase()
-    ];
+    const variations = [raw, raw.toUpperCase(), raw.toLowerCase()];
     const uniqueVariations = [...new Set(variations)];
 
+    // 1. Exact match
     for (const v of uniqueVariations) {
         const rows = await q(
             `SELECT id FROM erp_master 
@@ -343,6 +387,7 @@ async function resolveSectionId(classId, rawSection) {
         if (rows.length > 0) return rows[0].id;
     }
 
+    // 2. Case-insensitive
     for (const v of uniqueVariations) {
         const rows = await q(
             `SELECT id FROM erp_master 
@@ -357,26 +402,21 @@ async function resolveSectionId(classId, rawSection) {
     return null;
 }
 
-// ============================================================
-// FIXED: Stream Resolver — handles "SCI", "Science", "science"
-// ============================================================
+/**
+ * Resolve stream ID from raw stream string
+ * Handles: "SCI", "Science", "science"
+ */
 async function resolveStreamId(rawStream) {
     const raw = String(rawStream ?? "").trim();
     if (!raw) return null;
 
-    const variations = [
-        raw,
-        raw.toUpperCase(),
-        raw.toLowerCase()
-    ];
+    const variations = [raw, raw.toUpperCase(), raw.toLowerCase()];
     const uniqueVariations = [...new Set(variations)];
 
     // 1. Exact master_key match
     for (const v of uniqueVariations) {
         const rows = await q(
-            `SELECT id FROM erp_master 
-             WHERE master_type = 'STREAM' AND master_key = ?
-             LIMIT 1`,
+            `SELECT id FROM erp_master WHERE master_type = 'STREAM' AND master_key = ? LIMIT 1`,
             [v]
         );
         if (rows.length > 0) return rows[0].id;
@@ -385,9 +425,7 @@ async function resolveStreamId(rawStream) {
     // 2. Case-insensitive master_key
     for (const v of uniqueVariations) {
         const rows = await q(
-            `SELECT id FROM erp_master 
-             WHERE master_type = 'STREAM' AND LOWER(master_key) = LOWER(?)
-             LIMIT 1`,
+            `SELECT id FROM erp_master WHERE master_type = 'STREAM' AND LOWER(master_key) = LOWER(?) LIMIT 1`,
             [v]
         );
         if (rows.length > 0) return rows[0].id;
@@ -396,9 +434,7 @@ async function resolveStreamId(rawStream) {
     // 3. Name match
     for (const v of uniqueVariations) {
         const rows = await q(
-            `SELECT id FROM erp_master 
-             WHERE master_type = 'STREAM' AND LOWER(name) = LOWER(?)
-             LIMIT 1`,
+            `SELECT id FROM erp_master WHERE master_type = 'STREAM' AND LOWER(name) = LOWER(?) LIMIT 1`,
             [v]
         );
         if (rows.length > 0) return rows[0].id;
@@ -412,212 +448,6 @@ async function resolveStreamId(rawStream) {
         [`%${raw}%`, `%${raw}%`]
     );
     return rows[0]?.id || null;
-}
-
-
-
-// ============================================================
-// FIXED: Section Resolver
-// ============================================================
-async function resolveSectionId(classId, rawSection) {
-    const raw = String(rawSection ?? "").trim();
-    if (!raw) return null;
-
-    const variations = [
-        raw,
-        raw.toUpperCase(),
-        raw.toLowerCase()
-    ];
-    const uniqueVariations = [...new Set(variations)];
-
-    for (const v of uniqueVariations) {
-        const rows = await q(
-            `SELECT id FROM erp_master 
-             WHERE master_type = 'SECTION' AND parent_id = ? AND master_key = ?
-             LIMIT 1`,
-            [classId, v]
-        );
-        if (rows.length > 0) return rows[0].id;
-    }
-
-    for (const v of uniqueVariations) {
-        const rows = await q(
-            `SELECT id FROM erp_master 
-             WHERE master_type = 'SECTION' AND parent_id = ? 
-               AND LOWER(master_key) = LOWER(?)
-             LIMIT 1`,
-            [classId, v]
-        );
-        if (rows.length > 0) return rows[0].id;
-    }
-
-    return null;
-}
-
-// ============================================================
-// FIXED: Stream Resolver — handles "SCI", "Science", "science"
-// ============================================================
-async function resolveStreamId(rawStream) {
-    const raw = String(rawStream ?? "").trim();
-    if (!raw) return null;
-
-    const variations = [
-        raw,
-        raw.toUpperCase(),
-        raw.toLowerCase()
-    ];
-    const uniqueVariations = [...new Set(variations)];
-
-    // 1. Exact master_key match
-    for (const v of uniqueVariations) {
-        const rows = await q(
-            `SELECT id FROM erp_master 
-             WHERE master_type = 'STREAM' AND master_key = ?
-             LIMIT 1`,
-            [v]
-        );
-        if (rows.length > 0) return rows[0].id;
-    }
-
-    // 2. Case-insensitive master_key
-    for (const v of uniqueVariations) {
-        const rows = await q(
-            `SELECT id FROM erp_master 
-             WHERE master_type = 'STREAM' AND LOWER(master_key) = LOWER(?)
-             LIMIT 1`,
-            [v]
-        );
-        if (rows.length > 0) return rows[0].id;
-    }
-
-    // 3. Name match
-    for (const v of uniqueVariations) {
-        const rows = await q(
-            `SELECT id FROM erp_master 
-             WHERE master_type = 'STREAM' AND LOWER(name) = LOWER(?)
-             LIMIT 1`,
-            [v]
-        );
-        if (rows.length > 0) return rows[0].id;
-    }
-
-    // 4. Partial match
-    const rows = await q(
-        `SELECT id FROM erp_master 
-         WHERE master_type = 'STREAM' AND (name LIKE ? OR master_key LIKE ?)
-         LIMIT 1`,
-        [`%${raw}%`, `%${raw}%`]
-    );
-    return rows[0]?.id || null;
-}
-
-// ============================================================
-// FIXED: Auto-assign core subjects to a student
-// ============================================================
-async function assignCoreSubjects(student, sessionId, user) {
-    const classRow = await resolveClassRow(student.class);
-    if (!classRow) {
-        return { 
-            added: 0, 
-            skipped: 0, 
-            error: `Class "${student.class}" not configured in master. Create it first.` 
-        };
-    }
-
-    const sectionId = await resolveSectionId(classRow.id, student.section);
-    const streamId = await resolveStreamId(student.stream);
-
-    // FIXED: Get all class-subjects (both core AND optional without stream filter)
-    // Then filter in JS for core + matching stream
-    const mapped = await q(`
-        SELECT id, data,
-               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.subject_id')), 'null') AS subject_id_str,
-               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.stream_id')), 'null') AS stream_id_str,
-               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.is_optional')), 'null') AS is_optional_str,
-               NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.is_core')), 'null') AS is_core_str
-        FROM erp_master
-        WHERE master_type = 'CLASS_SUBJECT' 
-          AND parent_id = ? 
-          AND is_active = 1
-    `, [classRow.id]);
-
-    let added = 0, skipped = 0;
-    const details = [];
-
-    for (const m of mapped) {
-        // Parse subject_id safely
-        const subjectId = parseInt(m.subject_id_str, 10);
-        if (!subjectId || isNaN(subjectId)) {
-            details.push({ mapping_id: m.id, skipped: "invalid subject_id" });
-            continue;
-        }
-
-        // Parse optional flag
-        const isOptional = m.is_optional_str === "true" || m.is_optional_str === "1";
-        const isCore = m.is_core_str !== "false" && m.is_core_str !== "0";
-        
-        // Skip optional subjects (they must be assigned manually)
-        if (isOptional || !isCore) {
-            details.push({ mapping_id: m.id, subject_id: subjectId, skipped: "optional" });
-            continue;
-        }
-
-        // Stream filter: agar mapping me stream_id hai to student ke stream se match karo
-        const mappingStreamId = m.stream_id_str ? parseInt(m.stream_id_str, 10) : null;
-        if (mappingStreamId !== null && mappingStreamId !== streamId) {
-            details.push({ 
-                mapping_id: m.id, 
-                subject_id: subjectId, 
-                skipped: `stream mismatch (mapping: ${mappingStreamId}, student: ${streamId})` 
-            });
-            continue;
-        }
-
-        // Check if already assigned
-        const dup = await q(`
-            SELECT id FROM erp_marks
-            WHERE record_type = 'STUDENT_SUBJECT' 
-              AND student_id = ? AND session_id = ? AND subject_id = ?
-            LIMIT 1
-        `, [student.student_id, sessionId, subjectId]);
-
-        if (dup.length > 0) {
-            skipped++;
-            details.push({ subject_id: subjectId, skipped: "already assigned" });
-            continue;
-        }
-
-        // Insert
-        await q(`
-            INSERT INTO erp_marks (
-                record_type, student_id, session_id, class_id,
-                section_id, stream_id, subject_id, status, data, created_at
-            ) VALUES ('STUDENT_SUBJECT', ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, NOW())
-        `, [
-            student.student_id, 
-            sessionId, 
-            classRow.id, 
-            sectionId, 
-            streamId, 
-            subjectId,
-            safeJSONStringify({ 
-                is_optional: false, 
-                assigned_by: user?.user_id || "SYSTEM", 
-                auto: true 
-            })
-        ]);
-        added++;
-        details.push({ subject_id: subjectId, added: true });
-    }
-
-    return { 
-        added, 
-        skipped, 
-        details,
-        class_matched: classRow.master_key,
-        section_matched: sectionId,
-        stream_matched: streamId
-    };
 }
 
 async function assertExamOpen(examId) {
@@ -630,13 +460,16 @@ async function assertExamOpen(examId) {
     return rows[0];
 }
 
+
+
+
+
 // ============================================================
-// GRADING HELPERS
+// SECTION 0.8: GRADING HELPERS
 // ============================================================
+
 let _gradeCache = { key: null, scheme_id: null, items: null, ts: 0 };
 
-// FIX: cache never hit for schemeId=null (it compared null with the stored scheme.id),
-// default grading was never cached, and bands had gaps (89.995 fell through to "E").
 function cacheGrades(schemeId, items, now) {
     items.sort((a, b) => b.min - a.min);
     _gradeCache = { key: schemeId ?? "default", scheme_id: schemeId, items, ts: now };
@@ -700,16 +533,21 @@ function getDefaultGrading() {
 }
 
 async function calculateGrade(percentage) {
-    const items = await getGradingItems();   // sorted by min DESC
+    const items = await getGradingItems();
     for (const g of items) {
         if (percentage >= g.min) return g.grade;
     }
     return items[items.length - 1]?.grade || "E";
 }
 
+
+
+
+
 // ============================================================
-// BACKUP SNAPSHOT HELPERS
+// SECTION 0.9: BACKUP SNAPSHOT HELPERS
 // ============================================================
+
 async function snapshotMarks({ student_id, session_id, exam_id, reason = "FINALIZED", user }) {
     const rows = await q(`
         SELECT m.*, sub.name AS subject_name
@@ -783,7 +621,6 @@ async function snapshotResult({ student_id, session_id, class_id, exam_id, resul
         ORDER BY sub.display_order ASC
     `, exam_id ? [student_id, session_id, exam_id] : [student_id, session_id]);
 
-    // FIX: never create an empty "result" for a student who has no marks
     if (marksRows.length === 0) return 0;
 
     let grandTotal = 0, maxTotal = 0;
@@ -820,9 +657,7 @@ async function snapshotResult({ student_id, session_id, class_id, exam_id, resul
                 LIMIT 1
             `, [exam_id, m.subject_id]);
             const cfg = examSub[0]?.data ? safeJSONParse(examSub[0].data, {}) : {};
-            // FIX: default pass is 33% of max (old code used flat 33 marks)
             const passMarks = cfg.pass_marks || Math.ceil((cfg.max_marks || max || 100) * 0.33);
-            // FIX: component-wise pass (theory/practical/internal/project) was never checked
             const compFail = (val, cmax, cpass) =>
                 (cmax || 0) > 0 && (cpass || 0) > 0 && (parseFloat(val) || 0) < cpass;
 
@@ -905,9 +740,14 @@ async function snapshotResult({ student_id, session_id, class_id, exam_id, resul
     return 1;
 }
 
+
+
+
+
 // ============================================================
 // SECTION 1: ACADEMIC SESSIONS
 // ============================================================
+
 router.get("/sessions", asyncHandler(async (req, res) => {
     const rows = await q(`
         SELECT id, master_key AS session_code, name AS session_name,
@@ -1035,9 +875,14 @@ router.delete("/sessions/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
     return ok(res, null, "Session deleted successfully");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 2: CLASSES
 // ============================================================
+
 router.get("/classes", asyncHandler(async (req, res) => {
     const { group } = req.query;
     let sql = `SELECT id, master_key AS class_name, name, display_order, is_active, data, created_at
@@ -1151,9 +996,14 @@ router.delete("/classes/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (r
     return ok(res, null, "Class deleted successfully");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 3: SECTIONS
 // ============================================================
+
 router.get("/sections", asyncHandler(async (req, res) => {
     const { class_id } = req.query;
     let sql = `
@@ -1212,7 +1062,6 @@ router.put("/sections/:id", asyncHandler(async (req, res) => {
 
     const { section_name, capacity, is_active } = req.body;
 
-    // FIX: renaming could create duplicate sections
     if (section_name && section_name !== section.master_key) {
         const dup = await q(
             `SELECT id FROM erp_master WHERE master_type = 'SECTION' AND master_key = ? AND parent_id = ? AND id <> ? LIMIT 1`,
@@ -1253,7 +1102,6 @@ router.delete("/sections/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
     const user = getUserContext(req);
     await getMasterById(id, "SECTION");
 
-    // FIX: no usage check before delete
     const used = await q(`SELECT COUNT(*) AS cnt FROM erp_marks WHERE section_id = ?`, [id]);
     if (used[0].cnt > 0) return fail(res, `Cannot delete: ${used[0].cnt} record(s) use this section`, 400);
 
@@ -1262,9 +1110,14 @@ router.delete("/sections/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
     return ok(res, null, "Section deleted successfully");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 4: STREAMS
 // ============================================================
+
 router.get("/streams", asyncHandler(async (req, res) => {
     const rows = await q(`
         SELECT id, master_key AS stream_code, name AS stream_name,
@@ -1355,9 +1208,14 @@ router.delete("/streams/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (r
     return ok(res, null, "Stream deleted successfully");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 5: SUBJECTS
 // ============================================================
+
 router.get("/subjects", asyncHandler(async (req, res) => {
     const { type, search, is_active } = req.query;
 
@@ -1433,7 +1291,6 @@ router.post("/subjects", asyncHandler(async (req, res) => {
 
     const calculatedTotal = (parseInt(theory_max) || 0) + (parseInt(practical_max) || 0) +
                             (parseInt(internal_max) || 0) + (parseInt(project_max) || 0);
-    // FIX: total_max that disagrees with components made marks impossible to enter
     if (calculatedTotal > 0 && parseInt(total_max) && parseInt(total_max) !== calculatedTotal) {
         return fail(res, `total_max (${total_max}) must equal sum of component maxes (${calculatedTotal})`, 400);
     }
@@ -1526,7 +1383,6 @@ router.put("/subjects/:id", asyncHandler(async (req, res) => {
         const calcTotal = (newData.theory_max || 0) + (newData.practical_max || 0) +
                           (newData.internal_max || 0) + (newData.project_max || 0);
         newData.total_max = parseInt(total_max) || calcTotal || 100;
-        // FIX: stale total_pass could exceed the new total_max
         newData.total_pass = parseInt(total_pass) || Math.ceil(newData.total_max * 0.33);
     } else {
         if (total_max !== undefined) newData.total_max = parseInt(total_max) || 100;
@@ -1555,9 +1411,20 @@ router.put("/subjects/:id", asyncHandler(async (req, res) => {
     return ok(res, { id }, "Subject updated successfully");
 }));
 
-
 // ============================================================
-// DELETE SUBJECT (with force option)
+// 🆕 UPDATED: DELETE SUBJECT with force option
+// ============================================================
+// Usage:
+//   DELETE /subjects/:id          → fails if subject is in use
+//   DELETE /subjects/:id?force=true → cascade delete everything
+//
+// Force delete removes:
+//   - erp_marks_backup (marks snapshots)
+//   - erp_marks (MARKS records)
+//   - erp_marks (STUDENT_SUBJECT assignments)
+//   - erp_exams (EXAM_SUBJECT entries)
+//   - erp_master (CLASS_SUBJECT mappings)
+//   - erp_master (SUBJECT itself)
 // ============================================================
 router.delete("/subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
@@ -1566,10 +1433,10 @@ router.delete("/subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
 
     const subject = await getMasterById(id, "SUBJECT");
 
-    // ─── Count usages ───
+    // ─── Count usages across all tables ───
     const classMaps = await q(
         `SELECT COUNT(*) AS cnt FROM erp_master
-         WHERE master_type = 'CLASS_SUBJECT' 
+         WHERE master_type = 'CLASS_SUBJECT'
            AND NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.subject_id')), 'null') <=> ?`,
         [id]
     );
@@ -1589,7 +1456,7 @@ router.delete("/subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
         [id]
     );
 
-    const totalUsage = 
+    const totalUsage =
         (classMaps[0].cnt || 0) +
         (examSubs[0].cnt || 0) +
         (studentSubs[0].cnt || 0) +
@@ -1608,16 +1475,15 @@ router.delete("/subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
             400);
     }
 
-    // ─── FORCE DELETE: cascade in correct order ───
+    // ─── FORCE DELETE: cascade in safe order ───
     let deletedBackupMarks = 0;
-    let deletedBackupResults = 0;
     let deletedMarks = 0;
     let deletedStudentSubjects = 0;
     let deletedExamSubjects = 0;
     let deletedClassMaps = 0;
 
     if (force) {
-        // 1. Delete marks backup for this subject
+        // 1. Marks backup
         try {
             const r1 = await q(`DELETE FROM erp_marks_backup WHERE subject_id = ?`, [id]);
             deletedBackupMarks = r1.affectedRows || 0;
@@ -1625,28 +1491,28 @@ router.delete("/subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
             log.warn("erp_marks_backup delete skipped", { error: e.message });
         }
 
-        // 2. Delete marks (actual)
+        // 2. Actual marks
         const r2 = await q(
             `DELETE FROM erp_marks WHERE record_type = 'MARKS' AND subject_id = ?`,
             [id]
         );
         deletedMarks = r2.affectedRows || 0;
 
-        // 3. Delete student-subject assignments
+        // 3. Student subject assignments
         const r3 = await q(
             `DELETE FROM erp_marks WHERE record_type = 'STUDENT_SUBJECT' AND subject_id = ?`,
             [id]
         );
         deletedStudentSubjects = r3.affectedRows || 0;
 
-        // 4. Delete exam-subject entries
+        // 4. Exam subject entries
         const r4 = await q(
             `DELETE FROM erp_exams WHERE record_type = 'EXAM_SUBJECT' AND subject_id = ?`,
             [id]
         );
         deletedExamSubjects = r4.affectedRows || 0;
 
-        // 5. Delete class-subject mappings
+        // 5. Class subject mappings
         const r5 = await q(
             `DELETE FROM erp_master
              WHERE master_type = 'CLASS_SUBJECT'
@@ -1655,14 +1521,13 @@ router.delete("/subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
         );
         deletedClassMaps = r5.affectedRows || 0;
 
-        // 6. Delete the subject itself
+        // 6. The subject itself
         await q(`DELETE FROM erp_master WHERE id = ?`, [id]);
     } else {
         // No usage — safe delete
         await q(`DELETE FROM erp_master WHERE id = ?`, [id]);
     }
 
-    // Audit log
     await auditLog({
         action: force ? "SUBJECT_FORCE_DELETED" : "SUBJECT_DELETED",
         entity_type: "SUBJECT",
@@ -1696,10 +1561,11 @@ router.delete("/subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (
 
 
 
-    
+
 // ============================================================
 // SECTION 6: CLASS-SUBJECT MAPPING
 // ============================================================
+
 router.get("/class-subjects", asyncHandler(async (req, res) => {
     const { class_id, stream_id } = req.query;
     requireFields(req.query, ["class_id"]);
@@ -1715,8 +1581,6 @@ router.get("/class-subjects", asyncHandler(async (req, res) => {
     `;
     const params = [parseId(class_id, "class_id")];
 
-    // FIX: stream compare was string-vs-JSON-number (never matched) and also
-    // excluded subjects common to all streams.
     if (stream_id) {
         sql += ` AND (${JX("cs.data", "$.stream_id")} IS NULL OR ${JX("cs.data", "$.stream_id")} <=> ?)`;
         params.push(parseId(stream_id, "stream_id"));
@@ -1760,8 +1624,6 @@ router.post("/class-subjects", asyncHandler(async (req, res) => {
         const subjectId = parseId(sid, "subject_id");
         await getMasterById(subjectId, "SUBJECT");
 
-        // FIX: JSON null != SQL NULL, so the old duplicate check never detected
-        // non-stream mappings and allowed duplicates.
         const dup = await q(`
             SELECT id FROM erp_master
             WHERE master_type = 'CLASS_SUBJECT' AND parent_id = ?
@@ -1816,118 +1678,21 @@ router.delete("/class-subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(a
     return ok(res, null, "Class-subject removed successfully");
 }));
 
+
+
+
+
 // ============================================================
-// SECTION 7: STUDENT-SUBJECT ASSIGNMENT
+// SECTION 7: STUDENT-SUBJECT ASSIGNMENT (MANUAL ONLY)
 // ============================================================
+// NOTE: Auto-assign has been REMOVED. All assignments are manual.
+// Routes:
+//   GET  /student-subjects/:studentId       → list assigned subjects
+//   POST /student-subjects/assign           → manual single assign
+//   POST /student-subjects/bulk-assign      → manual bulk assign (multiple students)
+//   DELETE /student-subjects/:id            → remove an assignment
+//   GET  /student-subjects/debug/:studentId → diagnostic info
 // ============================================================
-// BULK ASSIGN subjects to multiple students
-// Body: { session_id, student_ids: [], subject_ids: [] }
-// ============================================================
-router.post("/student-subjects/bulk-assign", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
-    requireFields(req.body, ["session_id", "student_ids", "subject_ids"]);
-    const user = getUserContext(req);
-
-    const sessionId = parseId(req.body.session_id, "session_id");
-    const studentIds = Array.isArray(req.body.student_ids) 
-        ? req.body.student_ids 
-        : [req.body.student_ids];
-    const subjectIds = Array.isArray(req.body.subject_ids) 
-        ? req.body.subject_ids 
-        : [req.body.subject_ids];
-
-    if (studentIds.length === 0) return fail(res, "student_ids is required", 400);
-    if (subjectIds.length === 0) return fail(res, "subject_ids is required", 400);
-
-    let added = 0, skipped = 0;
-    const errors = [];
-    const results = [];
-
-    for (const sid of studentIds) {
-        const studentId = String(sid).trim();
-        let student;
-        try {
-            student = await getStudentFromNstudent(studentId);
-        } catch (e) {
-            errors.push({ student_id: studentId, error: "Student not found" });
-            continue;
-        }
-
-        const classRow = await resolveClassRow(student.class);
-        if (!classRow) {
-            errors.push({ student_id: studentId, error: `Class "${student.class}" not configured` });
-            continue;
-        }
-        const sectionId = await resolveSectionId(classRow.id, student.section);
-        const streamId = await resolveStreamId(student.stream);
-
-        let studentAdded = 0, studentSkipped = 0;
-
-        for (const subjId of subjectIds) {
-            const subjectId = parseId(subjId, "subject_id");
-
-            // Duplicate check
-            const dup = await q(`
-                SELECT id FROM erp_marks
-                WHERE record_type = 'STUDENT_SUBJECT'
-                  AND student_id = ? AND session_id = ? AND subject_id = ?
-                LIMIT 1
-            `, [studentId, sessionId, subjectId]);
-
-            if (dup.length > 0) { studentSkipped++; skipped++; continue; }
-
-            try {
-                await q(`
-                    INSERT INTO erp_marks (
-                        record_type, student_id, session_id, class_id,
-                        section_id, stream_id, subject_id, status, data, created_at
-                    ) VALUES ('STUDENT_SUBJECT', ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, NOW())
-                `, [
-                    studentId, sessionId, classRow.id,
-                    sectionId, streamId, subjectId,
-                    safeJSONStringify({ is_optional: false, assigned_by: user.user_id })
-                ]);
-                studentAdded++;
-                added++;
-            } catch (e) {
-                errors.push({ 
-                    student_id: studentId, 
-                    subject_id: subjectId, 
-                    error: e.message 
-                });
-            }
-        }
-
-        results.push({ 
-            student_id: studentId, 
-            name: student.name,
-            added: studentAdded, 
-            skipped: studentSkipped 
-        });
-    }
-
-    await auditLog({
-        action: "STUDENT_SUBJECTS_BULK_ASSIGNED",
-        entity_type: "STUDENT_SUBJECT",
-        session_id: sessionId,
-        user,
-        new_value: {
-            student_count: studentIds.length,
-            subject_count: subjectIds.length,
-            added, skipped, errors: errors.length
-        }
-    });
-
-    return ok(res, {
-        students_processed: studentIds.length,
-        subjects_per_student: subjectIds.length,
-        total_added: added,
-        total_skipped: skipped,
-        errors,
-        results
-    }, `${added} assignments created, ${skipped} skipped`);
-}));
-
-
 
 router.get("/student-subjects/:studentId", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
@@ -1980,10 +1745,7 @@ router.get("/student-subjects/:studentId", asyncHandler(async (req, res) => {
     }, "Student subjects fetched successfully");
 }));
 
-/**
- * Assign subjects to a student.
- * Body: { student_id, session_id, subject_ids }
- */
+// Manual assign: { student_id, session_id, subject_ids: [] }
 router.post("/student-subjects/assign", asyncHandler(async (req, res) => {
     requireFields(req.body, ["student_id", "session_id", "subject_ids"]);
     const user = getUserContext(req);
@@ -2042,109 +1804,114 @@ router.post("/student-subjects/assign", asyncHandler(async (req, res) => {
     }, `${added} subject(s) assigned`);
 }));
 
-/**
- * NEW: Auto-assign all CORE class-subjects to students.
- * Body: { session_id, class_id?, student_id? }
- */
 // ============================================================
-// FIXED: Auto-assign CORE subjects to all students in a class/session
-// Body: { session_id, class_id?, student_id? }
+// 🆕 NEW: BULK ASSIGN subjects to multiple students
 // ============================================================
-router.post("/student-subjects/auto-assign", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
-    requireFields(req.body, ["session_id"]);
+// Body: { session_id, student_ids: [], subject_ids: [] }
+// ============================================================
+router.post("/student-subjects/bulk-assign", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
+    requireFields(req.body, ["session_id", "student_ids", "subject_ids"]);
     const user = getUserContext(req);
+
     const sessionId = parseId(req.body.session_id, "session_id");
-    const session = await getMasterById(sessionId, "SESSION");
+    const studentIds = Array.isArray(req.body.student_ids)
+        ? req.body.student_ids
+        : [req.body.student_ids];
+    const subjectIds = Array.isArray(req.body.subject_ids)
+        ? req.body.subject_ids
+        : [req.body.subject_ids];
 
-    // Build WHERE clause for students
-    const where = [`(status IS NULL OR LOWER(status) <> 'inactive')`];
-    const params = [];
+    if (studentIds.length === 0) return fail(res, "student_ids is required", 400);
+    if (subjectIds.length === 0) return fail(res, "subject_ids is required", 400);
 
-    if (req.body.student_id) {
-        where.push("student_id = ?");
-        params.push(String(req.body.student_id).trim());
-    }
-
-    if (req.body.class_id) {
-        const c = await getMasterById(parseId(req.body.class_id, "class_id"), "CLASS");
-        // Match any of the common class name variations
-        where.push("(class = ? OR class = ? OR class = ? OR LOWER(class) = LOWER(?))");
-        params.push(
-            c.master_key,
-            c.name,
-            `Class ${c.master_key}`,
-            c.master_key
-        );
-    } else {
-        // Filter by session
-        if (session.master_key) {
-            where.push("(session = ? OR session IS NULL OR session = '')");
-            params.push(session.master_key);
-        }
-    }
-
-    const students = await q(
-        `SELECT student_id, name, class, section, stream, session
-         FROM Nstudent 
-         WHERE ${where.join(" AND ")}`,
-        params
-    );
-
-    if (students.length === 0) {
-        return fail(res, "No students found matching the criteria", 404);
-    }
-
-    let totalAdded = 0;
-    let totalSkipped = 0;
+    let added = 0, skipped = 0;
     const errors = [];
-    const successDetails = [];
+    const results = [];
 
-    for (const s of students) {
+    for (const sid of studentIds) {
+        const studentId = String(sid).trim();
+        let student;
         try {
-            const r = await assignCoreSubjects(s, sessionId, user);
-            if (r.error) {
-                errors.push({ student_id: s.student_id, name: s.name, error: r.error });
-            } else {
-                totalAdded += r.added;
-                totalSkipped += r.skipped;
-                successDetails.push({
-                    student_id: s.student_id,
-                    name: s.name,
-                    class: s.class,
-                    added: r.added,
-                    skipped: r.skipped
+            student = await getStudentFromNstudent(studentId);
+        } catch (e) {
+            errors.push({ student_id: studentId, error: "Student not found" });
+            continue;
+        }
+
+        const classRow = await resolveClassRow(student.class);
+        if (!classRow) {
+            errors.push({ student_id: studentId, error: `Class "${student.class}" not configured` });
+            continue;
+        }
+        const sectionId = await resolveSectionId(classRow.id, student.section);
+        const streamId = await resolveStreamId(student.stream);
+
+        let studentAdded = 0, studentSkipped = 0;
+
+        for (const subjId of subjectIds) {
+            const subjectId = parseId(subjId, "subject_id");
+
+            const dup = await q(`
+                SELECT id FROM erp_marks
+                WHERE record_type = 'STUDENT_SUBJECT'
+                  AND student_id = ? AND session_id = ? AND subject_id = ?
+                LIMIT 1
+            `, [studentId, sessionId, subjectId]);
+
+            if (dup.length > 0) { studentSkipped++; skipped++; continue; }
+
+            try {
+                await q(`
+                    INSERT INTO erp_marks (
+                        record_type, student_id, session_id, class_id,
+                        section_id, stream_id, subject_id, status, data, created_at
+                    ) VALUES ('STUDENT_SUBJECT', ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, NOW())
+                `, [
+                    studentId, sessionId, classRow.id,
+                    sectionId, streamId, subjectId,
+                    safeJSONStringify({ is_optional: false, assigned_by: user.user_id })
+                ]);
+                studentAdded++;
+                added++;
+            } catch (e) {
+                errors.push({
+                    student_id: studentId,
+                    subject_id: subjectId,
+                    error: e.message
                 });
             }
-        } catch (err) {
-            errors.push({ student_id: s.student_id, name: s.name, error: err.message });
         }
+
+        results.push({
+            student_id: studentId,
+            name: student.name,
+            added: studentAdded,
+            skipped: studentSkipped
+        });
     }
 
     await auditLog({
-        action: "STUDENT_SUBJECTS_AUTO_ASSIGNED",
+        action: "STUDENT_SUBJECTS_BULK_ASSIGNED",
         entity_type: "STUDENT_SUBJECT",
         session_id: sessionId,
         user,
         new_value: {
-            students_processed: students.length,
-            total_added: totalAdded,
-            total_skipped: totalSkipped,
-            errors_count: errors.length
+            student_count: studentIds.length,
+            subject_count: subjectIds.length,
+            added, skipped, errors: errors.length
         }
     });
 
     return ok(res, {
-        students_processed: students.length,
-        total_added: totalAdded,
-        total_skipped: totalSkipped,
+        students_processed: studentIds.length,
+        subjects_per_student: subjectIds.length,
+        total_added: added,
+        total_skipped: skipped,
         errors,
-        details: successDetails
-    }, `Processed ${students.length} students — ${totalAdded} subjects added`);
+        results
+    }, `${added} assignments created, ${skipped} skipped`);
 }));
 
-
-
-            
 router.delete("/student-subjects/:id", asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     const user = getUserContext(req);
@@ -2155,7 +1922,6 @@ router.delete("/student-subjects/:id", asyncHandler(async (req, res) => {
     );
     if (rows.length === 0) return fail(res, "Student subject not found", 404);
 
-    // FIX: check only THIS session (old query blocked removal because of other sessions' marks)
     const marks = await q(
         `SELECT COUNT(*) AS cnt FROM erp_marks
          WHERE record_type = 'MARKS' AND student_id = ? AND session_id = ? AND subject_id = ?`,
@@ -2176,7 +1942,10 @@ router.delete("/student-subjects/:id", asyncHandler(async (req, res) => {
 }));
 
 // ============================================================
-// NEW: Debug endpoint — Student subject allocation diagnostics
+// 🆕 NEW: DEBUG endpoint for subject allocation diagnostics
+// ============================================================
+// Usage: GET /student-subjects/debug/:studentId?session_id=5
+// Returns: resolved class/section/stream, available subjects, assigned subjects, issues
 // ============================================================
 router.get("/student-subjects/debug/:studentId", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
@@ -2233,7 +2002,7 @@ router.get("/student-subjects/debug/:studentId", asyncHandler(async (req, res) =
                NULLIF(JSON_UNQUOTE(JSON_EXTRACT(cs.data, '$.is_optional')), 'null') AS is_opt,
                sub.master_key AS subject_code, sub.name AS subject_name
         FROM erp_master cs
-        LEFT JOIN erp_master sub 
+        LEFT JOIN erp_master sub
             ON sub.id = CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(cs.data, '$.subject_id')), 'null') AS UNSIGNED)
         WHERE cs.master_type = 'CLASS_SUBJECT' AND cs.parent_id = ?
     `, [classRow.id]);
@@ -2259,8 +2028,8 @@ router.get("/student-subjects/debug/:studentId", asyncHandler(async (req, res) =
                    sub.master_key AS subject_code, sub.name AS subject_name
             FROM erp_marks ss
             LEFT JOIN erp_master sub ON sub.id = ss.subject_id
-            WHERE ss.record_type = 'STUDENT_SUBJECT' 
-              AND ss.student_id = ? 
+            WHERE ss.record_type = 'STUDENT_SUBJECT'
+              AND ss.student_id = ?
               AND ss.session_id = ?
         `, [studentId, parseId(session_id)]);
         diagnostics.assigned_subjects = assigned;
@@ -2276,16 +2045,20 @@ router.get("/student-subjects/debug/:studentId", asyncHandler(async (req, res) =
     }
 
     if (diagnostics.assigned_subjects.length === 0) {
-        diagnostics.issues.push(`No subjects assigned to student ${studentId} yet. Run auto-assign.`);
+        diagnostics.issues.push(`No subjects assigned to student ${studentId} yet.`);
     }
 
     return ok(res, diagnostics, "Diagnostics completed successfully");
 }));
 
 
+
+
+
 // ============================================================
 // SECTION 8: EXAM TEMPLATES
 // ============================================================
+
 router.get("/exam-templates", asyncHandler(async (req, res) => {
     const templates = await q(`
         SELECT id, master_key AS template_code, name AS template_name,
@@ -2372,9 +2145,14 @@ router.post("/exam-templates", asyncHandler(async (req, res) => {
         "Exam template created successfully", 201);
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 9: EXAMS
 // ============================================================
+
 router.get("/exams", asyncHandler(async (req, res) => {
     const { session_id, class_id, status } = req.query;
     const { page, limit, offset } = parsePagination(req.query);
@@ -2451,11 +2229,6 @@ router.get("/exams/:id", asyncHandler(async (req, res) => {
     return ok(res, exam, "Exam fetched successfully");
 }));
 
-/**
- * Create exam
- * Body: { session_id, class_id, exam_code, exam_name, exam_type, exam_session,
- *         start_date, end_date, result_date, weightage_percent }
- */
 router.post("/exams", asyncHandler(async (req, res) => {
     requireFields(req.body, ["session_id", "class_id", "exam_code", "exam_name"]);
     const user = getUserContext(req);
@@ -2562,13 +2335,14 @@ router.put("/exams/:id", asyncHandler(async (req, res) => {
     });
 
     return ok(res, { id }, "Exam updated successfully");
-
-    
 }));
 
-
 // ============================================================
-// DELETE EXAM (with force option)
+// 🆕 UPDATED: DELETE EXAM with force option
+// ============================================================
+// Usage:
+//   DELETE /exams/:id          → fails if marks exist or locked
+//   DELETE /exams/:id?force=true → cascade delete everything
 // ============================================================
 router.delete("/exams/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
@@ -2587,7 +2361,7 @@ router.delete("/exams/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req
         return fail(res, "Cannot delete locked exam. Use ?force=true to override.", 400);
     }
 
-    // Check marks
+    // Count marks
     const marks = await q(
         `SELECT COUNT(*) AS cnt FROM erp_marks WHERE record_type = 'MARKS' AND exam_id = ?`,
         [id]
@@ -2604,9 +2378,10 @@ router.delete("/exams/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req
     let deletedMarks = 0;
     let deletedBackupMarks = 0;
     let deletedBackupResults = 0;
+    let deletedExamSubjects = 0;
 
     if (force) {
-        // 1. Delete marks backup (agar table exist karti hai)
+        // 1. Delete marks backup
         try {
             const r1 = await q(`DELETE FROM erp_marks_backup WHERE exam_id = ?`, [id]);
             deletedBackupMarks = r1.affectedRows || 0;
@@ -2638,12 +2413,11 @@ router.delete("/exams/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req
         `DELETE FROM erp_exams WHERE record_type = 'EXAM_SUBJECT' AND exam_id = ?`,
         [id]
     );
-    const deletedExamSubjects = r4.affectedRows || 0;
+    deletedExamSubjects = r4.affectedRows || 0;
 
     // 5. Delete the exam itself
     await q(`DELETE FROM erp_exams WHERE id = ?`, [id]);
 
-    // Audit log
     await auditLog({
         action: force ? "EXAM_FORCE_DELETED" : "EXAM_DELETED",
         entity_type: "EXAM",
@@ -2672,12 +2446,6 @@ router.delete("/exams/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req
         : `Exam deleted successfully`);
 }));
 
-
-
-
-/**
- * Add subjects to an exam with config
- */
 router.post("/exams/:id/subjects", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.id);
     const user = getUserContext(req);
@@ -2787,6 +2555,10 @@ router.delete("/exams/:id/subjects/:subjectId", asyncHandler(async (req, res) =>
     return ok(res, null, "Exam subject removed");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 10: MARKS ENTRY & WORKFLOW
 // ============================================================
@@ -2864,14 +2636,10 @@ router.get("/marks-entry/:examId/:subjectId", asyncHandler(async (req, res) => {
         subject_config: examSubjectConfig,
         students
     }, students.length === 0
-        ? "No students found. Assign subjects first (POST /student-subjects/auto-assign)."
+        ? "No students found. Assign subjects manually first."
         : "Marks entry data fetched successfully");
 }));
 
-/**
- * Save marks (bulk).
- * Body: { exam_id, subject_id, marks: [{student_id, theory, practical, internal, project, absent_type, remarks}] }
- */
 router.post("/marks/save", asyncHandler(async (req, res) => {
     requireFields(req.body, ["exam_id", "subject_id", "marks"]);
     const user = getUserContext(req);
@@ -2908,8 +2676,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
     const projectMax = toFloatSafe(cfg.project_max);
     const maxMarks = toFloatSafe(cfg.max_marks) || (theoryMax + practicalMax + internalMax + projectMax) || 100;
 
-    // FIX: if no component split is configured, the whole paper is "theory".
-    // Before, every theory mark was rejected ("Theory must be 0-0").
     if (theoryMax + practicalMax + internalMax + projectMax === 0) theoryMax = maxMarks;
 
     const saved = [], failed = [], skipped = [];
@@ -2934,13 +2700,11 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
             }
             const isAbsent = absentType !== "Present";
 
-            // FIX: strict parsing; absent students never keep component marks
             const theory = isAbsent ? null : parseMark(item.theory, "Theory", theoryMax);
             const practical = isAbsent ? null : parseMark(item.practical, "Practical", practicalMax);
             const internal = isAbsent ? null : parseMark(item.internal, "Internal", internalMax);
             const project = isAbsent ? null : parseMark(item.project, "Project", projectMax);
 
-            // blank row for a present student = nothing entered yet, skip (not an error)
             if (!isAbsent && theory === null && practical === null && internal === null && project === null) {
                 skipped.push(studentId);
                 continue;
@@ -2950,7 +2714,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
             if (total > maxMarks) throw new Error(`Total ${total} exceeds maximum ${maxMarks}`);
 
             const pct = maxMarks > 0 ? (total / maxMarks) * 100 : 0;
-            // FIX: absent students used to get grade "E" (0%)
             const grade = isAbsent ? "AB" : await calculateGrade(pct);
 
             const existing = await q(`
@@ -2991,7 +2754,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
                     new_value: { theory, practical, internal, project, total, grade, absentType }
                 });
             } else {
-                // FIX: section_id / stream_id were always NULL -> section-wise filters returned nothing
                 const result = await q(`
                     INSERT INTO erp_marks (
                         record_type, student_id, session_id, class_id, section_id, stream_id,
@@ -3041,7 +2803,6 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
     }, `${saved.length} marks saved, ${failed.length} failed, ${skipped.length} skipped`);
 }));
 
-/** DRAFT -> SUBMITTED */
 router.post("/marks/submit", asyncHandler(async (req, res) => {
     requireFields(req.body, ["exam_id", "subject_id"]);
     const user = getUserContext(req);
@@ -3067,7 +2828,6 @@ router.post("/marks/submit", asyncHandler(async (req, res) => {
     return ok(res, { submitted: result.affectedRows }, `${result.affectedRows} marks submitted`);
 }));
 
-/** SUBMITTED -> VERIFIED */
 router.post("/marks/verify", requireRole(...ADMIN_ROLES, "TEACHER", "HOD"), asyncHandler(async (req, res) => {
     requireFields(req.body, ["exam_id", "subject_id"]);
     const user = getUserContext(req);
@@ -3093,7 +2853,6 @@ router.post("/marks/verify", requireRole(...ADMIN_ROLES, "TEACHER", "HOD"), asyn
     return ok(res, { verified: result.affectedRows }, `${result.affectedRows} marks verified`);
 }));
 
-/** SUBMITTED/VERIFIED -> DRAFT */
 router.post("/marks/return-for-correction", asyncHandler(async (req, res) => {
     requireFields(req.body, ["exam_id", "subject_id", "reason"]);
     const user = getUserContext(req);
@@ -3122,6 +2881,10 @@ router.post("/marks/return-for-correction", asyncHandler(async (req, res) => {
     return ok(res, { returned: result.affectedRows }, `${result.affectedRows} marks returned for correction`);
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 11: RESULT FINALIZATION
 // ============================================================
@@ -3139,7 +2902,6 @@ router.post("/exams/:id/finalize", requireRole(...ADMIN_ROLES), asyncHandler(asy
 
     if (exam.is_locked) return fail(res, "Exam already finalized", 400);
 
-    // FIX: an exam with zero marks could be "finalized" and locked
     const total = await q(
         `SELECT COUNT(*) AS cnt FROM erp_marks WHERE record_type = 'MARKS' AND exam_id = ?`,
         [examId]
@@ -3155,7 +2917,6 @@ router.post("/exams/:id/finalize", requireRole(...ADMIN_ROLES), asyncHandler(asy
         return fail(res, `${pending[0].cnt} marks are not verified yet`, 400);
     }
 
-    // FIX (missing logic): every student x exam-subject must have a marks row
     if (!req.body?.force) {
         const missing = await q(`
             SELECT COUNT(*) AS cnt
@@ -3180,8 +2941,6 @@ router.post("/exams/:id/finalize", requireRole(...ADMIN_ROLES), asyncHandler(asy
         WHERE record_type = 'MARKS' AND exam_id = ?
     `, [examId]);
 
-    // FIX: a snapshot failure used to be logged and ignored, yet the exam was still
-    // locked -> results missing for those students. Now we abort before locking.
     let snapshots = 0;
     const snapFailed = [];
     for (const s of students) {
@@ -3252,7 +3011,6 @@ router.post("/exams/:id/unlock", requireRole(...ADMIN_ROLES), asyncHandler(async
     if (exam.status === "PUBLISHED") {
         return fail(res, "Cannot unlock published exam. Unpublish first.", 400);
     }
-    // FIX: any exam (even DRAFT) could be "unlocked" and pushed to VERIFIED
     if (exam.status !== "FINALIZED") {
         return fail(res, "Only finalized exams can be unlocked", 400);
     }
@@ -3275,8 +3033,12 @@ router.post("/exams/:id/unlock", requireRole(...ADMIN_ROLES), asyncHandler(async
         old_value: { status: exam.status }, new_value: { status: "VERIFIED" }
     });
 
-    return ok(res, null, "Exam unlocked. Use /marks/return-for-correction to make marks editable, then re-verify and finalize.");
+    return ok(res, null, "Exam unlocked. Use /marks/return-for-correction to make marks editable.");
 }));
+
+
+
+
 
 // ============================================================
 // SECTION 12: PUBLISH / UNPUBLISH
@@ -3331,7 +3093,6 @@ router.post("/exams/:id/unpublish", requireRole(...ADMIN_ROLES), asyncHandler(as
     );
     if (examRows.length === 0) return fail(res, "Exam not found", 404);
 
-    // FIX: unpublish used to turn ANY exam (even DRAFT) into FINALIZED
     if (examRows[0].status !== "PUBLISHED") {
         return fail(res, "Exam is not published", 400);
     }
@@ -3356,6 +3117,10 @@ router.post("/exams/:id/unpublish", requireRole(...ADMIN_ROLES), asyncHandler(as
     return ok(res, null, "Exam unpublished successfully");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 13: STUDENT SELF-SERVICE (PERMANENT RESULTS)
 // ============================================================
@@ -3378,11 +3143,9 @@ router.get("/student/:studentId/permanent", asyncHandler(async (req, res) => {
         return fail(res, "Student account is inactive. Contact school office.", 403);
     }
 
-    // FIX: tolerant class lookup ("10" / "Class 10")
     const classRow = await resolveClassRow(student.class);
     const classId = classRow?.id || null;
 
-    // Auto-snapshot any PUBLISHED exam not yet in backup
     if (classId) {
         try {
             const publishedExams = await q(`
@@ -3416,8 +3179,6 @@ router.get("/student/:studentId/permanent", asyncHandler(async (req, res) => {
         }
     }
 
-    // FIX (data leak): this used to read erp_results_backup directly, so a student could see
-    // FINALIZED-but-unpublished (or unpublished-again) results. Only PUBLISHED exams now.
     const resultsRows = await getPublishedResults(sid, session_id || null);
 
     const results = [];
@@ -3483,6 +3244,10 @@ router.get("/student/:studentId/permanent", asyncHandler(async (req, res) => {
     }, results.length > 0 ? "Results fetched successfully" : "No published result yet");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 14: ADMIN DELETE
 // ============================================================
@@ -3542,6 +3307,10 @@ router.delete("/admin/student/:studentId/all-results", requireRole(...ADMIN_ROLE
     }, `All results deleted for student ${sid}`);
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 15: STUDENT RESULTS (ADMIN VIEW)
 // ============================================================
@@ -3596,6 +3365,10 @@ router.get("/student/:studentId/results", asyncHandler(async (req, res) => {
     }, "Student results fetched successfully");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 17: DASHBOARD & ANALYTICS
 // ============================================================
@@ -3625,7 +3398,6 @@ router.get("/dashboard/stats", asyncHandler(async (req, res) => {
 router.get("/analytics/exam/:examId", asyncHandler(async (req, res) => {
     const examId = parseId(req.params.examId, "examId");
 
-    // FIX: absent students (0 marks) were dragging averages / lowest down
     const subjectStats = await q(`
         SELECT
             m.subject_id,
@@ -3662,6 +3434,10 @@ router.get("/analytics/exam/:examId", asyncHandler(async (req, res) => {
     }, "Analytics fetched successfully");
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 18: AUDIT LOGS
 // ============================================================
@@ -3678,7 +3454,6 @@ router.get("/audit-logs", requireRole(...ADMIN_ROLES), asyncHandler(async (req, 
     if (exam_id) { where.push("exam_id = ?"); params.push(parseId(exam_id)); }
     if (entity_type) { where.push("entity_type = ?"); params.push(entity_type); }
     if (from_date) { where.push("created_at >= ?"); params.push(from_date); }
-    // FIX: "2026-10-03" meant 00:00:00, so that whole day was excluded
     if (to_date) {
         where.push("created_at <= ?");
         params.push(String(to_date).length <= 10 ? `${to_date} 23:59:59` : to_date);
@@ -3707,10 +3482,15 @@ router.get("/audit-logs", requireRole(...ADMIN_ROLES), asyncHandler(async (req, 
     });
 }));
 
+
+
+
+
 // ============================================================
-// SECTION 21: PUBLIC ROUTES  (only PUBLISHED results)
-// NOTE: mount these WITHOUT auth middleware, e.g. in app.js:
-//   app.use("/api/results/public", publicRouter)  or skip auth for paths starting /public
+// SECTION 21: PUBLIC ROUTES (only PUBLISHED results)
+// ============================================================
+// NOTE: mount these WITHOUT auth middleware in app.js:
+//   app.use("/api/results/public", publicRouter)
 // ============================================================
 
 async function isExamPublished(examId) {
@@ -3752,7 +3532,6 @@ async function getBackupMarks(studentId, sessionId, examId) {
     `, [studentId, sessionId, examId]);
 }
 
-// PUBLIC 1: Roll Number + DOB
 router.post("/public/lookup", asyncHandler(async (req, res) => {
     requireFields(req.body, ["roll_number", "dob"]);
     const { roll_number, dob, class: cls, session: sess } = req.body;
@@ -3778,7 +3557,6 @@ router.post("/public/lookup", asyncHandler(async (req, res) => {
     if (students.length === 0) {
         return fail(res, "No student found with the provided details", 404);
     }
-    // FIX: roll numbers repeat across classes/sessions; LIMIT 1 returned a random student
     if (students.length > 1) {
         return fail(res, "Multiple students match. Please also provide class and session.", 409);
     }
@@ -3829,7 +3607,6 @@ router.post("/public/lookup", asyncHandler(async (req, res) => {
     }, finalResults.length > 0 ? "Results fetched successfully" : "No published result yet");
 }));
 
-// PUBLIC 2: Student ID + DOB
 router.post("/public/search", asyncHandler(async (req, res) => {
     requireFields(req.body, ["student_id", "dob"]);
     const { student_id, dob, session_id } = req.body;
@@ -3882,7 +3659,6 @@ router.post("/public/search", asyncHandler(async (req, res) => {
     }, "Results fetched successfully");
 }));
 
-// PUBLIC 3: classes list
 router.get("/public/classes-list", asyncHandler(async (req, res) => {
     const rows = await q(`
         SELECT master_key AS class_name, name
@@ -3893,7 +3669,6 @@ router.get("/public/classes-list", asyncHandler(async (req, res) => {
     return ok(res, rows, "Classes fetched successfully");
 }));
 
-// PUBLIC 4: sessions list
 router.get("/public/sessions-list", asyncHandler(async (req, res) => {
     const rows = await q(`
         SELECT id, master_key AS session_code, name AS session_name, is_current
@@ -3904,7 +3679,6 @@ router.get("/public/sessions-list", asyncHandler(async (req, res) => {
     return ok(res, rows, "Sessions fetched successfully");
 }));
 
-// PUBLIC 5: QR verification
 router.get("/public/verify/:studentId/:examId", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const examId = parseId(req.params.examId, "examId");
@@ -3955,8 +3729,6 @@ router.get("/public/verify/:studentId/:examId", asyncHandler(async (req, res) =>
     }, "Result verified successfully");
 }));
 
-// PUBLIC 6: single exam result  (FIX: now needs ?dob=YYYY-MM-DD, otherwise anyone could
-// enumerate student IDs and read DOB / mother's name / category of every student)
 router.get("/public/result/:studentId/:examId", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const examId = parseId(req.params.examId, "examId");
@@ -4024,7 +3796,6 @@ router.get("/public/result/:studentId/:examId", asyncHandler(async (req, res) =>
     }, "Published result fetched successfully");
 }));
 
-// PUBLIC 7: class-wise published results
 router.get("/public/class/:classId/results", asyncHandler(async (req, res) => {
     const classId = parseId(req.params.classId, "classId");
     const { session_id, exam_id } = req.query;
@@ -4069,12 +3840,15 @@ router.get("/public/class/:classId/results", asyncHandler(async (req, res) => {
     }, `${results.length} published results found`);
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 19: MARKSHEET (print-ready data)
 // ============================================================
 
 router.get("/marksheet/:studentId/:examId", asyncHandler(async (req, res, next) => {
-    // FIX: "/marksheet/bulk/:examId" was swallowed by this route (studentId = "bulk")
     if (req.params.studentId === "bulk") return next();
 
     const { studentId } = req.params;
@@ -4089,7 +3863,6 @@ router.get("/marksheet/:studentId/:examId", asyncHandler(async (req, res, next) 
     if (examRows.length === 0) return fail(res, "Exam not found", 404);
     const exam = examRows[0];
 
-    // FIX: comment said "must be published" but it was never enforced
     if (exam.status !== "PUBLISHED" && !isStaff(req)) {
         return fail(res, "Result not published yet", 403);
     }
@@ -4123,7 +3896,6 @@ router.get("/marksheet/:studentId/:examId", asyncHandler(async (req, res, next) 
             dob: student.dob,
             gender: student.gender,
             category: student.category,
-            // class/section/stream as they were when the result was finalized
             class: result.class_name || student.class,
             section: result.section_name || student.section,
             stream: result.stream || student.stream,
@@ -4177,7 +3949,6 @@ router.get("/marksheet/bulk/:examId", asyncHandler(async (req, res) => {
         return fail(res, "Only published exams can generate bulk marksheets", 400);
     }
 
-    // FIX: section_id query param was ignored
     let secName = null;
     if (section_id) {
         const sec = await getMasterById(parseId(section_id, "section_id"), "SECTION");
@@ -4233,6 +4004,10 @@ router.get("/marksheet/bulk/:examId", asyncHandler(async (req, res) => {
     }, `Marksheet data for ${students.length} students fetched`);
 }));
 
+
+
+
+
 // ============================================================
 // SECTION 20: FINAL RESULT ANNOUNCEMENT
 // ============================================================
@@ -4248,7 +4023,6 @@ router.post("/final-result/:studentId", asyncHandler(async (req, res) => {
 
     const student = await getStudentFromNstudent(sid);
 
-    // FIX: tolerant class lookup
     const classRow = await resolveClassRow(student.class);
     if (!classRow) return fail(res, `Class "${student.class}" not configured`, 400);
 
@@ -4263,7 +4037,6 @@ router.post("/final-result/:studentId", asyncHandler(async (req, res) => {
         return fail(res, "No published exams found for this session & class", 404);
     }
 
-    // FIX: backup also contains finalized-but-unpublished exams; only published ones count
     const examIds = exams.map(e => e.id);
     const allMarks = await q(`
         SELECT mb.*, e.exam_code, e.name AS exam_name, e.display_order
@@ -4296,9 +4069,6 @@ router.post("/final-result/:studentId", asyncHandler(async (req, res) => {
         };
     }
 
-    // FIX (missing logic): the old code just added all exams together (unit test + half-yearly +
-    // annual counted by raw marks). If every exam has weightage_percent and they add up to 100,
-    // use a weighted percentage per subject instead.
     const weights = {};
     let weightSum = 0;
     for (const e of exams) {
@@ -4390,9 +4160,14 @@ router.post("/final-result/:studentId", asyncHandler(async (req, res) => {
     }, "Final result calculated successfully");
 }));
 
+
+
+
+
 // ============================================================
 // GLOBAL ERROR HANDLER
 // ============================================================
+
 router.use((err, req, res, next) => {
     log.error("Route error", {
         path: req.originalUrl,
@@ -4401,7 +4176,6 @@ router.use((err, req, res, next) => {
     });
     if (res.headersSent) return next(err);
 
-    // FIX: validation / not-found errors were all returned as HTTP 500
     let status = err.status || 500;
     if (err.code === "ER_DUP_ENTRY") status = 409;
 
@@ -4412,3 +4186,7 @@ router.use((err, req, res, next) => {
 });
 
 module.exports = router;
+
+// ============================================================
+// END OF FILE
+// ============================================================
