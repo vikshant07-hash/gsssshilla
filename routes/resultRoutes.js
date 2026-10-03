@@ -4398,6 +4398,320 @@ router.get("/marksheet-verify/summary/:examId", asyncHandler(async (req, res) =>
 }));
 
 
+// ============================================================
+// SECTION 10.6: FULL MARKSHEET VERIFICATION
+// ============================================================
+
+// ------------------------------------------------------------
+// GET /marksheet-verify-full/:examId
+// Returns students with subject-wise marks (theory/practical/internal)
+// with max marks for each, plus stream filter
+// ------------------------------------------------------------
+router.get("/marksheet-verify-full/:examId", asyncHandler(async (req, res) => {
+    const examId = parseId(req.params.examId, "examId");
+    const { section_id, stream } = req.query;
+
+    // Fetch exam info
+    const examRows = await q(
+        `SELECT e.*, c.master_key AS class_name, s.master_key AS session_code
+         FROM erp_exams e
+         LEFT JOIN erp_master c ON c.id = e.class_id
+         LEFT JOIN erp_master s ON s.id = e.session_id
+         WHERE e.id = ? AND e.record_type = 'EXAM' LIMIT 1`,
+        [examId]
+    );
+    if (examRows.length === 0) return fail(res, "Exam not found", 404);
+    const exam = examRows[0];
+
+    // Fetch all exam subjects with their configs
+    const examSubjects = await q(`
+        SELECT es.id AS exam_subject_id, es.subject_id,
+               es.data AS exam_subject_data, es.display_order,
+               sub.master_key AS subject_code, sub.name AS subject_name,
+               sub.data AS subject_data
+        FROM erp_exams es
+        LEFT JOIN erp_master sub ON sub.id = es.subject_id
+        WHERE es.record_type = 'EXAM_SUBJECT' AND es.exam_id = ?
+        ORDER BY es.display_order ASC
+    `, [examId]);
+
+    // Build subject list with max marks (from exam_subject config, fallback to subject master)
+    const subjects = examSubjects.map(es => {
+        const esc = safeJSONParse(es.exam_subject_data, {});
+        const sc = safeJSONParse(es.subject_data, {});
+        const merged = { ...sc, ...esc };
+        return {
+            id: es.subject_id,
+            subject_code: es.subject_code,
+            subject_name: es.subject_name,
+            theory_max: parseInt(merged.theory_max) || 0,
+            theory_pass: parseInt(merged.theory_pass) || 0,
+            practical_max: parseInt(merged.practical_max) || 0,
+            practical_pass: parseInt(merged.practical_pass) || 0,
+            internal_max: parseInt(merged.internal_max) || 0,
+            internal_pass: parseInt(merged.internal_pass) || 0,
+            project_max: parseInt(merged.project_max) || 0,
+            project_pass: parseInt(merged.project_pass) || 0,
+            total_max: parseInt(merged.max_marks) || parseInt(merged.total_max) || 100,
+            total_pass: parseInt(merged.pass_marks) || parseInt(merged.total_pass) || 33
+        };
+    });
+
+    // Fetch students with subject-wise marks
+    let studentSql = `
+        SELECT ss.student_id, ss.section_id, ss.stream_id,
+               n.name AS student_name, n.father_name, n.roll_number,
+               n.stream, n.class AS student_class, n.section AS student_section
+        FROM erp_marks ss
+        JOIN Nstudent n ON n.student_id = ss.student_id
+        WHERE ss.record_type = 'STUDENT_SUBJECT'
+          AND ss.session_id = ?
+          AND ss.class_id = ?
+          AND ss.status = 'ACTIVE'
+    `;
+    const studentParams = [exam.session_id, exam.class_id];
+
+    if (section_id) {
+        studentSql += ` AND ss.section_id = ?`;
+        studentParams.push(parseId(section_id, "section_id"));
+    }
+    if (stream) {
+        studentSql += ` AND LOWER(n.stream) = LOWER(?)`;
+        studentParams.push(String(stream).trim());
+    }
+    studentSql += ` GROUP BY ss.student_id, ss.section_id, ss.stream_id, n.name, n.father_name, n.roll_number, n.stream, n.class, n.section
+                    ORDER BY CAST(n.roll_number AS UNSIGNED) ASC, n.name ASC`;
+
+    const studentRows = await q(studentSql, studentParams);
+
+    if (studentRows.length === 0) {
+        return ok(res, {
+            exam: {
+                id: exam.id,
+                name: exam.name,
+                exam_code: exam.exam_code,
+                status: exam.status,
+                is_locked: !!exam.is_locked,
+                class_name: exam.class_name,
+                session_code: exam.session_code
+            },
+            subjects,
+            students: [],
+            total: 0
+        }, "No students found");
+    }
+
+    // Fetch all marks for this exam in one query
+    const studentIds = studentRows.map(s => s.student_id);
+    const marksRows = await q(`
+        SELECT student_id, subject_id,
+               theory_marks, practical_marks, internal_marks, project_marks,
+               total_marks, max_marks, grade, is_absent, absent_type, status
+        FROM erp_marks
+        WHERE record_type = 'MARKS'
+          AND exam_id = ?
+          AND student_id IN (${studentIds.map(() => "?").join(",")})
+    `, [examId, ...studentIds]);
+
+    // Group marks by student -> subject
+    const marksMap = {};
+    marksRows.forEach(m => {
+        if (!marksMap[m.student_id]) marksMap[m.student_id] = {};
+        marksMap[m.student_id][m.subject_id] = m;
+    });
+
+    // Build student objects
+    const students = studentRows.map(s => {
+        const studentMarks = marksMap[s.student_id] || {};
+
+        // Compute totals
+        let grandTotal = 0, maxTotal = 0;
+        let statuses = [];
+        Object.values(studentMarks).forEach(m => {
+            grandTotal += parseFloat(m.total_marks) || 0;
+            maxTotal += parseFloat(m.max_marks) || 0;
+            if (m.status) statuses.push(m.status);
+        });
+
+        const pct = maxTotal > 0 ? (grandTotal / maxTotal) * 100 : 0;
+        let grade = "E";
+        if (pct >= 90) grade = "A+";
+        else if (pct >= 80) grade = "A";
+        else if (pct >= 70) grade = "B+";
+        else if (pct >= 60) grade = "B";
+        else if (pct >= 50) grade = "C";
+        else if (pct >= 40) grade = "D";
+
+        // Determine aggregate status
+        let marks_status = "DRAFT";
+        if (statuses.length > 0) {
+            if (statuses.every(s => s === "PUBLISHED")) marks_status = "PUBLISHED";
+            else if (statuses.every(s => ["FINALIZED", "PUBLISHED"].includes(s))) marks_status = "FINALIZED";
+            else if (statuses.every(s => s === "VERIFIED")) marks_status = "VERIFIED";
+            else if (statuses.some(s => s === "SUBMITTED")) marks_status = "SUBMITTED";
+            else if (statuses.some(s => s === "IN_PROGRESS")) marks_status = "IN_PROGRESS";
+            else marks_status = "DRAFT";
+        }
+
+        return {
+            student_id: s.student_id,
+            student_name: s.student_name,
+            father_name: s.father_name,
+            roll_number: s.roll_number,
+            stream: s.stream,
+            section: s.student_section,
+            class_name: s.student_class,
+            subject_marks: studentMarks,
+            grand_total: grandTotal,
+            max_total: maxTotal,
+            percentage: parseFloat(pct.toFixed(2)),
+            overall_grade: grade,
+            marks_status
+        };
+    });
+
+    return ok(res, {
+        exam: {
+            id: exam.id,
+            name: exam.name,
+            exam_code: exam.exam_code,
+            status: exam.status,
+            is_locked: !!exam.is_locked,
+            class_name: exam.class_name,
+            session_code: exam.session_code
+        },
+        subjects,
+        students,
+        total: students.length
+    }, `${students.length} student(s) loaded`);
+}));
+
+// ------------------------------------------------------------
+// GET /marksheet-verify-details/:examId/:studentId
+// Full detail for a single student — subject-wise with max/pass marks
+// ------------------------------------------------------------
+router.get("/marksheet-verify-details/:examId/:studentId", asyncHandler(async (req, res) => {
+    const examId = parseId(req.params.examId, "examId");
+    const studentId = String(req.params.studentId).trim();
+
+    const student = await getStudentFromNstudent(studentId);
+
+    const examRows = await q(
+        `SELECT * FROM erp_exams WHERE id = ? AND record_type = 'EXAM' LIMIT 1`,
+        [examId]
+    );
+    if (examRows.length === 0) return fail(res, "Exam not found", 404);
+    const exam = examRows[0];
+
+    // Fetch exam subjects
+    const examSubjects = await q(`
+        SELECT es.subject_id, es.data AS exam_subject_data,
+               sub.name AS subject_name, sub.master_key AS subject_code,
+               sub.data AS subject_data
+        FROM erp_exams es
+        LEFT JOIN erp_master sub ON sub.id = es.subject_id
+        WHERE es.record_type = 'EXAM_SUBJECT' AND es.exam_id = ?
+        ORDER BY es.display_order ASC
+    `, [examId]);
+
+    // Fetch this student's marks
+    const marksRows = await q(`
+        SELECT subject_id, theory_marks, practical_marks, internal_marks, project_marks,
+               total_marks, max_marks, grade, is_absent, absent_type, remarks, status
+        FROM erp_marks
+        WHERE record_type = 'MARKS' AND exam_id = ? AND student_id = ?
+    `, [examId, studentId]);
+
+    const marksMap = {};
+    marksRows.forEach(m => { marksMap[m.subject_id] = m; });
+
+    // Merge subject config + marks
+    const subjectMarks = examSubjects.map(es => {
+        const ec = safeJSONParse(es.exam_subject_data, {});
+        const sc = safeJSONParse(es.subject_data, {});
+        const merged = { ...sc, ...ec };
+        const mark = marksMap[es.subject_id] || {};
+
+        return {
+            subject_id: es.subject_id,
+            subject_name: es.subject_name,
+            subject_code: es.subject_code,
+            theory_max: parseInt(merged.theory_max) || 0,
+            theory_pass: parseInt(merged.theory_pass) || 0,
+            practical_max: parseInt(merged.practical_max) || 0,
+            practical_pass: parseInt(merged.practical_pass) || 0,
+            internal_max: parseInt(merged.internal_max) || 0,
+            internal_pass: parseInt(merged.internal_pass) || 0,
+            project_max: parseInt(merged.project_max) || 0,
+            project_pass: parseInt(merged.project_pass) || 0,
+            theory_marks: mark.theory_marks,
+            practical_marks: mark.practical_marks,
+            internal_marks: mark.internal_marks,
+            project_marks: mark.project_marks,
+            total_marks: mark.total_marks,
+            max_marks: mark.max_marks,
+            grade: mark.grade,
+            is_absent: mark.is_absent || 0,
+            absent_type: mark.absent_type || "Present",
+            remarks: mark.remarks,
+            status: mark.status || "DRAFT"
+        };
+    });
+
+    // Compute totals
+    let grandTotal = 0, maxTotal = 0;
+    let failedSubjects = [];
+    subjectMarks.forEach(m => {
+        grandTotal += parseFloat(m.total_marks) || 0;
+        maxTotal += parseFloat(m.max_marks) || 0;
+        if (m.is_absent !== 1 && (parseFloat(m.total_marks) / (parseFloat(m.max_marks) || 1)) < 0.33) {
+            failedSubjects.push(m.subject_name);
+        }
+    });
+
+    const pct = maxTotal > 0 ? (grandTotal / maxTotal) * 100 : 0;
+    let grade = "E";
+    if (pct >= 90) grade = "A+";
+    else if (pct >= 80) grade = "A";
+    else if (pct >= 70) grade = "B+";
+    else if (pct >= 60) grade = "B";
+    else if (pct >= 50) grade = "C";
+    else if (pct >= 40) grade = "D";
+
+    const resultStatus = failedSubjects.length > 0 ? "Fail" : (pct >= 33 ? "Pass" : "Fail");
+
+    return ok(res, {
+        student: {
+            student_id: student.student_id,
+            name: student.name,
+            father_name: student.father_name,
+            mother_name: student.mother_name,
+            roll_number: student.roll_number,
+            class: student.class,
+            section: student.section,
+            stream: student.stream,
+            dob: student.dob
+        },
+        exam: {
+            id: exam.id,
+            name: exam.name,
+            exam_code: exam.exam_code,
+            status: exam.status
+        },
+        subject_marks: subjectMarks,
+        totals: {
+            grand_total: grandTotal,
+            max_total: maxTotal,
+            percentage: parseFloat(pct.toFixed(2)),
+            grade,
+            status: resultStatus,
+            failed_subjects: failedSubjects
+        }
+    }, "Student details loaded");
+}));
+
+
+
 
 
 // ============================================================
