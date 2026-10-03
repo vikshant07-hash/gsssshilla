@@ -4802,6 +4802,28 @@ router.get("/activity-logs", requireRole(...ADMIN_ROLES), asyncHandler(async (re
 
 
 // ============================================================
+// DELETE /api/results/audit-logs
+// Query params:
+//   ?all=true                          → delete all logs
+//   ?action=MARKS_CREATED&student_id=X → delete filtered
+// ============================================================
+router.delete("/audit-logs", async (req, res) => {
+  try {
+    const { all, action, student_id } = req.query;
+    const where = {};
+    if (!all) {
+      if (action) where.action = action;
+      if (student_id) where.student_id = student_id;
+    }
+    const count = await AuditLog.destroy({ where });
+    res.json({ success: true, deleted: count, message: `${count} logs deleted` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+// ============================================================
 // GLOBAL ERROR HANDLER
 // ============================================================
 
