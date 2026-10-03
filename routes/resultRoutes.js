@@ -4736,6 +4736,68 @@ router.get("/marksheet-verify-details/:examId/:studentId", asyncHandler(async (r
 }));
 
 
+// ============================================================
+// SECTION 18.5: ACTIVITY LOGS (GROUPED BY EXAM)
+// ============================================================
+// Returns: grouped logs by exam with timeline
+// ============================================================
+router.get("/activity-logs", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
+    const { session_id, exam_id, limit } = req.query;
+
+    const where = [];
+    const params = [];
+
+    if (session_id) { where.push("l.session_id = ?"); params.push(parseId(session_id)); }
+    if (exam_id) { where.push("l.exam_id = ?"); params.push(parseId(exam_id)); }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const lim = Math.min(parseInt(limit) || 500, 1000);
+
+    // Fetch audit logs with exam context
+    const logs = await q(`
+        SELECT 
+            l.id, l.action, l.entity_type, l.entity_id,
+            l.student_id, l.session_id, l.exam_id, l.subject_id,
+            l.user_id, l.user_name, l.user_role,
+            l.old_value, l.new_value, l.reason,
+            l.created_at,
+            e.name AS exam_name, e.exam_code,
+            c.master_key AS class_name,
+            s.master_key AS session_name
+        FROM erp_audit_logs l
+        LEFT JOIN erp_exams e ON e.id = l.exam_id AND e.record_type = 'EXAM'
+        LEFT JOIN erp_master c ON c.id = e.class_id
+        LEFT JOIN erp_master s ON s.id = l.session_id AND s.master_type = 'SESSION'
+        ${whereSql}
+        ORDER BY l.created_at DESC
+        LIMIT ?
+    `, [...params, lim]);
+
+    // Fetch summary stats
+    const summaryRow = await q(`
+        SELECT 
+            (SELECT COUNT(*) FROM erp_exams WHERE record_type = 'EXAM' ${session_id ? "AND session_id = " + parseId(session_id) : ""}) AS total_exams,
+            (SELECT COUNT(*) FROM erp_audit_logs WHERE action IN ('MARKS_VERIFIED', 'MARKS_VERIFIED_STUDENT') ${session_id ? "AND session_id = " + parseId(session_id) : ""}) AS total_verified,
+            (SELECT COUNT(*) FROM erp_audit_logs WHERE action IN ('MARKS_SUBMITTED') ${session_id ? "AND session_id = " + parseId(session_id) : ""}) AS total_pending,
+            (SELECT COUNT(*) FROM erp_audit_logs WHERE action IN ('MARKS_REJECTED', 'MARKS_RETURNED_STUDENT') ${session_id ? "AND session_id = " + parseId(session_id) : ""}) AS total_corrections,
+            (SELECT COUNT(*) FROM erp_audit_logs WHERE action IN ('RESULT_PUBLISHED') ${session_id ? "AND session_id = " + parseId(session_id) : ""}) AS total_published
+    `);
+
+    const summary = summaryRow[0] || {};
+
+    return ok(res, {
+        logs,
+        summary: {
+            total_exams: summary.total_exams || 0,
+            total_verified: summary.total_verified || 0,
+            total_pending: summary.total_pending || 0,
+            total_corrections: summary.total_corrections || 0,
+            total_published: summary.total_published || 0
+        },
+        total: logs.length
+    }, `${logs.length} activity log(s) fetched`);
+}));
+
 
 
 
