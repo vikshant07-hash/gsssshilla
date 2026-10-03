@@ -1899,11 +1899,18 @@ router.put("/exams/:id", asyncHandler(async (req, res) => {
     });
 
     return ok(res, { id }, "Exam updated successfully");
+
+    
 }));
 
+
+// ============================================================
+// DELETE EXAM (with force option)
+// ============================================================
 router.delete("/exams/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     const user = getUserContext(req);
+    const force = req.query.force === "true";
 
     const examRows = await q(
         `SELECT * FROM erp_exams WHERE id = ? AND record_type = 'EXAM' LIMIT 1`,
@@ -1912,26 +1919,98 @@ router.delete("/exams/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req
     if (examRows.length === 0) return fail(res, "Exam not found", 404);
     const exam = examRows[0];
 
-    if (exam.is_locked) return fail(res, "Cannot delete locked exam", 400);
+    // Locked exam — only force delete allowed
+    if (exam.is_locked && !force) {
+        return fail(res, "Cannot delete locked exam. Use ?force=true to override.", 400);
+    }
 
+    // Check marks
     const marks = await q(
         `SELECT COUNT(*) AS cnt FROM erp_marks WHERE record_type = 'MARKS' AND exam_id = ?`,
         [id]
     );
-    if (marks[0].cnt > 0) {
-        return fail(res, `Cannot delete: ${marks[0].cnt} marks record(s) exist`, 400);
+    const marksCount = marks[0]?.cnt || 0;
+
+    if (marksCount > 0 && !force) {
+        return fail(res,
+            `Cannot delete: ${marksCount} marks record(s) exist. Add ?force=true to delete everything.`,
+            400);
     }
 
-    await q(`DELETE FROM erp_exams WHERE record_type = 'EXAM_SUBJECT' AND exam_id = ?`, [id]);
+    // ─── FORCE DELETE ───
+    let deletedMarks = 0;
+    let deletedBackupMarks = 0;
+    let deletedBackupResults = 0;
+
+    if (force) {
+        // 1. Delete marks backup (agar table exist karti hai)
+        try {
+            const r1 = await q(`DELETE FROM erp_marks_backup WHERE exam_id = ?`, [id]);
+            deletedBackupMarks = r1.affectedRows || 0;
+        } catch (e) {
+            log.warn("erp_marks_backup delete skipped", { error: e.message });
+        }
+
+        // 2. Delete results backup
+        try {
+            const r2 = await q(
+                `DELETE FROM erp_results_backup WHERE exam_id = ? AND result_type = 'EXAM'`,
+                [id]
+            );
+            deletedBackupResults = r2.affectedRows || 0;
+        } catch (e) {
+            log.warn("erp_results_backup delete skipped", { error: e.message });
+        }
+
+        // 3. Delete marks
+        const r3 = await q(
+            `DELETE FROM erp_marks WHERE record_type = 'MARKS' AND exam_id = ?`,
+            [id]
+        );
+        deletedMarks = r3.affectedRows || 0;
+    }
+
+    // 4. Delete exam subjects (always)
+    const r4 = await q(
+        `DELETE FROM erp_exams WHERE record_type = 'EXAM_SUBJECT' AND exam_id = ?`,
+        [id]
+    );
+    const deletedExamSubjects = r4.affectedRows || 0;
+
+    // 5. Delete the exam itself
     await q(`DELETE FROM erp_exams WHERE id = ?`, [id]);
 
+    // Audit log
     await auditLog({
-        action: "EXAM_DELETED", entity_type: "EXAM",
-        entity_id: id, user, old_value: exam
+        action: force ? "EXAM_FORCE_DELETED" : "EXAM_DELETED",
+        entity_type: "EXAM",
+        entity_id: id,
+        user,
+        old_value: exam,
+        new_value: {
+            deleted_marks: deletedMarks,
+            deleted_backup_marks: deletedBackupMarks,
+            deleted_backup_results: deletedBackupResults,
+            deleted_exam_subjects: deletedExamSubjects,
+            force
+        }
     });
 
-    return ok(res, null, "Exam deleted successfully");
+    log.success("Exam deleted", { examId: id, force });
+
+    return ok(res, {
+        deleted_marks: deletedMarks,
+        deleted_backup_marks: deletedBackupMarks,
+        deleted_backup_results: deletedBackupResults,
+        deleted_exam_subjects: deletedExamSubjects,
+        force
+    }, force
+        ? `Exam force-deleted with all related data`
+        : `Exam deleted successfully`);
 }));
+
+
+
 
 /**
  * Add subjects to an exam with config
