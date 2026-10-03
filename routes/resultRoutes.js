@@ -1555,56 +1555,148 @@ router.put("/subjects/:id", asyncHandler(async (req, res) => {
     return ok(res, { id }, "Subject updated successfully");
 }));
 
+
+// ============================================================
+// DELETE SUBJECT (with force option)
+// ============================================================
 router.delete("/subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     const user = getUserContext(req);
+    const force = req.query.force === "true";
+
     const subject = await getMasterById(id, "SUBJECT");
 
+    // ─── Count usages ───
     const classMaps = await q(
         `SELECT COUNT(*) AS cnt FROM erp_master
-         WHERE master_type = 'CLASS_SUBJECT' AND ${JX("data", "$.subject_id")} <=> ?`,
+         WHERE master_type = 'CLASS_SUBJECT' 
+           AND NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.subject_id')), 'null') <=> ?`,
         [id]
     );
-    if (classMaps[0].cnt > 0) {
-        return fail(res, `Cannot delete: subject is mapped to ${classMaps[0].cnt} class(es). Unmap first.`, 400);
-    }
-
     const examSubs = await q(
         `SELECT COUNT(*) AS cnt FROM erp_exams
          WHERE record_type = 'EXAM_SUBJECT' AND subject_id = ?`,
         [id]
     );
-    if (examSubs[0].cnt > 0) {
-        return fail(res, `Cannot delete: subject is used in ${examSubs[0].cnt} exam(s)`, 400);
-    }
-
     const studentSubs = await q(
         `SELECT COUNT(*) AS cnt FROM erp_marks
          WHERE record_type = 'STUDENT_SUBJECT' AND subject_id = ?`,
         [id]
     );
-    if (studentSubs[0].cnt > 0) {
-        return fail(res, `Cannot delete: subject is assigned to ${studentSubs[0].cnt} student(s)`, 400);
-    }
-
     const marks = await q(
         `SELECT COUNT(*) AS cnt FROM erp_marks
          WHERE record_type = 'MARKS' AND subject_id = ?`,
         [id]
     );
-    if (marks[0].cnt > 0) {
-        return fail(res, `Cannot delete: ${marks[0].cnt} marks record(s) exist`, 400);
+
+    const totalUsage = 
+        (classMaps[0].cnt || 0) +
+        (examSubs[0].cnt || 0) +
+        (studentSubs[0].cnt || 0) +
+        (marks[0].cnt || 0);
+
+    // ─── Non-force: block if used ───
+    if (totalUsage > 0 && !force) {
+        const reasons = [];
+        if (classMaps[0].cnt > 0) reasons.push(`${classMaps[0].cnt} class mapping(s)`);
+        if (examSubs[0].cnt > 0) reasons.push(`${examSubs[0].cnt} exam(s)`);
+        if (studentSubs[0].cnt > 0) reasons.push(`${studentSubs[0].cnt} student assignment(s)`);
+        if (marks[0].cnt > 0) reasons.push(`${marks[0].cnt} marks record(s)`);
+
+        return fail(res,
+            `Cannot delete: subject is used in ${reasons.join(", ")}. Add ?force=true to delete everything.`,
+            400);
     }
 
-    await q(`DELETE FROM erp_master WHERE id = ?`, [id]);
+    // ─── FORCE DELETE: cascade in correct order ───
+    let deletedBackupMarks = 0;
+    let deletedBackupResults = 0;
+    let deletedMarks = 0;
+    let deletedStudentSubjects = 0;
+    let deletedExamSubjects = 0;
+    let deletedClassMaps = 0;
+
+    if (force) {
+        // 1. Delete marks backup for this subject
+        try {
+            const r1 = await q(`DELETE FROM erp_marks_backup WHERE subject_id = ?`, [id]);
+            deletedBackupMarks = r1.affectedRows || 0;
+        } catch (e) {
+            log.warn("erp_marks_backup delete skipped", { error: e.message });
+        }
+
+        // 2. Delete marks (actual)
+        const r2 = await q(
+            `DELETE FROM erp_marks WHERE record_type = 'MARKS' AND subject_id = ?`,
+            [id]
+        );
+        deletedMarks = r2.affectedRows || 0;
+
+        // 3. Delete student-subject assignments
+        const r3 = await q(
+            `DELETE FROM erp_marks WHERE record_type = 'STUDENT_SUBJECT' AND subject_id = ?`,
+            [id]
+        );
+        deletedStudentSubjects = r3.affectedRows || 0;
+
+        // 4. Delete exam-subject entries
+        const r4 = await q(
+            `DELETE FROM erp_exams WHERE record_type = 'EXAM_SUBJECT' AND subject_id = ?`,
+            [id]
+        );
+        deletedExamSubjects = r4.affectedRows || 0;
+
+        // 5. Delete class-subject mappings
+        const r5 = await q(
+            `DELETE FROM erp_master
+             WHERE master_type = 'CLASS_SUBJECT'
+               AND NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.subject_id')), 'null') <=> ?`,
+            [id]
+        );
+        deletedClassMaps = r5.affectedRows || 0;
+
+        // 6. Delete the subject itself
+        await q(`DELETE FROM erp_master WHERE id = ?`, [id]);
+    } else {
+        // No usage — safe delete
+        await q(`DELETE FROM erp_master WHERE id = ?`, [id]);
+    }
+
+    // Audit log
     await auditLog({
-        action: "SUBJECT_DELETED", entity_type: "SUBJECT",
-        entity_id: id, user, old_value: subject
+        action: force ? "SUBJECT_FORCE_DELETED" : "SUBJECT_DELETED",
+        entity_type: "SUBJECT",
+        entity_id: id,
+        user,
+        old_value: subject,
+        new_value: {
+            force,
+            deleted_backup_marks: deletedBackupMarks,
+            deleted_marks: deletedMarks,
+            deleted_student_subjects: deletedStudentSubjects,
+            deleted_exam_subjects: deletedExamSubjects,
+            deleted_class_maps: deletedClassMaps
+        }
     });
 
-    return ok(res, null, "Subject deleted successfully");
+    log.success("Subject deleted", { subjectId: id, force });
+
+    return ok(res, {
+        deleted_backup_marks: deletedBackupMarks,
+        deleted_marks: deletedMarks,
+        deleted_student_subjects: deletedStudentSubjects,
+        deleted_exam_subjects: deletedExamSubjects,
+        deleted_class_maps: deletedClassMaps,
+        force
+    }, force
+        ? "Subject force-deleted with all related data"
+        : "Subject deleted successfully");
 }));
 
+
+
+
+    
 // ============================================================
 // SECTION 6: CLASS-SUBJECT MAPPING
 // ============================================================
@@ -1727,6 +1819,116 @@ router.delete("/class-subjects/:id", requireRole(...ADMIN_ROLES), asyncHandler(a
 // ============================================================
 // SECTION 7: STUDENT-SUBJECT ASSIGNMENT
 // ============================================================
+// ============================================================
+// BULK ASSIGN subjects to multiple students
+// Body: { session_id, student_ids: [], subject_ids: [] }
+// ============================================================
+router.post("/student-subjects/bulk-assign", requireRole(...ADMIN_ROLES), asyncHandler(async (req, res) => {
+    requireFields(req.body, ["session_id", "student_ids", "subject_ids"]);
+    const user = getUserContext(req);
+
+    const sessionId = parseId(req.body.session_id, "session_id");
+    const studentIds = Array.isArray(req.body.student_ids) 
+        ? req.body.student_ids 
+        : [req.body.student_ids];
+    const subjectIds = Array.isArray(req.body.subject_ids) 
+        ? req.body.subject_ids 
+        : [req.body.subject_ids];
+
+    if (studentIds.length === 0) return fail(res, "student_ids is required", 400);
+    if (subjectIds.length === 0) return fail(res, "subject_ids is required", 400);
+
+    let added = 0, skipped = 0;
+    const errors = [];
+    const results = [];
+
+    for (const sid of studentIds) {
+        const studentId = String(sid).trim();
+        let student;
+        try {
+            student = await getStudentFromNstudent(studentId);
+        } catch (e) {
+            errors.push({ student_id: studentId, error: "Student not found" });
+            continue;
+        }
+
+        const classRow = await resolveClassRow(student.class);
+        if (!classRow) {
+            errors.push({ student_id: studentId, error: `Class "${student.class}" not configured` });
+            continue;
+        }
+        const sectionId = await resolveSectionId(classRow.id, student.section);
+        const streamId = await resolveStreamId(student.stream);
+
+        let studentAdded = 0, studentSkipped = 0;
+
+        for (const subjId of subjectIds) {
+            const subjectId = parseId(subjId, "subject_id");
+
+            // Duplicate check
+            const dup = await q(`
+                SELECT id FROM erp_marks
+                WHERE record_type = 'STUDENT_SUBJECT'
+                  AND student_id = ? AND session_id = ? AND subject_id = ?
+                LIMIT 1
+            `, [studentId, sessionId, subjectId]);
+
+            if (dup.length > 0) { studentSkipped++; skipped++; continue; }
+
+            try {
+                await q(`
+                    INSERT INTO erp_marks (
+                        record_type, student_id, session_id, class_id,
+                        section_id, stream_id, subject_id, status, data, created_at
+                    ) VALUES ('STUDENT_SUBJECT', ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, NOW())
+                `, [
+                    studentId, sessionId, classRow.id,
+                    sectionId, streamId, subjectId,
+                    safeJSONStringify({ is_optional: false, assigned_by: user.user_id })
+                ]);
+                studentAdded++;
+                added++;
+            } catch (e) {
+                errors.push({ 
+                    student_id: studentId, 
+                    subject_id: subjectId, 
+                    error: e.message 
+                });
+            }
+        }
+
+        results.push({ 
+            student_id: studentId, 
+            name: student.name,
+            added: studentAdded, 
+            skipped: studentSkipped 
+        });
+    }
+
+    await auditLog({
+        action: "STUDENT_SUBJECTS_BULK_ASSIGNED",
+        entity_type: "STUDENT_SUBJECT",
+        session_id: sessionId,
+        user,
+        new_value: {
+            student_count: studentIds.length,
+            subject_count: subjectIds.length,
+            added, skipped, errors: errors.length
+        }
+    });
+
+    return ok(res, {
+        students_processed: studentIds.length,
+        subjects_per_student: subjectIds.length,
+        total_added: added,
+        total_skipped: skipped,
+        errors,
+        results
+    }, `${added} assignments created, ${skipped} skipped`);
+}));
+
+
+
 router.get("/student-subjects/:studentId", asyncHandler(async (req, res) => {
     const { studentId } = req.params;
     const { session_id } = req.query;
