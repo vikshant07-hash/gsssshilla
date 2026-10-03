@@ -2728,9 +2728,28 @@ router.post("/marks/save", asyncHandler(async (req, res) => {
             const remarks = trimStr(item.remarks, 500);
 
             if (existing.length > 0) {
-                if (["VERIFIED", "FINALIZED", "PUBLISHED"].includes(existing[0].status)) {
-                    throw new Error(`Marks already ${existing[0].status}, cannot edit`);
-                }
+    // ============================================================
+    // 🔒 STATUS-BASED LOCK ENFORCEMENT
+    // ============================================================
+    // Rules:
+    //   DRAFT        → Editable
+    //   IN_PROGRESS  → Editable
+    //   SUBMITTED    → LOCKED (must be returned by admin first)
+    //   VERIFIED     → LOCKED (must be returned by admin first)
+    //   FINALIZED    → LOCKED (permanent, must unlock + return)
+    //   PUBLISHED    → LOCKED (permanent)
+    // ============================================================
+    const lockedStatuses = ["SUBMITTED", "VERIFIED", "FINALIZED", "PUBLISHED"];
+    if (lockedStatuses.includes(existing[0].status)) {
+        throw new Error(
+            `Marks are ${existing[0].status} — cannot edit. ` +
+            `Only Super admin can return for correction.`
+        );
+    }
+
+    // ... update code
+}
+            
 
                 await q(`
                     UPDATE erp_marks
