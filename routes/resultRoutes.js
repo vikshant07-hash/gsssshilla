@@ -3927,7 +3927,9 @@ router.get("/marksheet/:studentId/:examId", asyncHandler(async (req, res, next) 
             roll_number: result.roll_number || student.roll_number,
             session: result.session_name || student.session,
             photo: student.photo,
-            signature: student.signature_url
+            signature: student.signature_url,
+            aadhar_number: student.aadhar_number,   // ✅ YE ADD KARO
+            apaar_id: student.apaar_id              // ✅ YE ADD KARO
         },
         exam: {
             id: exam.id,
@@ -3999,6 +4001,8 @@ router.get("/marksheet/bulk/:examId", asyncHandler(async (req, res) => {
             section_name: r.section_name,
             stream: r.stream,
             photo_url: r.photo_url,
+            aadhar_number: student.aadhar_number,   // ✅ YE ADD KARO
+    apaar_id: student.apaar_id ,             // ✅ YE ADD KARO
             grand_total: r.grand_total,
             max_total: r.max_total,
             percentage: r.percentage,
@@ -4161,7 +4165,9 @@ router.post("/final-result/:studentId", asyncHandler(async (req, res) => {
             stream: student.stream,
             roll_number: student.roll_number,
             session: student.session,
-            photo: student.photo
+            photo: student.photo,
+            aadhar_number: extraInfo.aadhar_number || null,
+        apaar_id: extraInfo.apaar_id || null              
         },
         session: { id: sessionId },
         exams: exams.map(e => ({
