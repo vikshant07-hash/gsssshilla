@@ -3816,6 +3816,57 @@ console.log("   🔗 Manual trigger: POST /backup/trigger-cron (with x-cron-secr
 // ============================================================
 
 // ============================================================
+// ✅ GET BY STUDENT ID (String like "HP12A000")
+// ============================================================
+router.get("/by-student-id/:studentId", async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    
+    if (!studentId || studentId.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Student ID is required"
+      });
+    }
+
+    const sid = studentId.trim();
+    console.log("🔍 Fetching student by student_id:", sid);
+
+    const rows = await q(
+      `SELECT * FROM Nstudent WHERE LOWER(student_id) = LOWER(?) LIMIT 1`,
+      [sid]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: `Student with ID "${sid}" not found`
+      });
+    }
+
+    const student = revertStatusIfExpired(rows[0]);
+    
+    // Remove _pid fields from response for safety
+    for (const k of Object.keys(student)) {
+      if (k.endsWith("_pid")) delete student[k];
+    }
+
+    return res.json({
+      success: true,
+      message: "Student fetched successfully",
+      data: student,
+      student: student
+    });
+
+  } catch (err) {
+    console.error("❌ by-student-id error:", err.message);
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Internal server error"
+    });
+  }
+});
+// ============================================================
 // ✅ GET SINGLE (LAST among GET)
 // ============================================================
 router.get("/:id", async (req, res) => {
